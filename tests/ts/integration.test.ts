@@ -1,7 +1,7 @@
 // tests/ts/integration.test.ts
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { runQuickAnalysis } from '../../src/orchestrator';
+import { runQuickAnalysis, runFullAnalysis } from '../../src/orchestrator';
 import { TradingAgentsConfig, QuickAnalysisResult } from '../../src/types';
 import OpenAI from 'openai';
 import { rm, mkdir, readdir, readFile } from 'fs/promises';
@@ -237,5 +237,81 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
 
     const result = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
     expect(result.final.direction).toBe('Hold');
+  });
+
+  it('should run full analysis with debate → research → trader → risk', async () => {
+    vi.mocked(execPython).mockResolvedValue({
+      success: true,
+      data: { ticker: '600519', data: [] }
+    });
+
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+
+    // 7 analyst responses
+    for (const role of ANALYST_ROLES) {
+      mockCreate.mockResolvedValueOnce(
+        mockAnalystResponse(role, '看多', `${role} reason`) as any
+      );
+    }
+
+    // Debate: 2 rounds × 2 sides = 4 calls
+    for (let round = 1; round <= 2; round++) {
+      mockCreate.mockResolvedValueOnce({
+        choices: [{ message: { content: `BULL-${round} claim.\n\n### 论据总结\nBull summary round ${round}\n\n<!-- VERDICT: {"direction": "看多", "reason": "bull"} -->` } }],
+        usage: { prompt_tokens: 600, completion_tokens: 300, total_tokens: 900 }
+      } as any);
+      mockCreate.mockResolvedValueOnce({
+        choices: [{ message: { content: `BEAR-${round} claim.\n\n### 风险总结\nBear summary round ${round}\n\n<!-- VERDICT: {"direction": "看空", "reason": "bear"} -->` } }],
+        usage: { prompt_tokens: 600, completion_tokens: 300, total_tokens: 900 }
+      } as any);
+    }
+
+    // Research Manager
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: `### 评分\n- **多头得分**：70\n- **空头得分**：40\n\n### 关键辩论焦点\n1. 政策利好\n\n### 最终决策\n- **方向**：Overweight\n- **信心水平**：0.75\n\n<!-- VERDICT: {"direction": "Overweight", "reason": "bull wins"} -->` } }],
+      usage: { prompt_tokens: 1000, completion_tokens: 400, total_tokens: 1400 }
+    } as any);
+
+    // Trader
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: `### 交易方向与仓位\n- **建议仓位**：25%\n\n### 价格区间\n- **目标价格**：1400 元\n- **止损价格**：1200 元\n\n### 入场信号\n1. 价格回调到1280\n\n### 退出信号\n1. 跌破1200\n\n### T+1 操作约束说明\nT+1制度\n\n### 关键风险提示\n1. 政策风险\n\n<!-- VERDICT: {"direction": "Buy", "reason": "分批建仓"} -->` } }],
+      usage: { prompt_tokens: 800, completion_tokens: 400, total_tokens: 1200 }
+    } as any);
+
+    // Risk Debate: 3 parallel calls
+    for (let i = 0; i < 3; i++) {
+      mockCreate.mockResolvedValueOnce({
+        choices: [{ message: { content: `### 1. 立场声明\n支持\n\n### 2. 证据支撑\n- 证据${i}\n\n### 3. 风险评估结论\n- **verdict**：pass\n\n<!-- VERDICT: {"direction": "pass", "reason": "ok"} -->` } }],
+        usage: { prompt_tokens: 500, completion_tokens: 200, total_tokens: 700 }
+      } as any);
+    }
+
+    // Risk Manager
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: `### 1. 风险评分（0-100）\n35\n\n### 2. 风控决策\n- **status**：pass\n\n<!-- VERDICT: {"direction": "pass", "reason": "risk ok"} -->` } }],
+      usage: { prompt_tokens: 600, completion_tokens: 200, total_tokens: 800 }
+    } as any);
+
+    const result = await runFullAnalysis('600519', '2026-06-05', config, mockClient);
+
+    expect(result.mode).toBe('full');
+    expect(result.analysts).toHaveLength(7);
+    expect(result.debate.rounds).toHaveLength(2);
+    expect(result.research_decision.direction).toBe('Overweight');
+    expect(result.trading_plan.target_price).toBe(1400);
+    expect(result.risk_assessment.status).toBe('pass');
+
+    // Total LLM calls: 7 analysts + 4 debate + 1 research + 1 trader + 3 risk + 1 risk_mgr = 17
+    expect(mockCreate).toHaveBeenCalledTimes(17);
+
+    // Verify report files
+    const summaryFile = join(tmpReportDir, '600519', '2026-06-05_full.json');
+    expect(existsSync(summaryFile)).toBe(true);
+
+    const detailDir = join(tmpReportDir, '600519', '2026-06-05_full');
+    expect(existsSync(join(detailDir, '02_debate', 'round_1.json'))).toBe(true);
+    expect(existsSync(join(detailDir, '03_research.json'))).toBe(true);
+    expect(existsSync(join(detailDir, '04_trading_plan.json'))).toBe(true);
+    expect(existsSync(join(detailDir, '05_risk', 'risk_manager.json'))).toBe(true);
   });
 });
