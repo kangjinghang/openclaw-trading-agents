@@ -15,13 +15,27 @@ export async function execPython(
   scriptPath: string,
   args: string[] = [],
   stdinData: any = null,
-  pythonCmd: string = 'python3'
+  pythonCmd: string = 'python3',
+  timeoutMs: number = 30000
 ): Promise<ScriptResult> {
   return new Promise((resolve) => {
     const python = spawn(pythonCmd, [scriptPath, ...args]);
 
     let stdout = '';
     let stderr = '';
+    let resolved = false;
+
+    // Kill process after timeout
+    const timer = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        python.kill('SIGKILL');
+        resolve({
+          success: false,
+          error: `Python script timed out after ${timeoutMs}ms: ${scriptPath}`
+        });
+      }
+    }, timeoutMs);
 
     // Handle stdin input
     if (stdinData !== null) {
@@ -47,6 +61,10 @@ export async function execPython(
     });
 
     python.on('close', (code) => {
+      if (resolved) return;
+      clearTimeout(timer);
+      resolved = true;
+
       if (code !== 0) {
         resolve({
           success: false,
@@ -78,6 +96,9 @@ export async function execPython(
     });
 
     python.on('error', (error) => {
+      if (resolved) return;
+      clearTimeout(timer);
+      resolved = true;
       resolve({
         success: false,
         error: `Failed to start Python process: ${error.message}`
@@ -100,11 +121,12 @@ export async function execSkillScript(
   scriptName: string,
   projectRoot: string,
   args: string[] = [],
-  stdinData: any = null
+  stdinData: any = null,
+  timeoutMs: number = 30000
 ): Promise<ScriptResult> {
   const scriptPath = `${projectRoot}/skills/${skillName}/scripts/${scriptName}.py`;
 
-  const result = await execPython(scriptPath, args, stdinData);
+  const result = await execPython(scriptPath, args, stdinData, 'python3', timeoutMs);
 
   // Add source information to result
   if (result.success) {
