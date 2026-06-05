@@ -29,11 +29,18 @@ export class ReportStore {
     fs.mkdirSync(tickerDir, { recursive: true });
     fs.mkdirSync(path.join(detailDir, "01_analysts"), { recursive: true });
 
-    // Save analyst detail
-    const analystPath = path.join(detailDir, "01_analysts", `${result.analyst.role}.json`);
-    fs.writeFileSync(analystPath, JSON.stringify(result.analyst, null, 2), "utf-8");
+    // Save analyst details
+    for (const report of result.analysts) {
+      const analystPath = path.join(detailDir, "01_analysts", `${report.role}.json`);
+      fs.writeFileSync(analystPath, JSON.stringify(report, null, 2), "utf-8");
+    }
 
     // Save summary
+    const analystVerdicts: Record<string, { direction: string; reason: string }> = {};
+    for (const report of result.analysts) {
+      analystVerdicts[report.role] = report.verdict;
+    }
+
     const summary: AnalysisReport = {
       id: `${ticker}_${date}_${mode}`,
       ticker,
@@ -45,9 +52,9 @@ export class ReportStore {
       total_tokens: totalTokens,
       total_cost_usd: totalCostUsd,
       final: result.final,
-      analyst_verdicts: { [result.analyst.role]: result.analyst.verdict },
+      analyst_verdicts: analystVerdicts,
       detail_dir: `${date}_${mode}/`,
-      trace_count: 2,
+      trace_count: result.analysts.length + 1,
     };
 
     const summaryPath = path.join(tickerDir, `${date}_${mode}.json`);

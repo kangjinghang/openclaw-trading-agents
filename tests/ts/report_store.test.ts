@@ -22,15 +22,15 @@ describe("ReportStore", () => {
       ticker: "600519",
       date: "2026-06-05",
       mode: "quick",
-      analyst: {
-        role: "market_analyst",
+      analysts: [{
+        role: "market",
         content: "Strong technical indicators suggest upward momentum.",
         verdict: {
           direction: "Buy",
           reason: "Strong fundamentals and positive market sentiment"
         },
         data_sources_used: ["market_data", "technical_indicators"]
-      },
+      }],
       final: {
         ticker: "600519",
         company_name: "Kweichow Moutai",
@@ -43,7 +43,7 @@ describe("ReportStore", () => {
         reasoning: "Strong brand, consistent growth, favorable market conditions",
         key_risks: ["Regulatory changes", "Economic slowdown"],
         analyst_verdicts: {
-          market_analyst: "Buy"
+          market: "Buy"
         },
         bull_bear_summary: "Bull: Strong fundamentals. Bear: Policy uncertainty.",
         risk_assessment: "pass",
@@ -81,13 +81,13 @@ describe("ReportStore", () => {
     expect(fs.existsSync(detailDir)).toBe(true);
 
     // Verify analyst detail file exists
-    const analystPath = path.join(detailDir, "01_analysts", "market_analyst.json");
+    const analystPath = path.join(detailDir, "01_analysts", "market.json");
     expect(fs.existsSync(analystPath)).toBe(true);
 
     // Verify analyst content
     const analystContent = fs.readFileSync(analystPath, "utf-8");
     const analyst = JSON.parse(analystContent);
-    expect(analyst.role).toBe("market_analyst");
+    expect(analyst.role).toBe("market");
     expect(analyst.verdict.direction).toBe("Buy");
     expect(analyst.data_sources_used).toEqual(["market_data", "technical_indicators"]);
   });
