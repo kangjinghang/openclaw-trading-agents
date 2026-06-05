@@ -41,16 +41,72 @@ function parseDirection(raw?: string): FinalDecision["direction"] {
   return "Hold";
 }
 
+/** Analyst configuration: maps role → data script + prompt template + system prompt */
+const ANALYST_CONFIGS = [
+  {
+    role: "market",
+    script: "trading-kline/scripts/kline.py",
+    prompt: "analysts/market.md",
+    systemPrompt: "You are a professional market analyst specializing in Chinese A-share markets.",
+    dataKey: "kline",
+    extraArgs: (_ticker: string) => ["--count", "60"],
+  },
+  {
+    role: "fundamentals",
+    script: "trading-fundamentals/scripts/fundamentals.py",
+    prompt: "analysts/fundamentals.md",
+    systemPrompt: "You are a fundamentals analyst specializing in Chinese A-share markets, following CAS accounting standards.",
+    dataKey: "fundamentals",
+    extraArgs: () => [],
+  },
+  {
+    role: "news",
+    script: "trading-news/scripts/news.py",
+    prompt: "analysts/news.md",
+    systemPrompt: "You are a news analyst specializing in Chinese A-share markets.",
+    dataKey: "news",
+    extraArgs: () => ["--lookback-days", "7"],
+  },
+  {
+    role: "sentiment",
+    script: "trading-sentiment/scripts/sentiment.py",
+    prompt: "analysts/sentiment.md",
+    systemPrompt: "You are a market sentiment analyst specializing in Chinese A-share markets.",
+    dataKey: "sentiment",
+    extraArgs: () => [],
+  },
+  {
+    role: "policy",
+    script: "trading-news/scripts/news.py",
+    prompt: "analysts/policy.md",
+    systemPrompt: "You are a policy analyst specializing in Chinese A-share markets.",
+    dataKey: "news",
+    extraArgs: () => ["--lookback-days", "14"],
+  },
+  {
+    role: "hot_money",
+    script: "trading-hot-money/scripts/hot_money.py",
+    prompt: "analysts/hot_money.md",
+    systemPrompt: "You are a hot money tracker specializing in Chinese A-share markets.",
+    dataKey: "hot_money",
+    extraArgs: () => [],
+  },
+  {
+    role: "lockup",
+    script: "trading-lockup/scripts/lockup.py",
+    prompt: "analysts/lockup.md",
+    systemPrompt: "You are a lockup watcher specializing in Chinese A-share markets.",
+    dataKey: "lockup",
+    extraArgs: () => [],
+  },
+] as const;
+
 /**
- * Run a quick analysis workflow:
- * 1. Fetch K-line data via execPython
- * 2. Run market analyst (loadAndRender prompt + callLLM)
- * 3. Parse analyst verdict
- * 4. Run portfolio manager (loadAndRender prompt + callLLM)
- * 5. Parse final decision direction
- * 6. Assemble QuickAnalysisResult
- * 7. Persist via reportStore.save()
- * 8. Return result
+ * Run a quick analysis workflow with 7 parallel analysts:
+ * 1. Fetch data from all 7 scripts in parallel (graceful degradation)
+ * 2. Run all 7 analysts in parallel (graceful degradation)
+ * 3. Portfolio Manager synthesizes all 7 reports
+ * 4. Persist and return result
  */
 export async function runQuickAnalysis(
   ticker: string,
@@ -60,7 +116,6 @@ export async function runQuickAnalysis(
 ): Promise<QuickAnalysisResult> {
   const startTime = Date.now();
 
-  // 1. Setup trace dir and report store
   const traceDir = path.join(os.homedir(), ".openclaw", "traces", `${ticker}_${date}`);
   const traceLogger = new TraceLogger(traceDir);
   const reportStore = new ReportStore(config.report_dir);
@@ -68,69 +123,94 @@ export async function runQuickAnalysis(
   let totalTokens = 0;
   let totalCostUsd = 0;
 
-  // 2. Fetch K-line data via execPython
-  const klineScriptPath = path.join(SKILLS_DIR, "trading-kline", "scripts", "kline.py");
-  const klineArgs = ["--ticker", ticker, "--count", "60"];
-  const klineResult: ScriptResult = await execPython(klineScriptPath, klineArgs);
-
-  if (!klineResult.success || !klineResult.data) {
-    throw new Error(`Failed to fetch K-line data: ${klineResult.error}`);
-  }
-
-  const klineData = JSON.stringify(klineResult.data, null, 2);
-
-  // 3. Run market analyst
-  const analystPrompt = loadAndRender(
-    "analysts/market.md",
-    {
-      ticker,
-      date,
-      kline: klineData,
-    },
-    path.join(SKILLS_DIR, "trading-analysis", "prompts")
+  // ── Phase 1: Fetch data from all 7 scripts in parallel ──────────
+  const dataResults = await Promise.all(
+    ANALYST_CONFIGS.map(async (cfg) => {
+      const scriptPath = path.join(SKILLS_DIR, cfg.script);
+      const args = ["--ticker", ticker, "--date", date, ...cfg.extraArgs(ticker)];
+      try {
+        const result: ScriptResult = await execPython(scriptPath, args);
+        return { role: cfg.role, result };
+      } catch (err: any) {
+        return { role: cfg.role, result: { success: false, error: err.message } as ScriptResult };
+      }
+    })
   );
 
-  const analystResult = await callLLM(openaiClient, {
-    model: config.models.analyst,
-    systemPrompt: "You are a professional market analyst specializing in Chinese A-share markets.",
-    userMessage: analystPrompt,
-    temperature: 0.4,
-    maxTokens: 4000,
-    phase: "analyst",
-    role: "market",
-    traceLogger,
-  });
-
-  totalTokens += analystResult.usage.total_tokens;
-  totalCostUsd += analystResult.costUsd;
-
-  // 4. Parse analyst verdict
-  const analystVerdict = parseVerdict(analystResult.content);
-  if (!analystVerdict) {
-    throw new Error("Failed to parse analyst verdict from LLM response");
+  // Build data map: role → JSON string
+  const dataMap: Record<string, string> = {};
+  for (const { role, result } of dataResults) {
+    if (result.success && result.data) {
+      dataMap[role] = JSON.stringify(result.data, null, 2);
+    } else {
+      dataMap[role] = `[数据缺失: ${result.error || "unknown error"}]`;
+    }
   }
 
-  const analystReport: AnalystReport = {
-    role: "market",
-    content: analystResult.content,
-    verdict: analystVerdict,
-    data_sources_used: ["K-line"],
-  };
+  // ── Phase 2: Run all 7 analysts in parallel ─────────────────────
+  const promptsBaseDir = path.join(SKILLS_DIR, "trading-analysis", "prompts");
 
-  // 5. Run portfolio manager
+  const analystPromises = ANALYST_CONFIGS.map(async (cfg) => {
+    try {
+      const dataJson = dataMap[cfg.role];
+      const userMessage = loadAndRender(
+        cfg.prompt,
+        { ticker, date, [cfg.dataKey]: dataJson },
+        promptsBaseDir
+      );
+
+      const llmResult = await callLLM(openaiClient, {
+        model: config.models.analyst,
+        systemPrompt: cfg.systemPrompt,
+        userMessage,
+        temperature: 0.4,
+        maxTokens: 4000,
+        phase: "analyst",
+        role: cfg.role,
+        traceLogger,
+      });
+
+      totalTokens += llmResult.usage.total_tokens;
+      totalCostUsd += llmResult.costUsd;
+
+      const verdict = parseVerdict(llmResult.content);
+
+      return {
+        role: cfg.role,
+        content: llmResult.content,
+        verdict: verdict || { direction: "中性", reason: "无法解析结论" },
+        data_sources_used: [cfg.dataKey],
+      } as AnalystReport;
+    } catch (err: any) {
+      return {
+        role: cfg.role,
+        content: `[分析失败: ${err.message}]`,
+        verdict: { direction: "中性", reason: "分析失败" },
+        data_sources_used: [],
+      } as AnalystReport;
+    }
+  });
+
+  const analystReports: AnalystReport[] = await Promise.all(analystPromises);
+
+  // ── Phase 3: Portfolio Manager ───────────────────────────────────
+  const allReportsText = analystReports
+    .map(
+      (r) =>
+        `## ${r.role} 分析师报告\n\n${r.content}\n\nVERDICT: ${r.verdict.direction} — ${r.verdict.reason}`
+    )
+    .join("\n\n---\n\n");
+
   const portfolioPrompt = loadAndRender(
     "portfolio_manager.md",
-    {
-      ticker,
-      date,
-      analyst_reports: analystResult.content,
-    },
-    path.join(SKILLS_DIR, "trading-analysis", "prompts")
+    { ticker, date, analyst_reports: allReportsText },
+    promptsBaseDir
   );
 
   const portfolioResult = await callLLM(openaiClient, {
     model: config.models.decision,
-    systemPrompt: "You are a portfolio manager making final trading decisions based on analyst reports.",
+    systemPrompt:
+      "You are a portfolio manager making final trading decisions based on analyst reports.",
     userMessage: portfolioPrompt,
     temperature: 0.3,
     maxTokens: 4000,
@@ -142,25 +222,29 @@ export async function runQuickAnalysis(
   totalTokens += portfolioResult.usage.total_tokens;
   totalCostUsd += portfolioResult.costUsd;
 
-  // 6. Parse final decision
   const portfolioVerdict = parseVerdict(portfolioResult.content);
   if (!portfolioVerdict) {
     throw new Error("Failed to parse portfolio manager verdict from LLM response");
   }
 
-  // 7. Assemble QuickAnalysisResult
+  // ── Assemble result ──────────────────────────────────────────────
+  const analystVerdicts: Record<string, string> = {};
+  for (const report of analystReports) {
+    analystVerdicts[report.role] = report.verdict.direction;
+  }
+
   const finalDecision: FinalDecision = {
     ticker,
-    company_name: ticker, // Will be filled by LLM response parsing in future
+    company_name: ticker,
     date,
     direction: parseDirection(portfolioVerdict.direction),
-    confidence: 0.7, // Default confidence
-    target_price: 0, // Will be extracted from LLM response in future
-    stop_loss: 0, // Will be extracted from LLM response in future
-    position_pct: 0, // Will be extracted from LLM response in future
+    confidence: 0.7,
+    target_price: 0,
+    stop_loss: 0,
+    position_pct: 0,
     reasoning: portfolioVerdict.reason,
     key_risks: [],
-    analyst_verdicts: { [analystReport.role]: analystVerdict.direction },
+    analyst_verdicts: analystVerdicts,
     bull_bear_summary: "",
     risk_assessment: "pass",
     execution_plan: "",
@@ -171,14 +255,12 @@ export async function runQuickAnalysis(
     ticker,
     date,
     mode: "quick",
-    analyst: analystReport,
+    analysts: analystReports,
     final: finalDecision,
   };
 
-  // 8. Persist via reportStore.save()
   const durationMs = Date.now() - startTime;
   reportStore.save(ticker, date, "quick", result, durationMs, totalTokens, totalCostUsd);
 
-  // 9. Return result
   return result;
 }
