@@ -6,9 +6,14 @@ import { loadAndRender } from "./prompt-loader";
 import { callLLM, parseVerdict } from "./llm-client";
 import { TraceLogger } from "./trace-logger";
 import { ReportStore } from "./report-store";
+import { runBullBearDebate } from "./debate";
+import { runResearchManager } from "./research-manager";
+import { runTrader } from "./trader";
+import { runRiskDebate, runRiskManager } from "./risk";
 import {
   TradingAgentsConfig,
   QuickAnalysisResult,
+  FullAnalysisResult,
   AnalystReport,
   FinalDecision,
   ScriptResult,
@@ -102,24 +107,16 @@ const ANALYST_CONFIGS = [
 ] as const;
 
 /**
- * Run a quick analysis workflow with 7 parallel analysts:
- * 1. Fetch data from all 7 scripts in parallel (graceful degradation)
- * 2. Run all 7 analysts in parallel (graceful degradation)
- * 3. Portfolio Manager synthesizes all 7 reports
- * 4. Persist and return result
+ * Shared Phase 1-2: fetch data + run 7 analysts in parallel.
+ * Used by both runQuickAnalysis() and runFullAnalysis().
  */
-export async function runQuickAnalysis(
+async function runAnalystPhase(
   ticker: string,
   date: string,
   config: TradingAgentsConfig,
-  openaiClient: OpenAI
-): Promise<QuickAnalysisResult> {
-  const startTime = Date.now();
-
-  const traceDir = path.join(os.homedir(), ".openclaw", "traces", `${ticker}_${date}`);
-  const traceLogger = new TraceLogger(traceDir);
-  const reportStore = new ReportStore(config.report_dir);
-
+  openaiClient: OpenAI,
+  traceLogger: TraceLogger
+): Promise<{ analystReports: AnalystReport[]; totalTokens: number; totalCostUsd: number }> {
   let totalTokens = 0;
   let totalCostUsd = 0;
 
@@ -137,7 +134,6 @@ export async function runQuickAnalysis(
     })
   );
 
-  // Build data map: role → JSON string
   const dataMap: Record<string, string> = {};
   for (const { role, result } of dataResults) {
     if (result.success && result.data) {
@@ -191,26 +187,41 @@ export async function runQuickAnalysis(
     }
   });
 
-  const analystReports: AnalystReport[] = await Promise.all(analystPromises);
+  const analystReports = await Promise.all(analystPromises);
+  return { analystReports, totalTokens, totalCostUsd };
+}
 
-  // ── Phase 3: Portfolio Manager ───────────────────────────────────
+/**
+ * Run a quick analysis workflow with 7 parallel analysts:
+ * 1. Fetch data from all 7 scripts in parallel (graceful degradation)
+ * 2. Run all 7 analysts in parallel (graceful degradation)
+ * 3. Portfolio Manager synthesizes all 7 reports
+ * 4. Persist and return result
+ */
+export async function runQuickAnalysis(
+  ticker: string,
+  date: string,
+  config: TradingAgentsConfig,
+  openaiClient: OpenAI
+): Promise<QuickAnalysisResult> {
+  const startTime = Date.now();
+  const traceDir = path.join(os.homedir(), ".openclaw", "traces", `${ticker}_${date}`);
+  const traceLogger = new TraceLogger(traceDir);
+  const reportStore = new ReportStore(config.report_dir);
+
+  const { analystReports, totalTokens, totalCostUsd } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger);
+
+  // ── Portfolio Manager ────────────────────────────────────────────
+  const promptsBaseDir = path.join(SKILLS_DIR, "trading-analysis", "prompts");
   const allReportsText = analystReports
-    .map(
-      (r) =>
-        `## ${r.role} 分析师报告\n\n${r.content}\n\nVERDICT: ${r.verdict.direction} — ${r.verdict.reason}`
-    )
+    .map((r) => `## ${r.role} 分析师报告\n\n${r.content}\n\nVERDICT: ${r.verdict.direction} — ${r.verdict.reason}`)
     .join("\n\n---\n\n");
 
-  const portfolioPrompt = loadAndRender(
-    "portfolio_manager.md",
-    { ticker, date, analyst_reports: allReportsText },
-    promptsBaseDir
-  );
+  const portfolioPrompt = loadAndRender("portfolio_manager.md", { ticker, date, analyst_reports: allReportsText }, promptsBaseDir);
 
   const portfolioResult = await callLLM(openaiClient, {
     model: config.models.decision,
-    systemPrompt:
-      "You are a portfolio manager making final trading decisions based on analyst reports.",
+    systemPrompt: "You are a portfolio manager making final trading decisions based on analyst reports.",
     userMessage: portfolioPrompt,
     temperature: 0.3,
     maxTokens: 4000,
@@ -219,15 +230,14 @@ export async function runQuickAnalysis(
     traceLogger,
   });
 
-  totalTokens += portfolioResult.usage.total_tokens;
-  totalCostUsd += portfolioResult.costUsd;
+  const allTokens = totalTokens + portfolioResult.usage.total_tokens;
+  const allCost = totalCostUsd + portfolioResult.costUsd;
 
   const portfolioVerdict = parseVerdict(portfolioResult.content);
   if (!portfolioVerdict) {
     throw new Error("Failed to parse portfolio manager verdict from LLM response");
   }
 
-  // ── Assemble result ──────────────────────────────────────────────
   const analystVerdicts: Record<string, string> = {};
   for (const report of analystReports) {
     analystVerdicts[report.role] = report.verdict.direction;
@@ -251,16 +261,98 @@ export async function runQuickAnalysis(
     next_review_trigger: "",
   };
 
-  const result: QuickAnalysisResult = {
+  const result: QuickAnalysisResult = { ticker, date, mode: "quick", analysts: analystReports, final: finalDecision };
+  const durationMs = Date.now() - startTime;
+  reportStore.save(ticker, date, "quick", result, durationMs, allTokens, allCost);
+  return result;
+}
+
+/**
+ * Run full analysis with debate and risk layers:
+ * 1. 7 analysts (parallel) → 2. Bull↔Bear debate → 3. Research Manager
+ * 4. Trader → 5. Risk Debate (3-way parallel) → 6. Risk Manager (with revise loop)
+ */
+export async function runFullAnalysis(
+  ticker: string,
+  date: string,
+  config: TradingAgentsConfig,
+  openaiClient: OpenAI
+): Promise<FullAnalysisResult> {
+  const startTime = Date.now();
+  const traceDir = path.join(os.homedir(), ".openclaw", "traces", `${ticker}_${date}_full`);
+  const traceLogger = new TraceLogger(traceDir);
+  const reportStore = new ReportStore(config.report_dir);
+
+  // Phase 1-2: Analysts
+  const { analystReports } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger);
+
+  // Phase 3: Bull↔Bear Debate
+  const debate = await runBullBearDebate(analystReports, config, openaiClient, traceLogger);
+
+  // Phase 4: Research Manager
+  const researchDecision = await runResearchManager(analystReports, debate, config, openaiClient, traceLogger);
+
+  // Phase 5: Trader (with revise loop)
+  let tradingPlan = await runTrader(researchDecision, analystReports, config, openaiClient, traceLogger);
+
+  // Phase 6-7: Risk Debate + Risk Manager (with revise loop)
+  let riskDebate = await runRiskDebate(tradingPlan, analystReports, config, openaiClient, traceLogger);
+  let riskAssessment = await runRiskManager(riskDebate, tradingPlan, config, openaiClient, traceLogger);
+
+  let retries = 0;
+  while (riskAssessment.status === "revise" && retries < config.max_risk_retries) {
+    retries++;
+    tradingPlan = await runTrader(researchDecision, analystReports, config, openaiClient, traceLogger);
+    if (riskAssessment.max_position_override) {
+      tradingPlan.position_pct = Math.min(tradingPlan.position_pct, riskAssessment.max_position_override);
+    }
+    riskDebate = await runRiskDebate(tradingPlan, analystReports, config, openaiClient, traceLogger);
+    riskAssessment = await runRiskManager(riskDebate, tradingPlan, config, openaiClient, traceLogger);
+  }
+
+  // If still revise after max retries, treat as pass
+  if (riskAssessment.status === "revise") {
+    riskAssessment = { ...riskAssessment, status: "pass" };
+  }
+
+  // Assemble FinalDecision
+  const analystVerdicts: Record<string, string> = {};
+  for (const report of analystReports) {
+    analystVerdicts[report.role] = report.verdict.direction;
+  }
+
+  const finalDecision: FinalDecision = {
+    ticker,
+    company_name: ticker,
+    date,
+    direction: tradingPlan.direction,
+    confidence: researchDecision.confidence,
+    target_price: tradingPlan.target_price,
+    stop_loss: tradingPlan.stop_loss,
+    position_pct: tradingPlan.position_pct,
+    reasoning: researchDecision.reasoning,
+    key_risks: tradingPlan.key_risks,
+    analyst_verdicts: analystVerdicts,
+    bull_bear_summary: `Bull: ${debate.bull_summary}\nBear: ${debate.bear_summary}`,
+    risk_assessment: riskAssessment.status,
+    execution_plan: tradingPlan.execution_plan,
+    next_review_trigger: "",
+  };
+
+  const result: FullAnalysisResult = {
     ticker,
     date,
-    mode: "quick",
+    mode: "full",
     analysts: analystReports,
+    debate,
+    research_decision: researchDecision,
+    trading_plan: tradingPlan,
+    risk_debate: riskDebate,
+    risk_assessment: riskAssessment,
     final: finalDecision,
   };
 
   const durationMs = Date.now() - startTime;
-  reportStore.save(ticker, date, "quick", result, durationMs, totalTokens, totalCostUsd);
-
+  reportStore.saveFull(ticker, date, result, durationMs);
   return result;
 }

@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { runQuickAnalysis } from "./orchestrator";
+import { runQuickAnalysis, runFullAnalysis } from "./orchestrator";
 import { TradingAgentsConfig } from "./types";
 import * as path from "path";
 import * as os from "os";
@@ -62,6 +62,37 @@ export default {
       },
     });
 
+    // Register trading_full tool
+    api.registerTool({
+      name: "trading_full",
+      label: "Full Stock Analysis (with Debate)",
+      description: "Run a full A-share stock analysis with multi-round Bull↔Bear debate, research manager, trader execution plan, and risk assessment.",
+      parameters: {
+        type: "object",
+        properties: {
+          ticker: { type: "string", description: "A-share stock code (e.g. 600519)" },
+          date: { type: "string", description: "Analysis date YYYY-MM-DD. Defaults to today." },
+        },
+        required: ["ticker"],
+      },
+      async execute(toolCallId: string, params: { ticker: string; date?: string }) {
+        const date = params.date || new Date().toISOString().split("T")[0];
+        try {
+          const result = await runFullAnalysis(params.ticker, date, config, client);
+          return { type: "text", text: JSON.stringify(result, null, 2) };
+        } catch (err: any) {
+          return {
+            type: "text",
+            text: JSON.stringify({
+              error: true,
+              message: err.message,
+              ticker: params.ticker
+            })
+          };
+        }
+      },
+    });
+
     // Register trading_report tool
     api.registerTool({
       name: "trading_report",
@@ -72,12 +103,14 @@ export default {
         properties: {
           ticker: { type: "string" },
           date: { type: "string", description: "YYYY-MM-DD" },
+          mode: { type: "string", description: "Report mode: quick or full. Defaults to quick." },
         },
         required: ["ticker", "date"],
       },
-      async execute(toolCallId: string, params: { ticker: string; date: string }) {
+      async execute(toolCallId: string, params: { ticker: string; date: string; mode?: string }) {
         const reportDir = config.report_dir.replace("~", os.homedir());
-        const filePath = path.join(reportDir, params.ticker, `${params.date}_quick.json`);
+        const mode = params.mode || "quick";
+        const filePath = path.join(reportDir, params.ticker, `${params.date}_${mode}.json`);
         const fs = await import("fs");
         if (!fs.existsSync(filePath)) {
           return { type: "text", text: JSON.stringify({ error: "Report not found" }) };
