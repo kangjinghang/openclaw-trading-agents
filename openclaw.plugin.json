@@ -6,7 +6,13 @@
   "main": "dist/index.js",
   "skills": [
     "./skills/trading-kline",
-    "./skills/trading-analysis"
+    "./skills/trading-analysis",
+    "./skills/trading-fundamentals",
+    "./skills/trading-news",
+    "./skills/trading-hot-money",
+    "./skills/trading-sentiment",
+    "./skills/trading-lockup",
+    "./skills/trading-sector"
   ],
   "configSchema": {
     "models": { "type": "object" },
