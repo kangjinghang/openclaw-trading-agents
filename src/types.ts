@@ -76,7 +76,7 @@ export interface AnalysisReport {
 export interface LLMCallTrace {
   trace_id: string;
   call_index: number;
-  phase: "analyst" | "debate" | "trader" | "risk" | "portfolio";
+  phase: "analyst" | "debate" | "research" | "trader" | "risk_debate" | "risk" | "portfolio";
   role: string;
   request: {
     model: string;
@@ -107,4 +107,95 @@ export interface ScriptResult {
   data?: any;
   error?: string;
   _source?: string;
+}
+
+// ── Phase 3: Debate types ──
+
+/** A single debate claim with structured evidence. */
+export interface DebateClaim {
+  id: string;
+  side: "bull" | "bear";
+  topic: string;
+  evidence: string;
+  confidence: number;
+  responded_by?: string;
+}
+
+/** One round of Bull↔Bear debate. */
+export interface DebateRound {
+  round: number;
+  bull_claims: DebateClaim[];
+  bear_claims: DebateClaim[];
+}
+
+/** Full Bull↔Bear debate result. */
+export interface DebateResult {
+  rounds: DebateRound[];
+  bull_summary: string;
+  bear_summary: string;
+  total_tokens: number;
+  total_cost_usd: number;
+}
+
+/** Research Manager scoring of the debate. */
+export interface ResearchDecision {
+  direction: "Buy" | "Overweight" | "Hold" | "Underweight" | "Sell";
+  confidence: number;
+  bull_score: number;
+  bear_score: number;
+  reasoning: string;
+  key_debate_points: string[];
+  verdict: Verdict;
+}
+
+/** Trader execution plan with A-share specific constraints. */
+export interface TradingPlan {
+  direction: FinalDecision["direction"];
+  target_price: number;
+  stop_loss: number;
+  position_pct: number;
+  execution_plan: string;
+  entry_signals: string[];
+  exit_signals: string[];
+  key_risks: string[];
+  t_plus_1_note: string;
+}
+
+/** One risk debater's argument. */
+export interface RiskArgument {
+  role: "aggressive" | "conservative" | "neutral";
+  position: string;
+  evidence: string[];
+  verdict: "pass" | "revise" | "reject";
+}
+
+/** Three-way risk debate result. */
+export interface RiskDebateResult {
+  rounds: RiskArgument[][];
+  risk_arguments: RiskArgument[];
+  total_tokens: number;
+  total_cost_usd: number;
+}
+
+/** Risk Manager final assessment. */
+export interface RiskAssessment {
+  status: "pass" | "revise" | "reject";
+  revised_plan?: TradingPlan;
+  reasoning: string;
+  risk_score: number;
+  max_position_override?: number;
+}
+
+/** Full analysis result with debate and risk layers. */
+export interface FullAnalysisResult {
+  ticker: string;
+  date: string;
+  mode: "full";
+  analysts: AnalystReport[];
+  debate: DebateResult;
+  research_decision: ResearchDecision;
+  trading_plan: TradingPlan;
+  risk_debate: RiskDebateResult;
+  risk_assessment: RiskAssessment;
+  final: FinalDecision;
 }
