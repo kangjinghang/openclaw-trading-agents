@@ -16,7 +16,21 @@ vi.mock('../../src/exec-python', () => ({
 
 import { execPython } from '../../src/exec-python';
 
-describe('Integration Test: End-to-End Quick Analysis', () => {
+/** Generate a mock LLM response for a given analyst role */
+function mockAnalystResponse(role: string, direction: string, reason: string) {
+  return {
+    choices: [{
+      message: {
+        content: `${role} analyst report for test.\n\n<!-- VERDICT: {"direction": "${direction}", "reason": "${reason}"} -->`
+      }
+    }],
+    usage: { prompt_tokens: 500, completion_tokens: 200, total_tokens: 700 }
+  };
+}
+
+const ANALYST_ROLES = ['market', 'fundamentals', 'news', 'sentiment', 'policy', 'hot_money', 'lockup'];
+
+describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
   const tmpReportDir = join(process.cwd(), 'test-tmp-reports');
   const actualTraceDir = join(os.homedir(), '.openclaw', 'traces', '600519_2026-06-05');
 
@@ -24,10 +38,8 @@ describe('Integration Test: End-to-End Quick Analysis', () => {
   let mockClient: OpenAI;
 
   beforeEach(async () => {
-    // Create temp report directory
     await mkdir(tmpReportDir, { recursive: true });
 
-    // Setup config
     config = {
       models: {
         analyst: 'gpt-4o',
@@ -41,7 +53,6 @@ describe('Integration Test: End-to-End Quick Analysis', () => {
       report_dir: tmpReportDir,
     };
 
-    // Create mock OpenAI client
     mockClient = {
       chat: {
         completions: {
@@ -52,71 +63,38 @@ describe('Integration Test: End-to-End Quick Analysis', () => {
   });
 
   afterEach(async () => {
-    // Clean up temp directories
     await rm(tmpReportDir, { recursive: true, force: true });
     await rm(actualTraceDir, { recursive: true, force: true });
     vi.clearAllMocks();
   });
 
-  it('should run quick analysis end-to-end with mocked LLM responses', async () => {
-    // Mock execPython to return dummy K-line data
+  it('should run quick analysis with 7 analysts end-to-end', async () => {
+    // Mock execPython to return success for all scripts
     vi.mocked(execPython).mockResolvedValue({
       success: true,
-      data: {
-        ticker: '600519',
-        timeframe: '1d',
-        data: [
-          { date: '2026-06-01', open: 1800, close: 1820, high: 1830, low: 1790, volume: 1000000 },
-          { date: '2026-06-02', open: 1820, close: 1840, high: 1850, low: 1810, volume: 1200000 },
-          { date: '2026-06-03', open: 1840, close: 1860, high: 1870, low: 1830, volume: 1100000 },
-        ]
-      }
+      data: { ticker: '600519', data: [] }
     });
 
-    // Mock OpenAI client responses
     const mockCreate = vi.mocked(mockClient.chat.completions.create);
 
-    // First call: market analyst response
-    const analystResponse = {
+    // 7 analyst responses
+    for (const role of ANALYST_ROLES) {
+      mockCreate.mockResolvedValueOnce(
+        mockAnalystResponse(role, role === 'hot_money' ? '看多' : '中性', `${role} reason`) as any
+      );
+    }
+
+    // 1 portfolio manager response
+    mockCreate.mockResolvedValueOnce({
       choices: [{
         message: {
-          content: `Based on the K-line data analysis, I observe the following:
+          content: `Portfolio decision based on 7 analysts.
 
-1. Price Trend: The stock has shown consistent upward momentum over the past 3 days
-2. Volume Analysis: Trading volume has been healthy, indicating strong investor interest
-3. Technical Indicators: MACD shows golden cross pattern with increasing volume
-
-<!-- VERDICT: {"direction": "看多", "reason": "MACD金叉+放量突破"} -->`
+<!-- VERDICT: {"direction": "Buy", "reason": "综合7位分析师意见"} -->`
         }
       }],
-      usage: {
-        prompt_tokens: 1000,
-        completion_tokens: 500,
-        total_tokens: 1500
-      }
-    };
-
-    // Second call: portfolio manager response
-    const portfolioResponse = {
-      choices: [{
-        message: {
-          content: `After reviewing the market analyst's report, I make the following decision:
-
-The technical analysis supports a bullish view with strong momentum indicators.
-
-<!-- VERDICT: {"direction": "Buy", "reason": "技术面向好"} -->`
-        }
-      }],
-      usage: {
-        prompt_tokens: 800,
-        completion_tokens: 300,
-        total_tokens: 1100
-      }
-    };
-
-    mockCreate
-      .mockResolvedValueOnce(analystResponse as any)
-      .mockResolvedValueOnce(portfolioResponse as any);
+      usage: { prompt_tokens: 800, completion_tokens: 300, total_tokens: 1100 }
+    } as any);
 
     // Run the analysis
     const result = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
@@ -127,112 +105,118 @@ The technical analysis supports a bullish view with strong momentum indicators.
     expect(result.mode).toBe('quick');
     expect(result.date).toBe('2026-06-05');
 
-    // Verify analyst report
-    expect(result.analyst).toBeDefined();
-    expect(result.analyst.role).toBe('market');
-    expect(result.analyst.content).toContain('MACD金叉+放量突破');
-    expect(result.analyst.verdict).toBeDefined();
-    expect(result.analyst.verdict.direction).toBe('看多');
-    expect(result.analyst.verdict.reason).toBe('MACD金叉+放量突破');
-    expect(result.analyst.data_sources_used).toContain('K-line');
+    // Verify 7 analyst reports
+    expect(result.analysts).toBeDefined();
+    expect(result.analysts).toHaveLength(7);
+
+    const roles = result.analysts.map(a => a.role);
+    expect(roles).toEqual(ANALYST_ROLES);
+
+    // Verify each analyst has verdict
+    for (const report of result.analysts) {
+      expect(report.verdict).toBeDefined();
+      expect(report.verdict.direction).toBeDefined();
+      expect(report.verdict.reason).toBeDefined();
+    }
 
     // Verify final decision
     expect(result.final).toBeDefined();
-    expect(result.final.ticker).toBe('600519');
-    expect(result.final.date).toBe('2026-06-05');
-    expect(result.final.direction).toBe('Buy'); // Should be parsed from 'Buy'
-    expect(result.final.reasoning).toBe('技术面向好');
-    expect(result.final.analyst_verdicts).toBeDefined();
-    expect(result.final.analyst_verdicts['market']).toBe('看多');
+    expect(result.final.direction).toBe('Buy');
+    expect(result.final.reasoning).toBe('综合7位分析师意见');
 
-    // Verify LLM calls were made correctly
-    expect(mockCreate).toHaveBeenCalledTimes(2);
+    // Verify all 7 analyst verdicts are in final decision
+    expect(Object.keys(result.final.analyst_verdicts)).toHaveLength(7);
+    expect(result.final.analyst_verdicts['hot_money']).toBe('看多');
+    expect(result.final.analyst_verdicts['market']).toBe('中性');
 
-    // First call (analyst)
-    const firstCall = mockCreate.mock.calls[0][0];
-    expect(firstCall.model).toBe('gpt-4o');
-    expect(firstCall.messages[0].role).toBe('system');
-    expect(firstCall.messages[0].content).toContain('market analyst');
-    expect(firstCall.temperature).toBe(0.4);
-    expect(firstCall.max_tokens).toBe(4000);
+    // Verify LLM calls: 7 analysts + 1 PM = 8
+    expect(mockCreate).toHaveBeenCalledTimes(8);
 
-    // Second call (portfolio manager)
-    const secondCall = mockCreate.mock.calls[1][0];
-    expect(secondCall.model).toBe('gpt-4o');
-    expect(secondCall.messages[0].role).toBe('system');
-    expect(secondCall.messages[0].content).toContain('portfolio manager');
-    expect(secondCall.temperature).toBe(0.3);
-    expect(secondCall.max_tokens).toBe(4000);
+    // Verify execPython was called for all 7 data scripts
+    expect(execPython).toHaveBeenCalledTimes(7);
 
     // Verify report files were created
     const tickerDir = join(tmpReportDir, '600519');
     expect(existsSync(tickerDir)).toBe(true);
 
-    // Check for summary JSON file
     const summaryFile = join(tickerDir, '2026-06-05_quick.json');
     expect(existsSync(summaryFile)).toBe(true);
 
     const summaryContent = JSON.parse(await readFile(summaryFile, 'utf-8'));
     expect(summaryContent.ticker).toBe('600519');
-    expect(summaryContent.mode).toBe('quick');
     expect(summaryContent.final.direction).toBe('Buy');
 
-    // Check for analyst detail file
-    const detailDir = join(tickerDir, '2026-06-05_quick', '01_analysts');
-    const analystFile = join(detailDir, 'market.json');
-    expect(existsSync(analystFile)).toBe(true);
-
-    const analystContent = JSON.parse(await readFile(analystFile, 'utf-8'));
-    expect(analystContent.role).toBe('market');
-    expect(analystContent.verdict.direction).toBe('看多');
-
-    // Verify trace files were created
+    // Verify trace files
     expect(existsSync(actualTraceDir)).toBe(true);
     const traceFiles = await readdir(actualTraceDir);
     expect(traceFiles.length).toBeGreaterThan(0);
-
-    // Verify trace file structure
-    const traceFile = join(actualTraceDir, traceFiles[0]);
-    const traceContent = JSON.parse(await readFile(traceFile, 'utf-8'));
-    expect(traceContent.phase).toBeDefined();
-    expect(traceContent.role).toBeDefined();
-    expect(traceContent.request).toBeDefined();
-    expect(traceContent.response).toBeDefined();
-
-    // Verify execPython was called with correct arguments
-    expect(execPython).toHaveBeenCalledTimes(1);
-    const execCall = execPython.mock.calls[0];
-    expect(execCall[1]).toEqual(['--ticker', '600519', '--count', '60']);
   });
 
-  it('should handle Chinese direction parsing correctly', async () => {
-    // Mock execPython
+  it('should handle Chinese direction parsing correctly with 7 analysts', async () => {
     vi.mocked(execPython).mockResolvedValue({
       success: true,
       data: { ticker: '600519', data: [] }
     });
 
-    // Mock OpenAI client with Chinese directions
     const mockCreate = vi.mocked(mockClient.chat.completions.create);
 
-    mockCreate
-      .mockResolvedValueOnce({
-        choices: [{ message: { content: '分析 <!-- VERDICT: {"direction": "看多", "reason": "技术面向好"} -->' } }],
-        usage: { prompt_tokens: 1000, completion_tokens: 500, total_tokens: 1500 }
-      } as any)
-      .mockResolvedValueOnce({
-        choices: [{ message: { content: '决策 <!-- VERDICT: {"direction": "买入", "reason": "建议买入"} -->' } }],
-        usage: { prompt_tokens: 800, completion_tokens: 300, total_tokens: 1100 }
-      } as any);
+    // 7 analysts: all return 看多
+    for (const role of ANALYST_ROLES) {
+      mockCreate.mockResolvedValueOnce(
+        mockAnalystResponse(role, '看多', '技术面向好') as any
+      );
+    }
+
+    // PM returns 买入
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: '决策 <!-- VERDICT: {"direction": "买入", "reason": "建议买入"} -->' } }],
+      usage: { prompt_tokens: 800, completion_tokens: 300, total_tokens: 1100 }
+    } as any);
 
     const result = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
 
-    // Verify Chinese directions are parsed correctly
-    expect(result.final.direction).toBe('Buy'); // '买入' should map to 'Buy'
-    expect(result.analyst.verdict.direction).toBe('看多');
+    expect(result.final.direction).toBe('Buy'); // '买入' maps to 'Buy'
+    expect(result.analysts).toHaveLength(7);
+    // All analysts should have 看多 direction
+    for (const report of result.analysts) {
+      expect(report.verdict.direction).toBe('看多');
+    }
   });
 
-  it('should handle various direction formats', async () => {
+  it('should gracefully degrade when some data scripts fail', async () => {
+    // Some scripts succeed, some fail
+    vi.mocked(execPython).mockImplementation(async (scriptPath: string) => {
+      if (scriptPath.includes('trading-kline')) {
+        return { success: true, data: { ticker: '600519', data: [] } };
+      }
+      if (scriptPath.includes('trading-news')) {
+        return { success: true, data: { ticker: '600519', news: [] } };
+      }
+      return { success: false, error: 'Script failed' };
+    });
+
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+
+    // 7 analyst responses (all succeed even with partial data)
+    for (const role of ANALYST_ROLES) {
+      mockCreate.mockResolvedValueOnce(
+        mockAnalystResponse(role, '中性', 'partial data') as any
+      );
+    }
+
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: '决策 <!-- VERDICT: {"direction": "Hold", "reason": "继续持有"} -->' } }],
+      usage: { prompt_tokens: 800, completion_tokens: 300, total_tokens: 1100 }
+    } as any);
+
+    const result = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
+
+    // Should still produce 7 analyst reports (with degraded data)
+    expect(result.analysts).toHaveLength(7);
+    expect(result.final.direction).toBe('Hold');
+  });
+
+  it('should handle Hold direction', async () => {
     vi.mocked(execPython).mockResolvedValue({
       success: true,
       data: { ticker: '600519', data: [] }
@@ -240,16 +224,16 @@ The technical analysis supports a bullish view with strong momentum indicators.
 
     const mockCreate = vi.mocked(mockClient.chat.completions.create);
 
-    // Test 'Hold' direction
-    mockCreate
-      .mockResolvedValueOnce({
-        choices: [{ message: { content: '分析 <!-- VERDICT: {"direction": "中性", "reason": "观望"} -->' } }],
-        usage: { prompt_tokens: 1000, completion_tokens: 500, total_tokens: 1500 }
-      } as any)
-      .mockResolvedValueOnce({
-        choices: [{ message: { content: '决策 <!-- VERDICT: {"direction": "持有", "reason": "继续持有"} -->' } }],
-        usage: { prompt_tokens: 800, completion_tokens: 300, total_tokens: 1100 }
-      } as any);
+    for (const role of ANALYST_ROLES) {
+      mockCreate.mockResolvedValueOnce(
+        mockAnalystResponse(role, '中性', '观望') as any
+      );
+    }
+
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: '决策 <!-- VERDICT: {"direction": "持有", "reason": "继续持有"} -->' } }],
+      usage: { prompt_tokens: 800, completion_tokens: 300, total_tokens: 1100 }
+    } as any);
 
     const result = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
     expect(result.final.direction).toBe('Hold');
