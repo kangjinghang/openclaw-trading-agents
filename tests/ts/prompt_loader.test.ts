@@ -42,14 +42,17 @@ Recommendation: {{recommendation}}`;
   });
 
   describe("loadPrompt", () => {
-    it("should load template file from disk", () => {
+    it("should load market analyst template from disk", () => {
       const content = loadPrompt("analysts/market.md");
-      expect(content).toContain("PLACEHOLDER — market analyst prompt");
+      expect(content).toContain("技术分析师");
+      expect(content).toContain("{{ticker}}");
+      expect(content).toContain("{{kline}}");
     });
 
-    it("should load portfolio manager template", () => {
+    it("should load portfolio manager template from disk", () => {
       const content = loadPrompt("portfolio_manager.md");
-      expect(content).toContain("PLACEHOLDER — portfolio manager prompt");
+      expect(content).toContain("投资组合经理");
+      expect(content).toContain("{{analyst_reports}}");
     });
   });
 
