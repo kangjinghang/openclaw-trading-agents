@@ -1,0 +1,52 @@
+{
+  // This is an example configuration for the OpenClaw Trading Agents plugin.
+  // To use this plugin, add this configuration to your ~/.openclaw/openclaw.json file.
+  //
+  // Example structure in openclaw.json:
+  // {
+  //   "plugins": {
+  //     "entries": {
+  //       "trading-agents": { ... configuration below ... }
+  //     }
+  //   }
+  // }
+  //
+  // Or if you already have other plugins, merge the "trading-agents" entry into your existing "plugins.entries" object.
+  //
+  // Configuration Options:
+  // - enabled: Whether the plugin is active (true/false)
+  // - models: Model assignments for each agent role
+  //   * analyst: Model for market analysis (e.g., "gpt-4o", "claude-sonnet-4-6")
+  //   * debater: Model for debate rounds (e.g., "claude-sonnet-4-6", "gpt-4o")
+  //   * decision: Model for final decision making (e.g., "claude-sonnet-4-6", "gpt-4o")
+  //   * risk: Model for risk assessment (e.g., "gpt-4o", "claude-sonnet-4-6")
+  // - debate_rounds: Number of debate rounds between analyst and debater (recommended: 2-3)
+  // - risk_debate_rounds: Number of debate rounds for risk assessment (recommended: 1-2)
+  // - max_risk_retries: Maximum retries if risk assessment fails (recommended: 1-2)
+  // - report_dir: Directory where trading analysis reports will be saved (supports ~ expansion)
+  //
+  // Notes:
+  // - Model names must match the models available in your OpenClaw installation
+  // - More debate rounds = deeper analysis but higher cost and latency
+  // - The report_dir will be created if it doesn't exist
+
+  "plugins": {
+    "entries": {
+      "trading-agents": {
+        "enabled": true,
+        "config": {
+          "models": {
+            "analyst": "gpt-4o",
+            "debater": "claude-sonnet-4-6",
+            "decision": "claude-sonnet-4-6",
+            "risk": "gpt-4o"
+          },
+          "debate_rounds": 2,
+          "risk_debate_rounds": 1,
+          "max_risk_retries": 1,
+          "report_dir": "~/.openclaw/trading-reports"
+        }
+      }
+    }
+  }
+}
