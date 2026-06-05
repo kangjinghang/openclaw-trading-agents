@@ -51,7 +51,7 @@ export interface QuickAnalysisResult {
   ticker: string;
   date: string;
   mode: "quick";
-  analyst: AnalystReport;
+  analysts: AnalystReport[];
   final: FinalDecision;
 }
 
