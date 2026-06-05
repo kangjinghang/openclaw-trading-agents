@@ -46,22 +46,17 @@ def fetch_from_mootdx(ticker: str, count: int) -> Dict[str, Any]:
     """
     try:
         from mootdx.quotes import Quotes
-        import pandas as pd
 
         market = detect_market(ticker)
 
         # Create quotes client
         quotes = Quotes.factory(market=market, timeout=10)
 
-        # Fetch data - using std (market data) method
-        # Note: mootdx expects symbol as integer, market as 0/1
-        df = quotes.std(symbol=int(ticker), market=market)
+        # category=9 = daily bars; mootdx expects symbol as string
+        df = quotes.bars(symbol=ticker, category=9, start=0, offset=count)
 
-        if df is None or df.empty:
+        if df is None or (hasattr(df, 'empty') and df.empty):
             raise DataFetchError(f"No data returned from mootdx for {ticker}")
-
-        # Take the most recent `count` records
-        df = df.tail(count)
 
         # Convert to standard format
         data = {
@@ -72,12 +67,12 @@ def fetch_from_mootdx(ticker: str, count: int) -> Dict[str, Any]:
 
         for _, row in df.iterrows():
             data["data"].append({
-                "date": row.get('date', ''),
+                "date": str(row.get('datetime', '')),
                 "open": float(row.get('open', 0)),
                 "high": float(row.get('high', 0)),
                 "low": float(row.get('low', 0)),
                 "close": float(row.get('close', 0)),
-                "volume": float(row.get('volume', 0)),
+                "volume": float(row.get('vol', 0)),
                 "amount": float(row.get('amount', 0))
             })
 
@@ -214,6 +209,7 @@ def main():
     """Main entry point for CLI usage."""
     parser = argparse.ArgumentParser(description="Fetch K-line data for A-share stocks")
     parser.add_argument("--ticker", required=True, help="Stock ticker code (e.g., 600519)")
+    parser.add_argument("--date", default="", help="Analysis date YYYY-MM-DD (unused by kline)")
     parser.add_argument("--count", type=int, default=60, help="Number of data points (default: 60)")
 
     # Try to parse from stdin first

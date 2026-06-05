@@ -40,16 +40,26 @@ def fetch_fundamentals(ticker, date):
         from mootdx.quotes import Quotes
         market = 1 if code.startswith("6") else 0
         client = Quotes.factory(market=market, timeout=10)
-        fin = client.finance(symbol=int(code))
+        fin = client.finance(symbol=code)
         if fin is not None and not (hasattr(fin, 'empty') and fin.empty):
             row = fin.iloc[0] if hasattr(fin, 'iloc') else fin
+            field_map = {
+                "liutongguben": "float_shares",
+                "zongguben": "total_shares",
+                "jingzichan": "net_assets",
+                "zhuyingshouru": "revenue",
+                "jinglirun": "net_profit",
+                "meigujingzichan": "bvps",
+                "weifenpeilirun": "undistributed_profit",
+                "zongzichan": "total_assets",
+                "gudongrenshu": "shareholder_count",
+            }
             snapshot = {}
-            for field in ["eps", "bvps", "roe", "profit", "income",
-                          "liutongguben", "zongguben"]:
-                if hasattr(row, 'index') and field in row.index:
-                    val = row[field]
+            for py_name, en_name in field_map.items():
+                if hasattr(row, 'index') and py_name in row.index:
+                    val = row[py_name]
                     if val is not None and str(val) != "nan":
-                        snapshot[field] = float(val) if not isinstance(val, str) else val
+                        snapshot[en_name] = float(val) if not isinstance(val, str) else val
             if snapshot:
                 data["financial_snapshot"] = snapshot
     except Exception as e:
