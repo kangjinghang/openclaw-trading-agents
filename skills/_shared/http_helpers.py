@@ -1,0 +1,140 @@
+# skills/_shared/http_helpers.py
+"""
+Shared HTTP helpers for A-share data scripts.
+Provides throttled eastmoney access, session reuse, and standardized JSON output.
+"""
+
+import json
+import os
+import random
+import re
+import sys
+import time
+
+import requests
+
+
+# ── Eastmoney anti-ban ──────────────────────────────────────────────
+_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+_EM_SESSION = requests.Session()
+_EM_SESSION.headers.update({"User-Agent": _UA})
+_EM_MIN_INTERVAL = float(os.environ.get("EM_MIN_INTERVAL", "1.0"))
+_em_last_call = [0.0]
+
+
+def em_get(url, params=None, headers=None, timeout=15, **kwargs):
+    """Eastmoney throttled GET: auto-rate-limit + session reuse."""
+    wait = _EM_MIN_INTERVAL - (time.time() - _em_last_call[0])
+    if wait > 0:
+        time.sleep(wait + random.uniform(0.1, 0.5))
+    try:
+        return _EM_SESSION.get(url, params=params, headers=headers, timeout=timeout, **kwargs)
+    finally:
+        _em_last_call[0] = time.time()
+
+
+def eastmoney_datacenter(report_name, columns="ALL", filter_str="",
+                         page_size=50, sort_columns="", sort_types="-1"):
+    """Eastmoney Datacenter unified query (shared by dragon-tiger, lockup, etc.)."""
+    url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+    params = {
+        "reportName": report_name,
+        "columns": columns,
+        "filter": filter_str,
+        "pageNumber": "1",
+        "pageSize": str(page_size),
+        "sortColumns": sort_columns,
+        "sortTypes": sort_types,
+        "source": "WEB",
+        "client": "WEB",
+    }
+    r = em_get(url, params=params, timeout=15)
+    d = r.json()
+    if d.get("result") and d["result"].get("data"):
+        return d["result"]["data"]
+    return []
+
+
+# ── Tencent real-time quote ─────────────────────────────────────────
+def tencent_quote(codes):
+    """Batch real-time quotes from Tencent Finance (qt.gtimg.cn).
+    codes: list of 6-digit strings. Returns dict[code] -> {name, price, pe_ttm, pb, ...}
+    """
+    import urllib.request
+
+    def _get_prefix(code):
+        if code.startswith(("6", "9")):
+            return "sh"
+        elif code.startswith("8"):
+            return "bj"
+        return "sz"
+
+    prefixed = [f"{_get_prefix(c)}{c}" for c in codes]
+    url = "https://qt.gtimg.cn/q=" + ",".join(prefixed)
+    req = urllib.request.Request(url)
+    req.add_header("User-Agent", "Mozilla/5.0")
+    resp = urllib.request.urlopen(req, timeout=10)
+    raw = resp.read().decode("gbk")
+
+    result = {}
+    for line in raw.strip().split(";"):
+        if not line.strip() or "=" not in line or '"' not in line:
+            continue
+        key = line.split("=")[0].split("_")[-1]
+        vals = line.split('"')[1].split("~")
+        if len(vals) < 53:
+            continue
+        code = key[2:]
+        result[code] = {
+            "name": vals[1],
+            "price": _safe_float(vals[3]),
+            "last_close": _safe_float(vals[4]),
+            "open": _safe_float(vals[5]),
+            "change_pct": _safe_float(vals[32]),
+            "high": _safe_float(vals[33]),
+            "low": _safe_float(vals[34]),
+            "turnover_pct": _safe_float(vals[38]),
+            "pe_ttm": _safe_float(vals[39]),
+            "mcap_yi": _safe_float(vals[44]),
+            "float_mcap_yi": _safe_float(vals[45]),
+            "pb": _safe_float(vals[46]),
+            "limit_up": _safe_float(vals[47]),
+            "limit_down": _safe_float(vals[48]),
+            "pe_static": _safe_float(vals[52]),
+        }
+    return result
+
+
+def _safe_float(val):
+    try:
+        return float(val) if val else 0
+    except (ValueError, TypeError):
+        return 0
+
+
+# ── Standard JSON output ────────────────────────────────────────────
+def output_json(success, data=None, error=None, source=None):
+    """Print standardized JSON to stdout and exit."""
+    result = {"success": success}
+    if data is not None:
+        result["data"] = data
+    if error is not None:
+        result["error"] = error
+    if source is not None:
+        result["_source"] = source
+    print(json.dumps(result, ensure_ascii=False))
+    sys.exit(0 if success else 1)
+
+
+def normalize_ticker(symbol):
+    """Strip exchange prefix/suffix, return pure 6-digit code."""
+    s = symbol.strip().upper()
+    for suffix in (".SH", ".SZ", ".BJ"):
+        if s.endswith(suffix):
+            s = s[:-len(suffix)]
+            break
+    for prefix in ("SH", "SZ", "BJ"):
+        if s.startswith(prefix):
+            s = s[len(prefix):]
+            break
+    return re.sub(r"[^0-9]", "", s)
