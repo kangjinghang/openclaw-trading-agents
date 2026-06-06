@@ -24,18 +24,22 @@ import * as os from "os";
 const SKILLS_DIR = path.resolve(__dirname, "../skills");
 
 /**
- * Run tasks with limited concurrency.
- * Like Promise.all but with a cap on simultaneous executions.
+ * Run tasks with limited concurrency and staggered start.
+ * Adds a random jitter (0~staggerMs) before each task to avoid burst patterns.
  */
 async function pool<T>(
   items: readonly T[],
   fn: (item: T, index: number) => Promise<void>,
-  concurrency: number
+  concurrency: number,
+  staggerMs: number = 0
 ): Promise<void> {
   let next = 0;
   async function worker() {
     while (next < items.length) {
       const i = next++;
+      if (staggerMs > 0 && i > 0) {
+        await new Promise((r) => setTimeout(r, Math.random() * staggerMs));
+      }
       await fn(items[i], i);
     }
   }
@@ -159,7 +163,8 @@ async function runAnalystPhase(
         dataResults[idx] = { role: cfg.role, result: { success: false, error: err.message } as ScriptResult };
       }
     },
-    dataConcurrency
+    dataConcurrency,
+    1500  // stagger: 0~1.5s jitter between data script starts (Eastmoney rate limit)
   );
 
   const dataMap: Record<string, string> = {};
@@ -219,7 +224,8 @@ async function runAnalystPhase(
         } as AnalystReport;
       }
     },
-    concurrency
+    concurrency,
+    800  // stagger: 0~0.8s jitter between LLM calls (API rate limit)
   );
 
   return { analystReports, totalTokens, totalCostUsd };

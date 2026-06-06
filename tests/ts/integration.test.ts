@@ -28,6 +28,42 @@ function mockAnalystResponse(role: string, direction: string, reason: string) {
   };
 }
 
+/** Create a mock LLM create function that matches responses by phase */
+function createMockLLM(
+  analystDirection: string = '中性',
+  analystReason: string = 'test reason',
+  pmDirection: string = 'Buy',
+  pmReason: string = '综合7位分析师意见'
+) {
+  return vi.fn(async (params: any) => {
+    const systemPrompt = params.messages?.[0]?.content || '';
+    const isAnalyst = !systemPrompt.includes('portfolio') && !systemPrompt.includes('manager');
+
+    if (isAnalyst) {
+      // Determine role from user message (includes "# A 股XXX分析师" header)
+      const userMessage = params.messages?.[1]?.content || '';
+      let role = 'market';
+      if (userMessage.includes('基本面')) role = 'fundamentals';
+      else if (userMessage.includes('新闻')) role = 'news';
+      else if (userMessage.includes('情绪')) role = 'sentiment';
+      else if (userMessage.includes('政策')) role = 'policy';
+      else if (userMessage.includes('游资') || userMessage.includes('资金流')) role = 'hot_money';
+      else if (userMessage.includes('解禁')) role = 'lockup';
+      return mockAnalystResponse(role, analystDirection, analystReason);
+    }
+
+    // Portfolio manager / other roles
+    return {
+      choices: [{
+        message: {
+          content: `Portfolio decision based on 7 analysts.\n\n<!-- VERDICT: {"direction": "${pmDirection}", "reason": "${pmReason}"} -->`
+        }
+      }],
+      usage: { prompt_tokens: 800, completion_tokens: 300, total_tokens: 1100 }
+    };
+  });
+}
+
 const ANALYST_ROLES = ['market', 'fundamentals', 'news', 'sentiment', 'policy', 'hot_money', 'lockup'];
 
 describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
@@ -76,26 +112,25 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
       data: { ticker: '600519', data: [] }
     });
 
-    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+    // Custom mock: all analysts 中性 except hot_money=看多
+    const mockCreate = vi.fn(async (params: any) => {
+      const systemPrompt = params.messages?.[0]?.content || '';
+      const userMessage = params.messages?.[1]?.content || '';
+      const isAnalyst = !systemPrompt.includes('portfolio') && !systemPrompt.includes('manager');
 
-    // 7 analyst responses
-    for (const role of ANALYST_ROLES) {
-      mockCreate.mockResolvedValueOnce(
-        mockAnalystResponse(role, role === 'hot_money' ? '看多' : '中性', `${role} reason`) as any
-      );
-    }
+      if (isAnalyst) {
+        const isHotMoney = userMessage.includes('游资') || userMessage.includes('资金流');
+        const direction = isHotMoney ? '看多' : '中性';
+        const role = isHotMoney ? 'hot_money' : 'market';
+        return mockAnalystResponse(role, direction, `${role} reason`);
+      }
 
-    // 1 portfolio manager response
-    mockCreate.mockResolvedValueOnce({
-      choices: [{
-        message: {
-          content: `Portfolio decision based on 7 analysts.
-
-<!-- VERDICT: {"direction": "Buy", "reason": "综合7位分析师意见"} -->`
-        }
-      }],
-      usage: { prompt_tokens: 800, completion_tokens: 300, total_tokens: 1100 }
-    } as any);
+      return {
+        choices: [{ message: { content: `Portfolio decision based on 7 analysts.\n\n<!-- VERDICT: {"direction": "Buy", "reason": "综合7位分析师意见"} -->` } }],
+        usage: { prompt_tokens: 800, completion_tokens: 300, total_tokens: 1100 }
+      };
+    });
+    mockClient.chat.completions.create = mockCreate;
 
     // Run the analysis
     const result = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
@@ -159,20 +194,8 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
       data: { ticker: '600519', data: [] }
     });
 
-    const mockCreate = vi.mocked(mockClient.chat.completions.create);
-
-    // 7 analysts: all return 看多
-    for (const role of ANALYST_ROLES) {
-      mockCreate.mockResolvedValueOnce(
-        mockAnalystResponse(role, '看多', '技术面向好') as any
-      );
-    }
-
-    // PM returns 买入
-    mockCreate.mockResolvedValueOnce({
-      choices: [{ message: { content: '决策 <!-- VERDICT: {"direction": "买入", "reason": "建议买入"} -->' } }],
-      usage: { prompt_tokens: 800, completion_tokens: 300, total_tokens: 1100 }
-    } as any);
+    const mockCreate = createMockLLM('看多', '技术面向好', '买入', '建议买入');
+    mockClient.chat.completions.create = mockCreate;
 
     const result = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
 
@@ -196,19 +219,8 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
       return { success: false, error: 'Script failed' };
     });
 
-    const mockCreate = vi.mocked(mockClient.chat.completions.create);
-
-    // 7 analyst responses (all succeed even with partial data)
-    for (const role of ANALYST_ROLES) {
-      mockCreate.mockResolvedValueOnce(
-        mockAnalystResponse(role, '中性', 'partial data') as any
-      );
-    }
-
-    mockCreate.mockResolvedValueOnce({
-      choices: [{ message: { content: '决策 <!-- VERDICT: {"direction": "Hold", "reason": "继续持有"} -->' } }],
-      usage: { prompt_tokens: 800, completion_tokens: 300, total_tokens: 1100 }
-    } as any);
+    const mockCreate = createMockLLM('中性', 'partial data', 'Hold', '继续持有');
+    mockClient.chat.completions.create = mockCreate;
 
     const result = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
 
@@ -223,18 +235,8 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
       data: { ticker: '600519', data: [] }
     });
 
-    const mockCreate = vi.mocked(mockClient.chat.completions.create);
-
-    for (const role of ANALYST_ROLES) {
-      mockCreate.mockResolvedValueOnce(
-        mockAnalystResponse(role, '中性', '观望') as any
-      );
-    }
-
-    mockCreate.mockResolvedValueOnce({
-      choices: [{ message: { content: '决策 <!-- VERDICT: {"direction": "持有", "reason": "继续持有"} -->' } }],
-      usage: { prompt_tokens: 800, completion_tokens: 300, total_tokens: 1100 }
-    } as any);
+    const mockCreate = createMockLLM('中性', '观望', '持有', '继续持有');
+    mockClient.chat.completions.create = mockCreate;
 
     const result = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
     expect(result.final.direction).toBe('Hold');
@@ -246,52 +248,51 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
       data: { ticker: '600519', data: [] }
     });
 
-    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+    const mockCreate = vi.fn();
+    let debateCallIdx = 0;
 
-    // 7 analyst responses
-    for (const role of ANALYST_ROLES) {
-      mockCreate.mockResolvedValueOnce(
-        mockAnalystResponse(role, '看多', `${role} reason`) as any
-      );
-    }
+    mockCreate.mockImplementation(async (params: any) => {
+      const systemPrompt = params.messages?.[0]?.content || '';
 
-    // Debate: 2 rounds × 2 sides = 4 calls
-    for (let round = 1; round <= 2; round++) {
-      mockCreate.mockResolvedValueOnce({
-        choices: [{ message: { content: `BULL-${round} claim.\n\n### 论据总结\nBull summary round ${round}\n\n<!-- VERDICT: {"direction": "看多", "reason": "bull"} -->` } }],
-        usage: { prompt_tokens: 600, completion_tokens: 300, total_tokens: 900 }
-      } as any);
-      mockCreate.mockResolvedValueOnce({
-        choices: [{ message: { content: `BEAR-${round} claim.\n\n### 风险总结\nBear summary round ${round}\n\n<!-- VERDICT: {"direction": "看空", "reason": "bear"} -->` } }],
-        usage: { prompt_tokens: 600, completion_tokens: 300, total_tokens: 900 }
-      } as any);
-    }
+      // Analysts (7 calls, parallel)
+      if (!systemPrompt.includes('portfolio') && !systemPrompt.includes('manager') && !systemPrompt.includes('bullish') && !systemPrompt.includes('bearish') && !systemPrompt.includes('research') && !systemPrompt.includes('trader') && !systemPrompt.includes('risk')) {
+        return mockAnalystResponse('market', '看多', 'market reason');
+      }
 
-    // Research Manager
-    mockCreate.mockResolvedValueOnce({
-      choices: [{ message: { content: `### 评分\n- **多头得分**：70\n- **空头得分**：40\n\n### 关键辩论焦点\n1. 政策利好\n\n### 最终决策\n- **方向**：Overweight\n- **信心水平**：0.75\n\n<!-- VERDICT: {"direction": "Overweight", "reason": "bull wins"} -->` } }],
-      usage: { prompt_tokens: 1000, completion_tokens: 400, total_tokens: 1400 }
-    } as any);
+      // Debate: bull or bear
+      if (systemPrompt.includes('bullish')) {
+        debateCallIdx++;
+        return { choices: [{ message: { content: `BULL-${Math.ceil(debateCallIdx/2)} claim.\n\n### 论据总结\nBull summary\n\n<!-- VERDICT: {"direction": "看多", "reason": "bull"} -->` } }], usage: { prompt_tokens: 600, completion_tokens: 300, total_tokens: 900 } };
+      }
+      if (systemPrompt.includes('bearish')) {
+        return { choices: [{ message: { content: `BEAR claim.\n\n### 风险总结\nBear summary\n\n<!-- VERDICT: {"direction": "看空", "reason": "bear"} -->` } }], usage: { prompt_tokens: 600, completion_tokens: 300, total_tokens: 900 } };
+      }
 
-    // Trader
-    mockCreate.mockResolvedValueOnce({
-      choices: [{ message: { content: `### 交易方向与仓位\n- **建议仓位**：25%\n\n### 价格区间\n- **目标价格**：1400 元\n- **止损价格**：1200 元\n\n### 入场信号\n1. 价格回调到1280\n\n### 退出信号\n1. 跌破1200\n\n### T+1 操作约束说明\nT+1制度\n\n### 关键风险提示\n1. 政策风险\n\n<!-- VERDICT: {"direction": "Buy", "reason": "分批建仓"} -->` } }],
-      usage: { prompt_tokens: 800, completion_tokens: 400, total_tokens: 1200 }
-    } as any);
+      // Research Manager (check before trader, since trader SP includes "research decisions")
+      if (systemPrompt.includes('research') && !systemPrompt.includes('trader')) {
+        return { choices: [{ message: { content: `### 评分\n- **多头得分**：70\n- **空头得分**：40\n\n### 关键辩论焦点\n1. 政策利好\n\n### 最终决策\n- **方向**：Overweight\n- **信心水平**：0.75\n\n<!-- VERDICT: {"direction": "Overweight", "reason": "bull wins"} -->` } }], usage: { prompt_tokens: 1000, completion_tokens: 400, total_tokens: 1400 } };
+      }
 
-    // Risk Debate: 3 parallel calls
-    for (let i = 0; i < 3; i++) {
-      mockCreate.mockResolvedValueOnce({
-        choices: [{ message: { content: `### 1. 立场声明\n支持\n\n### 2. 证据支撑\n- 证据${i}\n\n### 3. 风险评估结论\n- **verdict**：pass\n\n<!-- VERDICT: {"direction": "pass", "reason": "ok"} -->` } }],
-        usage: { prompt_tokens: 500, completion_tokens: 200, total_tokens: 700 }
-      } as any);
-    }
+      // Trader (must come before general 'research' check)
+      if (systemPrompt.includes('trader')) {
+        return { choices: [{ message: { content: `### 交易方向与仓位\n- **建议仓位**：25%\n\n### 价格区间\n- **目标价格**：1400 元\n- **止损价格**：1200 元\n\n### 入场信号\n1. 价格回调到1280\n\n### 退出信号\n1. 跌破1200\n\n### T+1 操作约束说明\nT+1制度\n\n### 关键风险提示\n1. 政策风险\n\n<!-- VERDICT: {"direction": "Buy", "reason": "分批建仓"} -->` } }], usage: { prompt_tokens: 800, completion_tokens: 400, total_tokens: 1200 } };
+      }
 
-    // Risk Manager
-    mockCreate.mockResolvedValueOnce({
-      choices: [{ message: { content: `### 1. 风险评分（0-100）\n35\n\n### 2. 风控决策\n- **status**：pass\n\n<!-- VERDICT: {"direction": "pass", "reason": "risk ok"} -->` } }],
-      usage: { prompt_tokens: 600, completion_tokens: 200, total_tokens: 800 }
-    } as any);
+      // Risk Debate (3 parallel)
+      if (systemPrompt.includes('risk assessor')) {
+        return { choices: [{ message: { content: `### 1. 立场声明\n支持\n\n### 2. 证据支撑\n- 证据1\n\n### 3. 风险评估结论\n- **verdict**：pass\n\n<!-- VERDICT: {"direction": "pass", "reason": "ok"} -->` } }], usage: { prompt_tokens: 500, completion_tokens: 200, total_tokens: 700 } };
+      }
+
+      // Risk Manager
+      if (systemPrompt.includes('risk manager')) {
+        return { choices: [{ message: { content: `### 1. 风险评分（0-100）\n35\n\n### 2. 风控决策\n- **status**：pass\n\n<!-- VERDICT: {"direction": "pass", "reason": "risk ok"} -->` } }], usage: { prompt_tokens: 600, completion_tokens: 200, total_tokens: 800 } };
+      }
+
+      // Fallback
+      return { choices: [{ message: { content: `<!-- VERDICT: {"direction": "Hold", "reason": "fallback"} -->` } }], usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 } };
+    });
+
+    mockClient.chat.completions.create = mockCreate;
 
     const result = await runFullAnalysis('600519', '2026-06-05', config, mockClient);
 
@@ -322,20 +323,8 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
       data: { ticker: '600519', data: [] }
     });
 
-    const mockCreate = vi.mocked(mockClient.chat.completions.create);
-
-    // Simulate a weak model that outputs pipe-separated direction despite the fix
-    for (const role of ANALYST_ROLES) {
-      mockCreate.mockResolvedValueOnce(
-        mockAnalystResponse(role, '看多|看空|中性', `${role} fallback`) as any
-      );
-    }
-
-    // PM also outputs pipe-separated
-    mockCreate.mockResolvedValueOnce({
-      choices: [{ message: { content: '决策\n<!-- VERDICT: {"direction": "Buy|Hold|Sell", "reason": "综合判断"} -->' } }],
-      usage: { prompt_tokens: 800, completion_tokens: 300, total_tokens: 1100 }
-    } as any);
+    const mockCreate = createMockLLM('看多|看空|中性', 'test fallback', 'Buy|Hold|Sell', '综合判断');
+    mockClient.chat.completions.create = mockCreate;
 
     const result = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
 

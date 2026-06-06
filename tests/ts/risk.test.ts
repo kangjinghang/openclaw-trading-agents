@@ -65,11 +65,15 @@ describe("Risk Module", () => {
 
   describe("runRiskDebate", () => {
     it("should run 3-way parallel risk debate", async () => {
-      const mockCreate = vi.mocked(mockClient.chat.completions.create);
-      mockCreate
-        .mockResolvedValueOnce(mockRiskDebateResponse("pass") as any)
-        .mockResolvedValueOnce(mockRiskDebateResponse("revise") as any)
-        .mockResolvedValueOnce(mockRiskDebateResponse("pass") as any);
+      // Use mockImplementation to return verdicts based on role, not call order
+      const mockCreate = vi.fn(async (params: any) => {
+        const systemPrompt = params.messages?.[0]?.content || '';
+        if (systemPrompt.includes('conse') || systemPrompt.includes('conservative')) {
+          return mockRiskDebateResponse("revise");
+        }
+        return mockRiskDebateResponse("pass");
+      });
+      mockClient.chat.completions.create = mockCreate;
 
       const plan = mockTradingPlan();
       const reports = [{ role: "market", content: "Report", verdict: { direction: "看多", reason: "up" }, data_sources_used: ["kline"] }];

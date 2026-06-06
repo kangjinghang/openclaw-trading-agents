@@ -16,16 +16,20 @@ import * as path from "path";
 
 const SKILLS_DIR = path.resolve(__dirname, "../skills");
 
-/** Run tasks with limited concurrency */
+/** Run tasks with limited concurrency and staggered start */
 async function pool<T>(
   items: readonly T[],
   fn: (item: T, index: number) => Promise<void>,
-  concurrency: number
+  concurrency: number,
+  staggerMs: number = 0
 ): Promise<void> {
   let next = 0;
   async function worker() {
     while (next < items.length) {
       const i = next++;
+      if (staggerMs > 0 && i > 0) {
+        await new Promise((r) => setTimeout(r, Math.random() * staggerMs));
+      }
       await fn(items[i], i);
     }
   }
@@ -125,7 +129,8 @@ export async function runRiskDebate(
 
       riskArguments[idx] = parseRiskArgument(result.content, role);
     },
-    concurrency
+    concurrency,
+    800  // stagger: 0~0.8s jitter between risk LLM calls
   );
 
   return {
