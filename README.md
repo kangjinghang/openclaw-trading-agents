@@ -1,249 +1,153 @@
 # OpenClaw Trading Agents
 
-多角色 A 股分析插件 —— 基于 OpenClaw 的多智能体辩论式股票分析系统
+多智能体辩论式 A 股分析系统 —— 基于 OpenClaw 插件框架
 
-## 项目简介
+[English](#english) | [中文](#中文)
 
-OpenClaw Trading Agents 是一个独立的 OpenClaw 插件，通过多智能体协作机制实现 A 股市场的深度分析。系统采用"市场分析师 + 投资组合经理"的双层架构，通过辩论式决策生成高质量的交易建议。
+---
+
+## 中文
+
+### 项目简介
+
+OpenClaw Trading Agents 是一个 OpenClaw 插件，通过多个 AI Agent 协作分析 A 股市场。系统模拟真实投资团队的分析决策流程：7 位专业分析师并行分析 → 多空辩论 → 研究经理评分 → 交易员制定执行计划 → 三方风控辩论，最终产出结构化的交易决策。
 
 ### 核心特性
 
-- **多智能体协作**：模拟真实投资团队的分析决策流程
-- **辩论式决策**：通过多轮辩论提高决策质量
-- **数据源自动切换**：mootdx 主数据源 + akshare 备份源
-- **报告持久化**：自动保存分析报告，支持溯源审计
-- **LLM 可追溯性**：记录每条 LLM 输出的生成来源
+- **7 位分析师并行分析**：技术面、基本面、新闻、情绪、政策、资金面、解禁 — 覆盖 A 股主要分析维度
+- **多空辩论机制**：Bull↔Bear 多轮对抗辩论，通过正反方论证提高决策质量
+- **三方风控辩论**：激进/保守/中性三方独立评估，风控经理最终裁定
+- **8 个数据源**：K 线、财务、新闻、情绪、政策、资金流向、解禁、行业排名
+- **两种分析模式**：Quick（8 次 LLM 调用）和 Full（15+ 次 LLM 调用）
+- **A 股特化**：T+1 约束、涨跌停限制、北向资金跟踪
+- **完整溯源**：每次 LLM 调用均有 trace 记录，支持审计
 
-## 快速开始
+### 系统架构
 
-### 1. 克隆项目
+```
+用户输入 → OpenClaw Tool Call
+  ↓
+┌─ 7 个数据脚本并行获取 ─────────────────────────────┐
+│  kline.py  fundamentals.py  news.py  sentiment.py   │
+│  policy.py  hot_money.py  lockup.py  sector.py      │
+└──────────────────────────────────────────────────────┘
+  ↓
+┌─ Quick 模式 (8 LLM calls) ──────────────────────────┐
+│  7 分析师并行分析 → 投资组合经理综合决策               │
+└──────────────────────────────────────────────────────┘
+  ↓ (或)
+┌─ Full 模式 (15+ LLM calls) ─────────────────────────┐
+│  7 分析师 → Bull↔Bear 辩论(N轮) → 研究经理评分       │
+│  → 交易员执行计划 → 三方风控辩论 → 风控经理裁定       │
+└──────────────────────────────────────────────────────┘
+  ↓
+结构化报告 + LLM Trace 持久化
+```
+
+### 快速开始
 
 ```bash
+# 1. 克隆项目
 git clone https://github.com/kangjinghang/openclaw-trading-agents.git
 cd openclaw-trading-agents
-```
 
-### 2. 安装依赖
-
-```bash
-# 安装 Node.js 依赖
+# 2. 安装依赖
 npm install
+pip install mootdx akshare requests
 
-# 安装 Python 依赖
-./scripts/setup-python.sh
-```
-
-### 3. 构建插件
-
-```bash
+# 3. 构建 & 测试
 npm run build
-```
+npm test    # 50 个测试
 
-### 4. 安装到 OpenClaw
-
-```bash
-# 在项目根目录执行
+# 4. 安装到 OpenClaw
 openclaw plugins install --link .
-```
 
-### 5. 配置插件
-
-```bash
-# 复制示例配置
+# 5. 配置（按需修改）
 cp config/openclaw.example.json ~/.openclaw/plugins/trading-agents/config.json
-
-# 根据需要修改配置文件
-vim ~/.openclaw/plugins/trading-agents/config.json
 ```
 
-## 使用方法
+### 使用方法
 
-### 快速分析
+通过 OpenClaw 调用三个工具：
 
-```bash
-# 分析贵州茅台（600519）
-/quick 600519
-
-# 分析平安银行（000001）
-/quick 000001
-```
-
-### 生成交易报告
-
-```bash
-# 生成指定日期的交易报告
-/trading_report 600519 2026-06-05
-
-# 生成当前日期的交易报告
-/trading_report 600519
-```
-
-### 查看历史报告
-
-报告默认保存在 `~/.openclaw/trading-reports/` 目录：
-
-```bash
-# 查看报告列表
-ls ~/.openclaw/trading-reports/
-
-# 查看特定报告
-cat ~/.openclaw/trading-reports/600519_2026-06-05.json
-```
-
-## 系统架构
+| 工具 | LLM 调用数 | 说明 |
+|------|-----------|------|
+| `trading_quick` | 8 | 7 分析师并行 → PM 综合 |
+| `trading_full` | 15+ | 完整辩论管道 |
+| `trading_report` | 0 | 查询已保存的报告 |
 
 ```
-用户输入 → Plugin (trading_quick tool)
-  ↓
-Python 脚本获取 K 线数据 (mootdx/akshare)
-  ↓
-市场分析师 prompt + 数据 → LLM
-  ↓
-投资组合经理 prompt + 分析师报告 → LLM
-  ↓
-结构化交易决策
-  ↓
-报告持久化 + LLM 溯源
-```
+# Quick 分析
+trading_quick(ticker="600519")
 
-### 组件说明
+# Full 分析（含辩论 + 风控）
+trading_full(ticker="600519")
 
-1. **Plugin Entry Point** (`src/index.ts`)
-   - OpenClaw 插件主入口
-   - 注册 trading_quick 和 trading_report 工具
-
-2. **Python 集成** (`src/exec-python.ts`)
-   - 调用 Python 脚本获取 K 线数据
-   - 处理数据源自动切换
-
-3. **多智能体编排** (`src/orchestrator.ts`)
-   - 协调市场分析师和投资组合经理
-   - 管理辩论轮次
-
-4. **LLM 客户端** (`src/llm-client.ts`)
-   - 统一的 LLM 调用接口
-   - 支持多种模型配置
-
-5. **报告存储** (`src/report-store.ts`)
-   - 持久化分析报告
-   - 支持历史查询
-
-## 数据源
-
-| 数据源 | 用途 | 状态 | 依赖 |
-|--------|------|------|------|
-| **mootdx** | K 线数据（主） | 默认启用 | `mootdx>=0.5.7` |
-| **akshare** | K 翻译（备） | 自动回退 | `akshare>=1.15` |
-
-### 数据源切换逻辑
-
-1. 优先使用 mootdx（通达信 TCP 协议）
-2. mootdx 失败时自动切换到 akshare（新浪财经 HTTP）
-3. 两者都失败时返回错误提示
-
-## 报告格式
-
-### 报告结构
-
-```json
-{
-  "ticker": "600519",
-  "date": "2026-06-05",
-  "analyst_reports": [
-    {
-      "role": "市场分析师 - 技术面",
-      "analysis": "...",
-      "trace": {
-        "model": "gpt-4",
-        "prompt_template": "market_analyst_technical.md",
-        "timestamp": "2026-06-05T10:30:00Z"
-      }
-    },
-    {
-      "role": "市场分析师 - 基本面",
-      "analysis": "...",
-      "trace": { ... }
-    }
-  ],
-  "portfolio_decision": {
-    "action": "HOLD",
-    "confidence": 0.75,
-    "reasoning": "...",
-    "trace": {
-      "model": "gpt-4",
-      "prompt_template": "portfolio_manager.md",
-      "timestamp": "2026-06-05T10:32:00Z"
-    }
-  },
-  "metadata": {
-    "debate_rounds": 2,
-    "data_source": "mootdx",
-    "created_at": "2026-06-05T10:32:15Z"
-  }
-}
-```
-
-### LLM 溯源信息
-
-每条 LLM 输出都包含 `trace` 字段，记录：
-- `model`: 使用的模型名称
-- `prompt_template`: 使用的提示模板
-- `timestamp`: 生成时间
-
-## 开发指南
-
-### 构建项目
-
-```bash
-npm run build
-```
-
-### 运行测试
-
-```bash
-# 运行所有测试
-npm test
-
-# 监听模式（开发时使用）
-npm run test:watch
+# 查询历史报告
+trading_report(ticker="600519", date="2026-06-05")
 ```
 
 ### 项目结构
 
 ```
 openclaw-trading-agents/
-├── src/                    # TypeScript 源码
-│   ├── index.ts           # 插件入口
-│   ├── exec-python.ts     # Python 脚本执行器
-│   ├── llm-client.ts      # LLM 客户端
-│   ├── orchestrator.ts    # 多智能体编排
-│   ├── prompt-loader.ts   # 提示模板加载器
-│   ├── report-store.ts    # 报告存储
-│   ├── trace-logger.ts    # LLM 溯源日志
-│   └── types.ts           # 类型定义
-├── skills/                # OpenClaw 技能定义
-│   ├── trading-kline/     # K 线数据获取
-│   └── trading-analysis/  # 多智能体分析
-├── scripts/               # 构建和部署脚本
-│   └── setup-python.sh    # Python 依赖安装
-├── tests/                 # 测试文件
-├── config/                # 配置示例
-├── dist/                  # 编译输出
-├── package.json
-├── tsconfig.json
-├── openclaw.plugin.json
-└── README.md
+├── src/                          # TypeScript 源码
+│   ├── index.ts                  # 插件入口，注册 3 个工具
+│   ├── orchestrator.ts           # Quick/Full 管道编排
+│   ├── llm-client.ts             # OpenAI 兼容 LLM 客户端
+│   ├── exec-python.ts            # Python 脚本执行器（30s 超时）
+│   ├── prompt-loader.ts          # Markdown 模板引擎
+│   ├── report-store.ts           # 报告持久化
+│   ├── trace-logger.ts           # LLM 调用溯源
+│   ├── debate.ts                 # Bull↔Bear 多轮辩论
+│   ├── research-manager.ts       # 辩论评分 + 5 级方向决策
+│   ├── trader.ts                 # A 股交易执行计划
+│   ├── risk.ts                   # 三方风控辩论 + 风控经理
+│   └── types.ts                  # 类型定义
+├── skills/                       # 数据技能（每个技能 = 一个数据领域）
+│   ├── trading-kline/            # K 线 OHLCV
+│   ├── trading-fundamentals/     # PE/PB/ROE/财务数据
+│   ├── trading-news/             # 个股新闻 + 宏观新闻
+│   ├── trading-sentiment/        # 市场情绪指标
+│   ├── trading-policy/           # 政策事件
+│   ├── trading-hot-money/        # 北向资金/主力资金/龙虎榜
+│   ├── trading-lockup/           # 解禁/减持
+│   ├── trading-sector/           # 行业排名 + 概念板块
+│   └── trading-analysis/         # Prompt 模板
+│       └── prompts/
+│           ├── analysts/         # 7 个分析师 Prompt
+│           ├── portfolio_manager.md
+│           └── debate/           # 6 个辩论/研究/交易/风控 Prompt
+├── tests/ts/                     # TypeScript 测试（vitest）
+├── docs/                         # 设计文档
+├── config/                       # 配置示例
+└── scripts/                      # 构建脚本
 ```
 
-## 配置说明
+### 数据源
 
-### 插件配置 (`~/.openclaw/plugins/trading-agents/config.json`)
+| 技能 | 数据内容 | 数据来源 | Python 依赖 |
+|------|---------|----------|------------|
+| trading-kline | K 线 OHLCV | mootdx / akshare | `mootdx`, `akshare` |
+| trading-fundamentals | PE/PB/ROE/财报 | 腾讯证券 / 东方财富 | `mootdx`, `akshare` |
+| trading-news | 个股新闻 + 宏观新闻 | 东方财富 / 财联社 | `requests`, `akshare` |
+| trading-sentiment | 市场情绪指标 | 东方财富 | `akshare` |
+| trading-policy | 政策事件 | 东方财富 / 财联社 | `requests` |
+| trading-hot-money | 北向/主力资金/龙虎榜 | 东方财富 / 同花顺 | `akshare`, `requests` |
+| trading-lockup | 解禁/减持计划 | 东方财富 / mootdx | `mootdx`, `akshare` |
+| trading-sector | 行业排名/概念板块 | 东方财富 / 百度 | `akshare`, `requests` |
+
+### 配置
+
+插件配置文件：`~/.openclaw/plugins/trading-agents/config.json`
 
 ```json
 {
   "models": {
-    "analyst": "gpt-4",
-    "portfolio_manager": "gpt-4"
+    "analyst": "gpt-4o",
+    "debater": "gpt-4o",
+    "decision": "gpt-4o",
+    "risk": "gpt-4o"
   },
   "debate_rounds": 2,
   "risk_debate_rounds": 1,
@@ -252,34 +156,155 @@ openclaw-trading-agents/
 }
 ```
 
-### 配置项说明
-
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `models` | object | `{}` | LLM 模型配置 |
-| `debate_rounds` | number | `2` | 常规辩论轮次 |
-| `risk_debate_rounds` | number | `1` | 风险评估辩论轮次 |
-| `max_risk_retries` | number | `1` | 风险评估最大重试次数 |
+| `models.analyst` | string | `gpt-4o` | 分析师使用的模型 |
+| `models.debater` | string | `gpt-4o` | 辩论使用的模型 |
+| `models.decision` | string | `gpt-4o` | 研究/交易决策使用的模型 |
+| `models.risk` | string | `gpt-4o` | 风控使用的模型 |
+| `debate_rounds` | number | `2` | Bull↔Bear 辩论轮次 |
+| `risk_debate_rounds` | number | `1` | 风控辩论轮次 |
+| `max_risk_retries` | number | `1` | 风控修订最大重试次数 |
 | `report_dir` | string | `~/.openclaw/trading-reports` | 报告保存目录 |
 
-## 许可证
+### VERDICT 协议
 
-MIT License
+所有 LLM 输出通过 HTML 注释嵌入结构化结论：
 
-## 贡献指南
+```html
+<!-- VERDICT: {"direction": "看多", "reason": "估值合理，盈利稳定增长"} -->
+```
 
-欢迎提交 Issue 和 Pull Request！
+不同阶段使用不同的 direction 值：
+- 分析师：`看多` / `看空` / `中性`
+- 辩论：`看多` / `看空`
+- 研究经理：`Buy` / `Overweight` / `Hold` / `Underweight` / `Sell`
+- 交易员：`Buy` / `Hold` / `Sell`
+- 风控：`pass` / `revise` / `reject`
 
-## 相关资源
+### 开发
 
-- [OpenClaw 文档](https://github.com/openclaw/openclaw)
-- [mootdx 文档](https://github.com/0h1x/mootdx)
-- [akshare 文档](https://github.com/akfamily/akshare)
+```bash
+npm run build          # TypeScript 编译
+npm test               # 运行 50 个测试
+npm run test:watch     # 监听模式
+```
 
-## 更新日志
+### 文档
 
-### v0.1.0 (2026-06-05)
-- 初始版本发布
-- 支持多智能体分析
-- 支持报告持久化
-- 支持 LLM 溯源
+| 文档 | 说明 |
+|------|------|
+| [CLAUDE.md](CLAUDE.md) | 项目架构、命令、关键文件（给 AI 编程助手） |
+| [docs/roadmap.md](docs/roadmap.md) | 实施路线图和进度 |
+| [docs/quick-resume.md](docs/quick-resume.md) | 换电脑后快速恢复 |
+| [docs/design-spec.md](docs/design-spec.md) | 完整系统设计文档 |
+| [docs/project-overview.md](docs/project-overview.md) | 项目背景和架构决策 |
+| [docs/data-sources-reference.md](docs/data-sources-reference.md) | 数据源函数签名和 fallback |
+| [docs/prompts-reference.md](docs/prompts-reference.md) | 16 个角色 Prompt 设计 |
+
+### 致谢
+
+本项目 Prompt 和数据脚本提炼自以下开源项目：
+- [TradingAgents](https://github.com/TaurionResearch/TradingAgents) — 多智能体辩论架构
+- [FinRobot](https://github.com/AI4Finance-Foundation/FinRobot) — 金融 AI Agent
+- [AutoQuant](https://github.com/AI4Finance-Foundation/FinRobot) — 量化分析
+
+### 许可证
+
+[MIT License](LICENSE)
+
+---
+
+<a id="english"></a>
+
+## English
+
+### Overview
+
+OpenClaw Trading Agents is an [OpenClaw](https://github.com/openclaw/openclaw) plugin that uses multiple AI agents to collaboratively analyze China A-share stocks. The system simulates a real investment team's analysis workflow: 7 specialized analysts run in parallel → Bull↔Bear debate → Research Manager scoring → Trader execution plan → 3-way risk debate, producing structured trading decisions.
+
+### Key Features
+
+- **7 Analysts in Parallel**: Technical, fundamentals, news, sentiment, policy, capital flow, lockup — covering major A-share analysis dimensions
+- **Bull↔Bear Debate**: Multi-round adversarial debate to improve decision quality through structured argumentation
+- **3-Way Risk Debate**: Aggressive/conservative/neutral risk assessment with independent evaluation
+- **8 Data Sources**: K-line, financials, news, sentiment, policy, capital flow, lockup, sector rankings
+- **Two Analysis Modes**: Quick (8 LLM calls) and Full (15+ LLM calls)
+- **A-Share Specific**: T+1 constraints, price limits, northbound capital tracking
+- **Full Traceability**: Every LLM call is traced and persisted for auditing
+
+### Quick Start
+
+```bash
+git clone https://github.com/kangjinghang/openclaw-trading-agents.git
+cd openclaw-trading-agents
+
+npm install
+pip install mootdx akshare requests
+
+npm run build
+npm test    # 50 tests
+
+openclaw plugins install --link .
+```
+
+### Tools
+
+| Tool | LLM Calls | Description |
+|------|-----------|-------------|
+| `trading_quick` | 8 | 7 analysts → Portfolio Manager synthesis |
+| `trading_full` | 15+ | Full debate pipeline with risk assessment |
+| `trading_report` | 0 | Query saved reports |
+
+### Architecture
+
+```
+User Input → OpenClaw Tool Call
+  ↓
+┌─ 7 Data Scripts (parallel) ──────────────────────────┐
+│  kline · fundamentals · news · sentiment · policy     │
+│  hot_money · lockup · sector                          │
+└───────────────────────────────────────────────────────┘
+  ↓
+┌─ Quick Mode (8 LLM calls) ──────────────────────────┐
+│  7 Analysts (parallel) → Portfolio Manager decision   │
+└──────────────────────────────────────────────────────┘
+  ↓ (or)
+┌─ Full Mode (15+ LLM calls) ─────────────────────────┐
+│  7 Analysts → Bull↔Bear Debate (N rounds)            │
+│  → Research Manager → Trader → Risk Debate → Risk Mgr│
+└──────────────────────────────────────────────────────┘
+  ↓
+Structured Report + LLM Trace Persistence
+```
+
+### Configuration
+
+`~/.openclaw/plugins/trading-agents/config.json`:
+
+```json
+{
+  "models": {
+    "analyst": "gpt-4o",
+    "debater": "gpt-4o",
+    "decision": "gpt-4o",
+    "risk": "gpt-4o"
+  },
+  "debate_rounds": 2,
+  "risk_debate_rounds": 1,
+  "max_risk_retries": 1,
+  "report_dir": "~/.openclaw/trading-reports"
+}
+```
+
+### Development
+
+```bash
+npm run build          # Compile TypeScript
+npm test               # Run 50 tests (vitest)
+npm run test:watch     # Watch mode
+```
+
+### License
+
+[MIT License](LICENSE)
