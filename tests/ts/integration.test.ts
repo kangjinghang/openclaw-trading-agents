@@ -314,4 +314,36 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
     expect(existsSync(join(detailDir, '04_trading_plan.json'))).toBe(true);
     expect(existsSync(join(detailDir, '05_risk', 'risk_manager.json'))).toBe(true);
   });
+
+  it('should handle pipe-separated VERDICT direction by taking first option', async () => {
+    vi.mocked(execPython).mockResolvedValue({
+      success: true,
+      data: { ticker: '600519', data: [] }
+    });
+
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+
+    // Simulate a weak model that outputs pipe-separated direction despite the fix
+    for (const role of ANALYST_ROLES) {
+      mockCreate.mockResolvedValueOnce(
+        mockAnalystResponse(role, '看多|看空|中性', `${role} fallback`) as any
+      );
+    }
+
+    // PM also outputs pipe-separated
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: '决策\n<!-- VERDICT: {"direction": "Buy|Hold|Sell", "reason": "综合判断"} -->' } }],
+      usage: { prompt_tokens: 800, completion_tokens: 300, total_tokens: 1100 }
+    } as any);
+
+    const result = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
+
+    // parseDirection takes the first option from pipe-separated values
+    expect(result.final.direction).toBe('Buy'); // "Buy|Hold|Sell" → first = "Buy"
+    expect(result.analysts).toHaveLength(7);
+    // Each analyst verdict should have the raw pipe-separated value
+    for (const report of result.analysts) {
+      expect(report.verdict.direction).toBe('看多|看空|中性');
+    }
+  });
 });

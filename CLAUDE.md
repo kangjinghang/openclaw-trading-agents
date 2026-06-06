@@ -90,7 +90,10 @@ All interfaces are in `src/types.ts`: `TradingAgentsConfig`, `AnalystReport`, `F
 
 ### Verdict Protocol
 
-LLM outputs embed `<!-- VERDICT: {"direction": "Buy|Hold|Sell", "reason": "..."} -->` HTML comments. `parseVerdict()` in llm-client.ts extracts these. `parseDirection()` in orchestrator.ts maps Chinese/English direction names to canonical `Buy`/`Hold`/`Sell`.
+LLM outputs embed `<!-- VERDICT: {"direction": "Buy", "reason": "..."} -->` HTML comments with a **single** direction value (not pipe-separated). `parseVerdict()` in llm-client.ts extracts these. `parseDirection()` in orchestrator.ts maps Chinese/English direction names to canonical `Buy`/`Hold`/`Sell` and handles pipe-separated fallback (takes first option). Direction values vary by phase:
+- Analysts: `看多` / `看空` / `中性`
+- Portfolio Manager / Research / Trader: `Buy` / `Overweight` / `Hold` / `Underweight` / `Sell`
+- Risk: `pass` / `revise` / `reject`
 
 ## Development Notes
 
