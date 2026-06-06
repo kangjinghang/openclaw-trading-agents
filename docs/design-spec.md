@@ -1,5 +1,12 @@
 # OpenClaw + TradingAgents A股交易分析系统集成设计
 
+> **状态（2026-06-06）**：Phase 1-4 已全部完成。本文档是原始设计文档，部分细节（目录结构、接口名称、Phase 编号）与最终实现有差异。实际实现以 `CLAUDE.md` 和源码为准。主要差异：
+> - Prompt 目录结构：实际为 `prompts/analysts/*.md` + `prompts/debate/*.md`（非 researchers/ 和 risk/ 子目录）
+> - Phase 编号：实际实现中 Phase 3 = 辩论+研究+交易+风控（合并为 runFullAnalysis），Phase 4 = VERDICT 修复
+> - 数据脚本：每个 Skill 实际只有一个主脚本（非多个），通过合并参数实现不同功能
+> - 新增模块：`src/debate.ts`、`src/research-manager.ts`、`src/trader.ts`、`src/risk.ts`
+> - 测试：50 个 TypeScript 测试（非 Python 测试）
+
 ## 目标
 
 构建一个独立的、可分享的 GitHub 项目（`openclaw-trading-agents`），通过 OpenClaw 的 Plugin + Skill 机制集成多角色 A 股分析能力。用户 clone 后一条命令安装，不修改 OpenClaw 源码。
