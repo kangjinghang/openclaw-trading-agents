@@ -53,4 +53,16 @@
 
 ## 机器可读结论
 
-<!-- VERDICT: {"direction": "看多|看空|中性", "reason": "简洁的一句话理由"} -->
+在报告的最后一行，必须包含以下格式的机器可读结论。`direction` 字段只能填写一个值，禁止填写多个。
+
+正确示例：
+<!-- VERDICT: {"direction": "看多", "reason": "行业扶持政策密集出台"} -->
+
+正确示例：
+<!-- VERDICT: {"direction": "看空", "reason": "监管收紧信号明显"} -->
+
+正确示例：
+<!-- VERDICT: {"direction": "中性", "reason": "近期无重大政策变化"} -->
+
+错误（禁止这样输出）：
+<!-- VERDICT: {"direction": "看多|看空|中性", "reason": "..."} -->
