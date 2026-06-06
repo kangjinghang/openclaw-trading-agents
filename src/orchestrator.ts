@@ -30,7 +30,9 @@ const SKILLS_DIR = path.resolve(__dirname, "../skills");
 function parseDirection(raw?: string): FinalDecision["direction"] {
   if (!raw) return "Hold";
 
-  const normalized = raw.toLowerCase().trim();
+  // Take the first option if LLM outputs "看多|看空|中性" style multi-choice
+  const firstOption = raw.split("|")[0].trim();
+  const normalized = firstOption.toLowerCase();
 
   // English mappings
   if (normalized === "buy" || normalized === "overweight") return "Buy";
@@ -38,9 +40,9 @@ function parseDirection(raw?: string): FinalDecision["direction"] {
   if (normalized === "sell" || normalized === "underweight") return "Sell";
 
   // Chinese mappings
-  if (normalized === "买入" || normalized === "增持") return "Buy";
+  if (normalized === "买入" || normalized === "增持" || normalized === "看多") return "Buy";
   if (normalized === "持有" || normalized === "中性") return "Hold";
-  if (normalized === "卖出" || normalized === "减持") return "Sell";
+  if (normalized === "卖出" || normalized === "减持" || normalized === "看空") return "Sell";
 
   // Default to Hold for unrecognized directions
   return "Hold";

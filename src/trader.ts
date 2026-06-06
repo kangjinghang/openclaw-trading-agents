@@ -16,7 +16,9 @@ const SKILLS_DIR = path.resolve(__dirname, "../skills");
 
 function parseNumberField(content: string, fieldRegex: RegExp): number {
   const match = content.match(fieldRegex);
-  return match ? parseFloat(match[1]) : 0;
+  if (!match) return 0;
+  const val = parseFloat(match[1]);
+  return isNaN(val) ? 0 : val;
 }
 
 function parseListSection(content: string, header: string): string[] {
@@ -84,11 +86,11 @@ export async function runTrader(
         : direction,
     target_price: parseNumberField(
       result.content,
-      /目标价格\**[：:]\s*([\d.]+)/
+      /目标价格\**[：:]\s*([\d,.]+)/
     ),
     stop_loss: parseNumberField(
       result.content,
-      /止损价格\**[：:]\s*([\d.]+)/
+      /止损价格\**[：:]\s*([\d,.]+)/
     ),
     position_pct: parseNumberField(
       result.content,

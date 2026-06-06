@@ -15,8 +15,11 @@ import * as path from "path";
 const SKILLS_DIR = path.resolve(__dirname, "../skills");
 
 function parseScores(content: string): { bull_score: number; bear_score: number } {
-  const bullMatch = content.match(/\*\*多头得分\*\*[：:]\s*(\d+)/);
-  const bearMatch = content.match(/\*\*空头得分\*\*[：:]\s*(\d+)/);
+  // Match with or without markdown bold markers
+  const bullMatch = content.match(/\*{0,2}多头得分\*{0,2}[：:]\s*(\d+)/) ||
+                    content.match(/bull.?score[：:]\s*(\d+)/i);
+  const bearMatch = content.match(/\*{0,2}空头得分\*{0,2}[：:]\s*(\d+)/) ||
+                    content.match(/bear.?score[：:]\s*(\d+)/i);
   return {
     bull_score: bullMatch ? parseInt(bullMatch[1], 10) : 50,
     bear_score: bearMatch ? parseInt(bearMatch[1], 10) : 50,
@@ -24,7 +27,8 @@ function parseScores(content: string): { bull_score: number; bear_score: number 
 }
 
 function parseConfidence(content: string): number {
-  const match = content.match(/\*\*信心水平\*\*[：:]\s*([\d.]+)/);
+  const match = content.match(/\*{0,2}信心水平\*{0,2}[：:]\s*([\d.]+)/) ||
+                content.match(/confidence[：:]\s*([\d.]+)/i);
   return match ? parseFloat(match[1]) : 0.5;
 }
 
@@ -35,12 +39,14 @@ function parseDebatePoints(content: string): string[] {
 }
 
 function parse5TierDirection(raw: string): ResearchDecision["direction"] {
-  const n = raw.toLowerCase().trim();
-  if (n === "buy" || n === "买入") return "Buy";
+  // Take the first option if LLM outputs "看多|看空|中性" style multi-choice
+  const firstOption = raw.split("|")[0].trim();
+  const n = firstOption.toLowerCase();
+  if (n === "buy" || n === "买入" || n === "看多") return "Buy";
   if (n === "overweight" || n === "增持") return "Overweight";
   if (n === "hold" || n === "持有" || n === "中性") return "Hold";
   if (n === "underweight" || n === "减持") return "Underweight";
-  if (n === "sell" || n === "卖出") return "Sell";
+  if (n === "sell" || n === "卖出" || n === "看空") return "Sell";
   return "Hold";
 }
 

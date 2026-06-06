@@ -35,8 +35,14 @@ const RISK_ROLES: Array<{
 ];
 
 function parseRiskArgument(content: string, role: RiskArgument["role"]): RiskArgument {
-  const verdictMatch = content.match(/\*\*verdict\*\*[：:]\s*(pass|revise|reject)/i);
-  const verdict = verdictMatch ? verdictMatch[1].toLowerCase() as RiskArgument["verdict"] : "pass";
+  const verdictMatch = content.match(/verdict[：:*]+\s*(pass|revise|reject)/i) ||
+                       content.match(/结论[：:*]+\s*(pass|revise|reject|通过|修订|拒绝)/i);
+  let verdict: RiskArgument["verdict"] = "pass";
+  if (verdictMatch) {
+    const raw = verdictMatch[1].toLowerCase();
+    if (raw === "revise" || raw === "修订") verdict = "revise";
+    else if (raw === "reject" || raw === "拒绝") verdict = "reject";
+  }
 
   const evidenceSection = content.match(/### 2\. 证据支撑\s*\n([\s\S]*?)(?=\n###|$)/);
   const evidence = evidenceSection
@@ -142,7 +148,8 @@ export async function runRiskManager(
   const verdict = parseVerdict(result.content);
   const status = (verdict?.direction || "pass").toLowerCase() as RiskAssessment["status"];
 
-  const scoreMatch = result.content.match(/风险评分[（(]0-100[)）]\s*\n(\d+)/);
+  const scoreMatch = result.content.match(/风险评分[（(]0-100[)）]?[：:]*\s*\n?\s*(\d+)/) ||
+                     result.content.match(/risk.?score[：:]*\s*\n?\s*(\d+)/i);
 
   return {
     status,
