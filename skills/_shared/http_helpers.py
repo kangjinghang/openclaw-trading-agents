@@ -8,10 +8,19 @@ import json
 import os
 import random
 import re
+import socket
 import sys
 import time
 
 import requests
+
+
+# ── Force IPv4 for eastmoney push2 (IPv6 connections get reset) ─────
+if socket.has_ipv6:
+    _orig_getaddrinfo = socket.getaddrinfo
+    def _prefer_ipv4(host, port, family=0, type=0, proto=0, flags=0):
+        return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+    socket.getaddrinfo = _prefer_ipv4
 
 
 # ── Eastmoney anti-ban ──────────────────────────────────────────────

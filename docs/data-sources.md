@@ -63,8 +63,10 @@ Market sentiment indicators from Eastmoney including fear/greed index, market br
 
 ### Sector (`trading-sector`)
 
-- Industry ranking (90 sectors with daily performance): Eastmoney
-- Concept blocks with daily price changes: Baidu Stock + Eastmoney
+- Industry ranking (90 sectors with daily performance): Eastmoney `push2` API
+- Concept blocks: ~~Baidu Stock~~ (API returns 403 as of 2026-06), Eastmoney `push2` API
+
+> **Note**: `push2.eastmoney.com` uses a traffic manager (load balancer) that may route to different IPs. In some network environments, IPv6 connections are dropped during TLS renegotiation. The shared `http_helpers.py` module forces IPv4 DNS resolution as a mitigation. All scripts handle API failures gracefully — returning empty data instead of crashing.
 
 ## Fallback Pattern
 
@@ -94,3 +96,13 @@ def fetch(ticker, **params):
 - **Eastmoney**: Rate-limited. Scripts use ≥1s interval + random jitter + session reuse.
 - **mootdx**: Uses TCP direct connection (not HTTP), more stable.
 - **akshare**: Aggregates multiple sources including Eastmoney. Acts as universal fallback.
+
+## Known Issues (2026-06)
+
+| Issue | Affected Scripts | Impact | Mitigation |
+|-------|-----------------|--------|------------|
+| `push2.eastmoney.com` IPv6 TLS reset | trading-sector | Industry ranking may return empty | IPv4 forced in `http_helpers.py`; graceful empty fallback |
+| Baidu Stock `getrelatedblock` API 403 | trading-sector | Concept blocks return `null` | No fallback available; data simply omitted |
+| Eastmoney `stock_info` sub-source error | trading-fundamentals | Non-critical warning in stderr | Other sub-sources (tencent, mootdx) provide equivalent data |
+
+All scripts wrap API calls in `try/except` and return `{"success": true, "data": {...}}` with empty arrays for failed sub-sources. The analysis pipeline continues even when individual data sources are unavailable.
