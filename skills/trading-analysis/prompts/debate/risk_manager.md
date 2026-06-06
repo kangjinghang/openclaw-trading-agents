@@ -46,6 +46,16 @@
 
 ## 机器可读结论
 
-```html
-<!-- VERDICT: {"direction": "pass|revise|reject", "reason": "不超过20字的风控结论"} -->
-```
+在报告的最后一行，必须包含以下格式的机器可读结论。`direction` 字段只能填写一个值，禁止填写多个。
+
+正确示例：
+<!-- VERDICT: {"direction": "pass", "reason": "综合风险可控"} -->
+
+正确示例：
+<!-- VERDICT: {"direction": "revise", "reason": "需降低仓位并调整止损"} -->
+
+正确示例：
+<!-- VERDICT: {"direction": "reject", "reason": "发现重大风险"} -->
+
+错误（禁止这样输出）：
+<!-- VERDICT: {"direction": "pass|revise|reject", "reason": "..."} -->

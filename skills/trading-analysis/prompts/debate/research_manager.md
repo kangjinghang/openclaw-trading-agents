@@ -56,6 +56,16 @@
 
 ## 机器可读结论
 
-```html
-<!-- VERDICT: {"direction": "Buy|Overweight|Hold|Underweight|Sell", "reason": "不超过20字的核心结论"} -->
-```
+在报告的最后一行，必须包含以下格式的机器可读结论。`direction` 字段只能填写一个值，禁止填写多个。
+
+正确示例：
+<!-- VERDICT: {"direction": "Buy", "reason": "多头论据充分，风险可控"} -->
+
+正确示例：
+<!-- VERDICT: {"direction": "Hold", "reason": "多空均衡，方向不明"} -->
+
+正确示例：
+<!-- VERDICT: {"direction": "Sell", "reason": "空头论据充分，风险显著"} -->
+
+错误（禁止这样输出）：
+<!-- VERDICT: {"direction": "Buy|Overweight|Hold|Underweight|Sell", "reason": "..."} -->
