@@ -4,6 +4,50 @@ import { QuickAnalysisResult, FullAnalysisResult } from "./types";
 
 type AnyResult = QuickAnalysisResult | FullAnalysisResult;
 
+/**
+ * Minimal Markdown → HTML converter for LLM-generated text.
+ * Handles: headings, bold, lists, horizontal rules, paragraphs.
+ */
+function markdownToHtml(md: string): string {
+  // Remove VERDICT HTML comments
+  let html = md.replace(/<!--\s*VERDICT:.*?-->/g, "");
+  // Horizontal rules
+  html = html.replace(/^---\s*$/gm, "<hr>");
+  // Headings (### before ## before #)
+  html = html.replace(/^### (.+)$/gm, "<h4>$1</h4>");
+  html = html.replace(/^## (.+)$/gm, "<h3>$1</h3>");
+  html = html.replace(/^# (.+)$/gm, "<h2>$1</h2>");
+  // Bold
+  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  // Unordered list items
+  html = html.replace(/^- (.+)$/gm, "<li>$1</li>");
+  // Ordered list items
+  html = html.replace(/^\d+\.\s+(.+)$/gm, "<li>$1</li>");
+  // Wrap consecutive <li> in <ul>
+  html = html.replace(/((?:<li>.*<\/li>\s*)+)/g, (match) => {
+    return "<ul>" + match + "</ul>";
+  });
+  // Paragraphs: wrap lines that aren't already wrapped in tags
+  html = html
+    .split("\n\n")
+    .map((block) => {
+      const trimmed = block.trim();
+      if (!trimmed) return "";
+      if (trimmed.startsWith("<")) return trimmed;
+      return `<p>${trimmed.replace(/\n/g, "<br>")}</p>`;
+    })
+    .join("\n");
+  return html;
+}
+
+/** Strip VERDICT comments and trim execution plan for clean display */
+function cleanExecutionPlan(raw: string): string {
+  return raw
+    .replace(/<!--\s*VERDICT:.*?-->/g, "")
+    .replace(/^---\s*$/gm, "")
+    .trim();
+}
+
 function directionEmoji(d: string): string {
   const lower = d.toLowerCase();
   if (["看多", "buy", "overweight", "pass"].includes(lower)) return "🟢";
@@ -97,9 +141,13 @@ export function toMarkdown(result: AnyResult): string {
       }
     }
 
-    lines.push(`**多头总结**: ${full.debate.bull_summary}`);
+    const bullSummaryClean = cleanExecutionPlan(full.debate.bull_summary)
+      .replace(/^#{1,3}\s+.*$/gm, "").trim();
+    const bearSummaryClean = cleanExecutionPlan(full.debate.bear_summary)
+      .replace(/^#{1,3}\s+.*$/gm, "").trim();
+    lines.push(`**多头总结**: ${bullSummaryClean}`);
     lines.push(``);
-    lines.push(`**空头总结**: ${full.debate.bear_summary}`);
+    lines.push(`**空头总结**: ${bearSummaryClean}`);
     lines.push(``);
   }
 
@@ -132,7 +180,7 @@ export function toMarkdown(result: AnyResult): string {
     lines.push(`- **止损价**: ${tp.stop_loss} 元`);
     lines.push(`- **建议仓位**: ${tp.position_pct}%`);
     lines.push(``);
-    lines.push(tp.execution_plan);
+    lines.push(cleanExecutionPlan(tp.execution_plan));
     lines.push(``);
 
     if (tp.entry_signals?.length) {
@@ -253,18 +301,30 @@ export function toHtml(result: AnyResult): string {
       html += `<h3>第 ${round.round} 轮</h3>`;
       html += `<div class="card"><strong>多头论点</strong>:`;
       for (const c of round.bull_claims) {
-        html += `<br>• <strong>${c.topic}</strong> <span style="color:#6b7280">(信心 ${Math.round(c.confidence * 100)}%)</span>: ${c.evidence}`;
+        html += `<br>• <strong>${c.topic}</strong> <span style="color:#6b7280">(信心 ${Math.round(c.confidence * 100)}%)</span>: ${c.evidence.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")}`;
       }
       html += `</div>`;
       html += `<div class="card"><strong>空头论点</strong>:`;
       for (const c of round.bear_claims) {
-        html += `<br>• <strong>${c.topic}</strong> <span style="color:#6b7280">(信心 ${Math.round(c.confidence * 100)}%)</span>: ${c.evidence}`;
+        html += `<br>• <strong>${c.topic}</strong> <span style="color:#6b7280">(信心 ${Math.round(c.confidence * 100)}%)</span>: ${c.evidence.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")}`;
       }
       html += `</div>`;
     }
 
+    const bullClean = full.debate.bull_summary
+      .replace(/<!--\s*VERDICT:.*?-->/g, "")
+      .replace(/^#{1,3}\s+.*$/gm, "")
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/\n+/g, "<br>")
+      .trim();
+    const bearClean = full.debate.bear_summary
+      .replace(/<!--\s*VERDICT:.*?-->/g, "")
+      .replace(/^#{1,3}\s+.*$/gm, "")
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/\n+/g, "<br>")
+      .trim();
     html += `
-<blockquote><strong>多头总结</strong>: ${full.debate.bull_summary}<br><strong>空头总结</strong>: ${full.debate.bear_summary}</blockquote>
+<blockquote><strong>多头总结</strong>: ${bullClean}<br><strong>空头总结</strong>: ${bearClean}</blockquote>
 </div>`;
   }
 
@@ -293,7 +353,7 @@ export function toHtml(result: AnyResult): string {
 <h2>交易执行计划</h2>
 <div class="card">
 <p>目标价: <strong>${tp.target_price} 元</strong> | 止损: ${tp.stop_loss} 元 | 仓位: ${tp.position_pct}%</p>
-<p>${tp.execution_plan.replace(/\n/g, "<br>")}</p>
+${markdownToHtml(cleanExecutionPlan(tp.execution_plan))}
 </div>
 </div>`;
   }
