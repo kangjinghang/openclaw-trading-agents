@@ -225,7 +225,7 @@ export function toHtml(result: AnyResult): string {
     const color = ["看多", "buy", "overweight", "pass"].includes(lower) ? "#16a34a"
       : ["看空", "sell", "underweight", "reject"].includes(lower) ? "#dc2626"
       : "#ca8a04";
-    return `<span style="background:${color};color:#fff;padding:2px 10px;border-radius:12px;font-size:13px">${d}</span>`;
+    return `<span style="background:${color};color:#fff;padding:2px 10px;border-radius:12px;font-size:13px;white-space:nowrap">${directionLabel(d)}</span>`;
   }
 
   let html = `<!DOCTYPE html>
