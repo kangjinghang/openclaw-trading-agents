@@ -59,14 +59,55 @@ pip install mootdx akshare requests
 npm run build
 npm test    # 50 个测试
 
-# 4. 安装到 OpenClaw
-openclaw plugins install --link .
+# 4. 设置 API Key
+export OPENAI_API_KEY=your-api-key
+# 可选：使用 OpenAI 兼容 API（智谱、DeepSeek 等）
+# export OPENAI_BASE_URL=https://open.bigmodel.cn/api/paas/v4/
 
-# 5. 配置（按需修改）
-cp config/openclaw.example.json ~/.openclaw/plugins/trading-agents/config.json
+# 5. 运行分析（无需 OpenClaw）
+node dist/cli.js quick 600519
+node dist/cli.js full 600519
 ```
 
+### 环境变量
+
+| 变量 | 必需 | 说明 |
+|------|------|------|
+| `OPENAI_API_KEY` | 是 | LLM API Key |
+| `OPENAI_BASE_URL` | 否 | OpenAI 兼容 API 地址（智谱、DeepSeek、Moonshot 等） |
+
+支持的 API 提供商：OpenAI、智谱 AI、DeepSeek、Moonshot、任何 OpenAI 兼容 API。
+
 ### 使用方法
+
+**方式一：独立 CLI（推荐新手）**
+
+```bash
+# Quick 分析（8 次 LLM 调用）
+node dist/cli.js quick 600519
+
+# Full 分析（15+ 次 LLM 调用，含辩论 + 风控）
+node dist/cli.js full 600519
+
+# 指定日期
+node dist/cli.js full 600519 2026-06-05
+
+# 指定模型和辩论轮次
+node dist/cli.js full 600519 --model gpt-4o-mini --debate-rounds 3
+
+# 保存报告到指定目录
+node dist/cli.js quick 600519 --report-dir ./my-reports
+```
+
+**方式二：作为 OpenClaw 插件**
+
+```bash
+# 安装到 OpenClaw
+openclaw plugins install --link .
+
+# 配置
+cp config/openclaw.example.json ~/.openclaw/plugins/trading-agents/config.json
+```
 
 通过 OpenClaw 调用三个工具：
 
@@ -182,6 +223,28 @@ openclaw-trading-agents/
 - 交易员：`Buy` / `Hold` / `Sell`
 - 风控：`pass` / `revise` / `reject`
 
+### 示例输出
+
+查看真实分析报告示例：
+
+| 文件 | 说明 |
+|------|------|
+| [examples/report_quick_600519.json](examples/report_quick_600519.json) | Quick 模式 — 贵州茅台 7 分析师报告 |
+| [examples/report_full_600519.json](examples/report_full_600519.json) | Full 模式 — 含辩论、风控的完整报告 |
+
+所有 LLM 输出通过 HTML 注释嵌入结构化结论：
+
+```html
+<!-- VERDICT: {"direction": "看多", "reason": "估值合理，盈利稳定增长"} -->
+```
+
+不同阶段使用不同的 direction 值：
+- 分析师：`看多` / `看空` / `中性`
+- 辩论：`看多` / `看空`
+- 研究经理：`Buy` / `Overweight` / `Hold` / `Underweight` / `Sell`
+- 交易员：`Buy` / `Hold` / `Sell`
+- 风控：`pass` / `revise` / `reject`
+
 ### 开发
 
 ```bash
@@ -243,10 +306,56 @@ pip install mootdx akshare requests
 npm run build
 npm test    # 50 tests
 
-openclaw plugins install --link .
+# Set API key
+export OPENAI_API_KEY=your-api-key
+# Optional: use OpenAI-compatible API (ZhiPu, DeepSeek, etc.)
+# export OPENAI_BASE_URL=https://open.bigmodel.cn/api/paas/v4/
+
+# Run analysis (no OpenClaw required)
+node dist/cli.js quick 600519
+node dist/cli.js full 600519
 ```
 
-### Tools
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OPENAI_API_KEY` | Yes | LLM API Key |
+| `OPENAI_BASE_URL` | No | OpenAI-compatible API URL (ZhiPu, DeepSeek, Moonshot, etc.) |
+
+### Usage
+
+**Option 1: Standalone CLI (recommended for first-time users)**
+
+```bash
+# Quick analysis (8 LLM calls)
+node dist/cli.js quick 600519
+
+# Full analysis (15+ LLM calls, with debate + risk)
+node dist/cli.js full 600519
+
+# Specify date
+node dist/cli.js full 600519 2026-06-05
+
+# Specify model and debate rounds
+node dist/cli.js full 600519 --model gpt-4o-mini --debate-rounds 3
+```
+
+**Option 2: As OpenClaw plugin**
+
+```bash
+openclaw plugins install --link .
+cp config/openclaw.example.json ~/.openclaw/plugins/trading-agents/config.json
+```
+
+### Example Output
+
+See real analysis report examples:
+
+| File | Description |
+|------|-------------|
+| [examples/report_quick_600519.json](examples/report_quick_600519.json) | Quick mode — 7 analyst reports for Moutai |
+| [examples/report_full_600519.json](examples/report_full_600519.json) | Full mode — complete report with debate and risk |
 
 | Tool | LLM Calls | Description |
 |------|-----------|-------------|

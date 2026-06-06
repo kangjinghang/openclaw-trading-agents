@@ -1,0 +1,47 @@
+{
+  "id": "600519_2026-06-05_full",
+  "ticker": "600519",
+  "company_name": "贵州茅台",
+  "date": "2026-06-05",
+  "mode": "full",
+  "created_at": "2026-06-05T15:32:15.000Z",
+  "duration_ms": 181900,
+  "total_tokens": 125340,
+  "total_cost_usd": 0.42,
+  "final": {
+    "ticker": "600519",
+    "company_name": "贵州茅台",
+    "date": "2026-06-05",
+    "direction": "Buy",
+    "confidence": 0.75,
+    "target_price": 1620,
+    "stop_loss": 1450,
+    "position_pct": 20,
+    "reasoning": "完整辩论后综合判断：多头在基本面（PE历史低位+盈利稳健）、资金面（北向连续净买入+主力流入）两个维度论证有力。空头指出的消费税改革风险被确认已被市场充分定价。交易员建议分批建仓，风控经理通过。整体偏多，建议20%仓位。",
+    "key_risks": ["消费税改革政策", "白酒景气度不及预期", "北向资金转向风险"],
+    "analyst_verdicts": {
+      "market": "看多",
+      "fundamentals": "看多",
+      "news": "看多",
+      "sentiment": "中性",
+      "policy": "中性",
+      "hot_money": "看多",
+      "lockup": "中性"
+    },
+    "bull_bear_summary": "多头在基本面和资金面占据优势，空头政策风险论点被部分反驳",
+    "risk_assessment": "pass",
+    "execution_plan": "分两批建仓：首批10%在1530-1540元区间，第二批10%在回调至1500元附近。止损1450元，止盈目标1620元。T+1约束下首日买入次日方可卖出。",
+    "next_review_trigger": "若跌破1480元（60日均线）需重新评估"
+  },
+  "analyst_verdicts": {
+    "market": { "direction": "看多", "reason": "均线金叉，MACD红柱放大，短期偏多" },
+    "fundamentals": { "direction": "看多", "reason": "PE处历史低位区间，盈利增速稳健" },
+    "news": { "direction": "看多", "reason": "新品发布+分红提升，消息面偏正面" },
+    "sentiment": { "direction": "中性", "reason": "情绪偏多但未到极端，缺乏反向信号" },
+    "policy": { "direction": "中性", "reason": "政策面中性偏正，消费税风险已被定价" },
+    "hot_money": { "direction": "看多", "reason": "北向连续净买入，主力资金流入" },
+    "lockup": { "direction": "中性", "reason": "无解禁压力，大股东持股稳定" }
+  },
+  "detail_dir": "2026-06-05_full/",
+  "trace_count": 17
+}

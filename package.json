@@ -6,7 +6,11 @@
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "analyze": "node dist/cli.js"
+  },
+  "bin": {
+    "trading-agents": "dist/cli.js"
   },
   "dependencies": {
     "openai": "^4.95.0"
