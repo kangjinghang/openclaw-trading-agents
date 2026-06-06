@@ -143,18 +143,23 @@ async function runAnalystPhase(
   let totalTokens = 0;
   let totalCostUsd = 0;
 
-  // ── Phase 1: Fetch data from all 7 scripts in parallel ──────────
-  const dataResults = await Promise.all(
-    ANALYST_CONFIGS.map(async (cfg) => {
+  // ── Phase 1: Fetch data from all 7 scripts with concurrency limit ──
+  const dataConcurrency = config.llm_concurrency || 3;
+  const dataResults: Array<{ role: string; result: ScriptResult }> = new Array(ANALYST_CONFIGS.length);
+
+  await pool(
+    ANALYST_CONFIGS,
+    async (cfg, idx) => {
       const scriptPath = path.join(SKILLS_DIR, cfg.script);
       const args = ["--ticker", ticker, "--date", date, ...cfg.extraArgs(ticker)];
       try {
         const result: ScriptResult = await execPython(scriptPath, args);
-        return { role: cfg.role, result };
+        dataResults[idx] = { role: cfg.role, result };
       } catch (err: any) {
-        return { role: cfg.role, result: { success: false, error: err.message } as ScriptResult };
+        dataResults[idx] = { role: cfg.role, result: { success: false, error: err.message } as ScriptResult };
       }
-    })
+    },
+    dataConcurrency
   );
 
   const dataMap: Record<string, string> = {};
