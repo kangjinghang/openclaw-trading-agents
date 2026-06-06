@@ -13,6 +13,7 @@
 import OpenAI from "openai";
 import { runQuickAnalysis, runFullAnalysis } from "./orchestrator";
 import { TradingAgentsConfig } from "./types";
+import { toMarkdown, toHtml } from "./report-formatter";
 
 const args = process.argv.slice(2);
 
@@ -32,6 +33,7 @@ Options:
   --risk-debate-rounds <n> Number of risk debate rounds (default: 1)
   --model <name>           Use this model for all roles (default: gpt-4o)
   --report-dir <path>      Save reports to this directory (default: ./trading-reports)
+  --format <fmt>           Output format: json (default), md, html
 
 Environment:
   OPENAI_API_KEY    Required. Your LLM API key.
@@ -68,6 +70,7 @@ let debateRounds = 2;
 let riskDebateRounds = 1;
 let model = "gpt-4o";
 let reportDir = "./trading-reports";
+let format = "json";
 
 for (let i = 2; i < args.length; i++) {
   if (args[i] === "--debate-rounds" && args[i + 1]) {
@@ -78,6 +81,8 @@ for (let i = 2; i < args.length; i++) {
     model = args[++i];
   } else if (args[i] === "--report-dir" && args[i + 1]) {
     reportDir = args[++i];
+  } else if (args[i] === "--format" && args[i + 1]) {
+    format = args[++i];
   } else if (!date && /^\d{4}-\d{2}-\d{2}$/.test(args[i])) {
     date = args[i];
   }
@@ -128,8 +133,14 @@ async function main() {
     const durationSec = ((Date.now() - startTime) / 1000).toFixed(1);
     console.error(`\n  Completed in ${durationSec}s`);
 
-    // Output result to stdout as JSON
-    console.log(JSON.stringify(result, null, 2));
+    // Output in requested format
+    if (format === "md") {
+      console.log(toMarkdown(result));
+    } else if (format === "html") {
+      console.log(toHtml(result));
+    } else {
+      console.log(JSON.stringify(result, null, 2));
+    }
   } catch (err: any) {
     console.error(`\n  Error: ${err.message}`);
     process.exit(1);

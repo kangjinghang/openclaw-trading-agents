@@ -92,6 +92,12 @@ node dist/cli.js full 600519
 # 指定日期
 node dist/cli.js full 600519 2026-06-05
 
+# 输出 Markdown 格式（适合阅读）
+node dist/cli.js quick 600519 --format md
+
+# 输出 HTML 格式（适合浏览器查看）
+node dist/cli.js full 600519 --format html > report.html
+
 # 指定模型和辩论轮次
 node dist/cli.js full 600519 --model gpt-4o-mini --debate-rounds 3
 
@@ -229,8 +235,11 @@ openclaw-trading-agents/
 
 | 文件 | 说明 |
 |------|------|
-| [examples/report_quick_600519.json](examples/report_quick_600519.json) | Quick 模式 — 7 分析师 + PM 综合（8 次 LLM 调用） |
-| [examples/report_full_600519.json](examples/report_full_600519.json) | Full 模式 — 完整辩论 + 风控流程（15+ 次 LLM 调用） |
+| [report_quick_600519.md](examples/report_quick_600519.md) | Quick 模式 — Markdown 格式 |
+| [report_full_600519.md](examples/report_full_600519.md) | Full 模式 — Markdown 格式（推荐先看这个） |
+| [report_full_600519.html](examples/report_full_600519.html) | Full 模式 — HTML 格式 |
+| [report_quick_600519.json](examples/report_quick_600519.json) | Quick 模式 — JSON 原始输出 |
+| [report_full_600519.json](examples/report_full_600519.json) | Full 模式 — JSON 原始输出 |
 
 Full 模式比 Quick 多出的内容：
 - **多空辩论**：Bull↔Bear 2 轮对抗，每轮生成带置信度的 claim
