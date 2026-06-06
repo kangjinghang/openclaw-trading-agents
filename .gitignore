@@ -3,5 +3,8 @@ dist/
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
 .env
 trading-reports/
+.claude/
+*.egg-info/

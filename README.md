@@ -192,15 +192,13 @@ npm run test:watch     # 监听模式
 
 ### 文档
 
-| 文档 | 说明 |
-|------|------|
-| [CLAUDE.md](CLAUDE.md) | 项目架构、命令、关键文件（给 AI 编程助手） |
-| [docs/roadmap.md](docs/roadmap.md) | 实施路线图和进度 |
-| [docs/quick-resume.md](docs/quick-resume.md) | 换电脑后快速恢复 |
-| [docs/design-spec.md](docs/design-spec.md) | 完整系统设计文档 |
-| [docs/project-overview.md](docs/project-overview.md) | 项目背景和架构决策 |
-| [docs/data-sources-reference.md](docs/data-sources-reference.md) | 数据源函数签名和 fallback |
-| [docs/prompts-reference.md](docs/prompts-reference.md) | 16 个角色 Prompt 设计 |
+| 文档 | 中文 | English |
+|------|------|---------|
+| 架构 | [docs/architecture.zh.md](docs/architecture.zh.md) | [docs/architecture.md](docs/architecture.md) |
+| 数据源 | [docs/data-sources.zh.md](docs/data-sources.zh.md) | [docs/data-sources.md](docs/data-sources.md) |
+| Prompt 设计 | [docs/prompts.zh.md](docs/prompts.zh.md) | [docs/prompts.md](docs/prompts.md) |
+| 路线图 | [docs/roadmap.zh.md](docs/roadmap.zh.md) | [docs/roadmap.md](docs/roadmap.md) |
+| 更新日志 | — | [CHANGELOG.md](CHANGELOG.md) |
 
 ### 致谢
 
