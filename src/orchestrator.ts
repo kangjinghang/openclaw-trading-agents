@@ -295,7 +295,7 @@ export async function runFullAnalysis(
   const researchDecision = await runResearchManager(analystReports, debate, config, openaiClient, traceLogger);
 
   // Phase 5: Trader (with revise loop)
-  let tradingPlan = await runTrader(researchDecision, analystReports, config, openaiClient, traceLogger);
+  let tradingPlan = await runTrader(researchDecision, analystReports, config, openaiClient, traceLogger, ticker, date);
 
   // Phase 6-7: Risk Debate + Risk Manager (with revise loop)
   let riskDebate = await runRiskDebate(tradingPlan, analystReports, config, openaiClient, traceLogger);
@@ -304,7 +304,7 @@ export async function runFullAnalysis(
   let retries = 0;
   while (riskAssessment.status === "revise" && retries < config.max_risk_retries) {
     retries++;
-    tradingPlan = await runTrader(researchDecision, analystReports, config, openaiClient, traceLogger);
+    tradingPlan = await runTrader(researchDecision, analystReports, config, openaiClient, traceLogger, ticker, date);
     if (riskAssessment.max_position_override) {
       tradingPlan.position_pct = Math.min(tradingPlan.position_pct, riskAssessment.max_position_override);
     }

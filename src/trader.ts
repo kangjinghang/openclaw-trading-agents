@@ -21,6 +21,30 @@ function parseNumberField(content: string, fieldRegex: RegExp): number {
   return isNaN(val) ? 0 : val;
 }
 
+/**
+ * Parse a price/percentage field from LLM output.
+ * Supports: "120元", "**目标价格**：120", "| **目标价格** | 1750 元 |",
+ *           "P × 1.08", "5% - 8%", markdown tables, etc.
+ * Returns the first parseable number found.
+ */
+function parseNumericField(content: string, fieldPattern: string): number {
+  const escaped = fieldPattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Optional suffix after field name (e.g. "目标价格（上行）" or "目标价格/止损价格")
+  const suffix = '[^：:|\\n]*?';
+  // Pattern 1: inline with colon (e.g. "**目标价格**：120元" or "- **目标价格**: 1750 元")
+  const re1 = new RegExp(
+    `\\*{0,2}${escaped}${suffix}\\*{0,2}\\s*[：:]\\s*[^\\n]*?([\\d]+(?:[.,]\\d+)?)`,
+  );
+  // Pattern 2: table cell (e.g. "| **目标价格（上行）** | **1750 元** |")
+  const re2 = new RegExp(
+    `\\|\\s*\\*{0,2}${escaped}[^|]*?\\*{0,2}\\s*\\|\\s*[^|]*?([\\d]+(?:[.,]\\d+)?)`,
+  );
+  const match = content.match(re1) || content.match(re2);
+  if (!match) return 0;
+  const val = parseFloat(match[1].replace(",", ""));
+  return isNaN(val) ? 0 : val;
+}
+
 function parseListSection(content: string, header: string): string[] {
   const regex = new RegExp(
     `### ${header}[\\s\\S]*?\\n([\\s\\S]*?)(?=\\n###|\\n<!-- VERDICT|$)`
@@ -38,7 +62,9 @@ export async function runTrader(
   analystReports: AnalystReport[],
   config: TradingAgentsConfig,
   openaiClient: OpenAI,
-  traceLogger: TraceLogger
+  traceLogger: TraceLogger,
+  ticker?: string,
+  date?: string
 ): Promise<TradingPlan> {
   const promptsBaseDir = path.join(
     SKILLS_DIR,
@@ -55,8 +81,8 @@ export async function runTrader(
   const userMessage = loadAndRender(
     "debate/trader.md",
     {
-      ticker: "",
-      date: "",
+      ticker: ticker || "",
+      date: date || "",
       research_decision: decisionText,
       analyst_reports: reportsText,
     },
@@ -84,25 +110,16 @@ export async function runTrader(
         : direction === "Underweight"
         ? "Sell"
         : direction,
-    target_price: parseNumberField(
-      result.content,
-      /目标价格\**[：:]\s*([\d,.]+)/
-    ),
-    stop_loss: parseNumberField(
-      result.content,
-      /止损价格\**[：:]\s*([\d,.]+)/
-    ),
-    position_pct: parseNumberField(
-      result.content,
-      /建议仓位\**[：:]\s*(\d+)/
-    ),
-    execution_plan: result.content.slice(0, 200),
+    target_price: parseNumericField(result.content, "目标价格"),
+    stop_loss: parseNumericField(result.content, "止损价格"),
+    position_pct: parseNumericField(result.content, "建议仓位"),
+    execution_plan: result.content.slice(0, 3000),
     entry_signals: parseListSection(result.content, "入场信号"),
     exit_signals: parseListSection(result.content, "退出信号"),
     key_risks: parseListSection(result.content, "关键风险提示"),
     t_plus_1_note: (() => {
       const match = result.content.match(
-        /### T\+1 操作约束说明\s*\n([\s\S]*?)(?=\n###|$)/
+        /### [T＋+]1 操作约束说明\s*\n([\s\S]*?)(?=\n###|$)/
       );
       return match
         ? match[1].trim()

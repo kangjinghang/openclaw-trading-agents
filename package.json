@@ -16,10 +16,16 @@
     "openai": "^4.95.0"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "typescript": "^5.7.0",
-    "vitest": "^3.0.0",
-    "@types/node": "^22.0.0"
+    "vitest": "^3.0.0"
   },
-  "keywords": ["openclaw", "trading", "a-share", "stock-analysis", "multi-agent"],
+  "keywords": [
+    "openclaw",
+    "trading",
+    "a-share",
+    "stock-analysis",
+    "multi-agent"
+  ],
   "license": "MIT"
 }
