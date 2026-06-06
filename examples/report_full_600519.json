@@ -1,13 +1,246 @@
 {
-  "id": "600519_2026-06-05_full",
   "ticker": "600519",
-  "company_name": "贵州茅台",
   "date": "2026-06-05",
   "mode": "full",
-  "created_at": "2026-06-05T15:32:15.000Z",
-  "duration_ms": 181900,
-  "total_tokens": 125340,
-  "total_cost_usd": 0.42,
+  "analysts": [
+    {
+      "role": "market",
+      "content": "## 技术分析 — 贵州茅台(600519)\n\n近期均线金叉，MACD红柱放大，RSI 58偏中性。5日均线上穿20日均线，成交量较20日均量放大15%。\n\n支撑位1480元，阻力位1560元。\n\n<!-- VERDICT: {\"direction\": \"看多\", \"reason\": \"均线金叉，MACD红柱放大，短期偏多\"} -->",
+      "verdict": { "direction": "看多", "reason": "均线金叉，MACD红柱放大，短期偏多" },
+      "data_sources_used": ["trading-kline/scripts/kline.py"]
+    },
+    {
+      "role": "fundamentals",
+      "content": "## 基本面分析 — 贵州茅台(600519)\n\nPE(TTM) 22.8x，处于近5年估值中枢偏下。ROE 31.2%，毛利率91.5%。2025Q1营收同比+12.3%，归母净利润同比+13.8%。\n\n<!-- VERDICT: {\"direction\": \"看多\", \"reason\": \"PE处历史低位区间，盈利增速稳健\"} -->",
+      "verdict": { "direction": "看多", "reason": "PE处历史低位区间，盈利增速稳健" },
+      "data_sources_used": ["trading-fundamentals/scripts/fundamentals.py"]
+    },
+    {
+      "role": "news",
+      "content": "## 新闻分析 — 贵州茅台(600519)\n\n正面消息占比75%：新品发布、分红比例提升、券商上调目标价。无重大负面新闻。\n\n<!-- VERDICT: {\"direction\": \"看多\", \"reason\": \"新品发布+分红提升，消息面偏正面\"} -->",
+      "verdict": { "direction": "看多", "reason": "新品发布+分红提升，消息面偏正面" },
+      "data_sources_used": ["trading-news/scripts/news.py"]
+    },
+    {
+      "role": "sentiment",
+      "content": "## 情绪分析 — 贵州茅台(600519)\n\n股吧看多占比62%，融资余额近5日增加3.2亿。散户情绪一致性中等，暂不构成反转信号。\n\n<!-- VERDICT: {\"direction\": \"中性\", \"reason\": \"情绪偏多但未到极端，缺乏反向信号\"} -->",
+      "verdict": { "direction": "中性", "reason": "情绪偏多但未到极端，缺乏反向信号" },
+      "data_sources_used": ["trading-sentiment/scripts/sentiment.py"]
+    },
+    {
+      "role": "policy",
+      "content": "## 政策分析 — 贵州茅台(600519)\n\n证监会鼓励提高分红比例（利好），消费税改革传闻短期无实质进展（已被定价）。白酒行业无新增监管政策。\n\n<!-- VERDICT: {\"direction\": \"中性\", \"reason\": \"政策面中性偏正，消费税风险已被定价\"} -->",
+      "verdict": { "direction": "中性", "reason": "政策面中性偏正，消费税风险已被定价" },
+      "data_sources_used": ["trading-policy/scripts/policy.py"]
+    },
+    {
+      "role": "hot_money",
+      "content": "## 资金面分析 — 贵州茅台(600519)\n\n北向资金今日净买入5.2亿，连续3日净买入。主力净流入+1.8亿，散户净流出-0.9亿。近5日未上龙虎榜。\n\n<!-- VERDICT: {\"direction\": \"看多\", \"reason\": \"北向连续净买入，主力资金流入\"} -->",
+      "verdict": { "direction": "看多", "reason": "北向连续净买入，主力资金流入" },
+      "data_sources_used": ["trading-hot-money/scripts/hot_money.py"]
+    },
+    {
+      "role": "lockup",
+      "content": "## 解禁分析 — 贵州茅台(600519)\n\n未来3个月无限售股解禁。近6个月无大股东减持记录，贵州国资委持股稳定。\n\n<!-- VERDICT: {\"direction\": \"中性\", \"reason\": \"无解禁压力，大股东持股稳定\"} -->",
+      "verdict": { "direction": "中性", "reason": "无解禁压力，大股东持股稳定" },
+      "data_sources_used": ["trading-lockup/scripts/lockup.py"]
+    }
+  ],
+  "debate": {
+    "rounds": [
+      {
+        "round": 1,
+        "bull_claims": [
+          {
+            "id": "BULL-1-1",
+            "side": "bull",
+            "topic": "基本面估值低位",
+            "evidence": "PE(TTM) 22.8x处于近5年估值中枢偏下，ROE 31.2%持续高企，盈利增速稳健（Q1营收+12.3%，净利润+13.8%）",
+            "confidence": 0.82,
+            "responded_by": "BEAR-1-2"
+          },
+          {
+            "id": "BULL-1-2",
+            "side": "bull",
+            "topic": "北向资金连续买入",
+            "evidence": "北向资金连续3日净买入，累计12.5亿元。主力资金净流入+1.8亿，机构做多意愿明确",
+            "confidence": 0.75
+          }
+        ],
+        "bear_claims": [
+          {
+            "id": "BEAR-1-1",
+            "side": "bear",
+            "topic": "消费税改革潜在风险",
+            "evidence": "消费税改革方案仍在讨论中，若白酒从生产环节改至零售环节征税，可能压缩渠道利润空间",
+            "confidence": 0.60,
+            "responded_by": "BULL-2-1"
+          },
+          {
+            "id": "BEAR-1-2",
+            "side": "bear",
+            "topic": "估值并非真正的低位",
+            "evidence": "虽然PE处于5年中位数偏下，但对比海外烈酒巨头帝亚吉欧(PE 20x)，茅台仍存在估值溢价",
+            "confidence": 0.55
+          }
+        ]
+      },
+      {
+        "round": 2,
+        "bull_claims": [
+          {
+            "id": "BULL-2-1",
+            "side": "bull",
+            "topic": "消费税风险已被充分定价",
+            "evidence": "消费税改革传闻已持续2年，市场已充分消化。且茅台作为高端白酒，具备强定价权，可将税负转嫁给消费者",
+            "confidence": 0.80
+          },
+          {
+            "id": "BULL-2-2",
+            "side": "bull",
+            "topic": "消息面整体偏正面",
+            "evidence": "新品发布+分红比例提升+券商上调目标价，正面消息占比75%，无重大负面新闻",
+            "confidence": 0.72
+          }
+        ],
+        "bear_claims": [
+          {
+            "id": "BEAR-2-1",
+            "side": "bear",
+            "topic": "白酒行业景气度见顶风险",
+            "evidence": "次高端白酒库存周期见顶信号出现，部分区域经销商库存偏高，行业增速可能放缓",
+            "confidence": 0.58
+          },
+          {
+            "id": "BEAR-2-2",
+            "side": "bear",
+            "topic": "情绪指标需要警惕",
+            "evidence": "散户看多占比62%虽未到极端，但融资余额快速增加可能预示短期过热",
+            "confidence": 0.50
+          }
+        ]
+      }
+    ],
+    "bull_summary": "多头核心论点：基本面估值处于历史低位（PE 22.8x），盈利增速稳健（Q1 +13.8%），北向资金连续净买入显示机构做多意愿。消费税改革风险已被充分定价，茅台强定价权可转嫁成本。消息面整体偏正面。",
+    "bear_summary": "空头核心论点：消费税改革仍是悬在头顶的政策风险，白酒行业景气度可能见顶，库存周期信号偏负面。估值相对海外同行仍有溢价空间。情绪指标显示短期可能过热。",
+    "total_tokens": 4200,
+    "total_cost_usd": 0.03
+  },
+  "research_decision": {
+    "direction": "Overweight",
+    "confidence": 0.75,
+    "bull_score": 72,
+    "bear_score": 48,
+    "reasoning": "多头在基本面（PE低位+盈利稳健）和资金面（北向连续买入）两个核心维度论证有力，confidence 均在0.72以上。空头提出的消费税风险被多头有效反驳（已被定价+强定价权转嫁），空头关于行业景气度的担忧有一定合理性但confidence偏低（0.58）。综合评定为 Overweight（偏多）。",
+    "key_debate_points": [
+      "消费税改革风险 vs 强定价权转嫁能力",
+      "PE处于历史低位 vs 海外同行估值对比",
+      "北向资金连续买入 vs 行业景气度见顶风险"
+    ],
+    "verdict": { "direction": "Overweight", "reason": "多头基本面和资金面占优，空头政策风险被有效反驳" }
+  },
+  "trading_plan": {
+    "direction": "Buy",
+    "target_price": 1620,
+    "stop_loss": 1450,
+    "position_pct": 20,
+    "execution_plan": "分两批建仓：\n1. 首批10%仓位在1530-1540元区间建仓\n2. 第二批10%仓位待回调至1500元附近加仓\n\nT+1约束：首日买入次日方可卖出，避免尾盘追高。",
+    "entry_signals": [
+      "价格站稳5日均线（1520元以上）",
+      "MACD红柱持续放大",
+      "北向资金维持净买入"
+    ],
+    "exit_signals": [
+      "跌破60日均线（1480元）",
+      "北向资金连续3日净流出",
+      "MACD绿柱出现"
+    ],
+    "key_risks": [
+      "消费税改革政策落地",
+      "白酒行业景气度不及预期",
+      "北向资金大幅转向"
+    ],
+    "t_plus_1_note": "主板T+1交割，当日买入次日才能卖出。建议分两日建仓，首日不超过10%仓位。涨跌停限制±10%。最小交易单位100股。"
+  },
+  "risk_debate": {
+    "rounds": [
+      [
+        {
+          "role": "aggressive",
+          "position": "支持交易计划",
+          "evidence": [
+            "茅台作为白酒龙头，历史回撤超过5%的概率极低",
+            "当前PE处于历史低位区间，安全边际充足",
+            "北向资金连续买入确认机构看多信号",
+            "20%仓位合理，未过度集中"
+          ],
+          "verdict": "pass"
+        },
+        {
+          "role": "conservative",
+          "position": "建议降低仓位",
+          "evidence": [
+            "消费税改革政策不确定性仍存，建议仓位降至15%",
+            "T+1锁定风险：若次日大幅低开无法止损",
+            "融资余额快速增加，短期可能过热",
+            "建议等待回调至1500元再建仓"
+          ],
+          "verdict": "pass"
+        },
+        {
+          "role": "neutral",
+          "position": "基本支持，小幅调整",
+          "evidence": [
+            "整体风险可控，但建议首批仓位降至8%试探",
+            "止损位1450元合理（约5%回撤）",
+            "关注次日开盘情况，若低开则延后建仓",
+            "仓位管理优于择时，分批建仓策略正确"
+          ],
+          "verdict": "pass"
+        }
+      ]
+    ],
+    "risk_arguments": [
+      {
+        "role": "aggressive",
+        "position": "支持交易计划",
+        "evidence": [
+          "茅台历史回撤超5%概率极低",
+          "PE低位安全边际充足",
+          "北向资金确认看多"
+        ],
+        "verdict": "pass"
+      },
+      {
+        "role": "conservative",
+        "position": "建议降低仓位",
+        "evidence": [
+          "消费税改革不确定性",
+          "T+1锁定风险",
+          "融资余额快速增加"
+        ],
+        "verdict": "pass"
+      },
+      {
+        "role": "neutral",
+        "position": "基本支持，小幅调整",
+        "evidence": [
+          "整体风险可控",
+          "止损位合理",
+          "分批建仓策略正确"
+        ],
+        "verdict": "pass"
+      }
+    ],
+    "total_tokens": 1800,
+    "total_cost_usd": 0.01
+  },
+  "risk_assessment": {
+    "status": "pass",
+    "reasoning": "三方风控均通过(pass)。激进方认可安全边际充足，保守方建议降低仓位但未否决，中性方支持分批建仓策略。综合风险评分35/100（低风险）。建议首批仓位降至8-10%，视市场走势加仓。",
+    "risk_score": 35,
+    "max_position_override": 10
+  },
   "final": {
     "ticker": "600519",
     "company_name": "贵州茅台",
@@ -16,8 +249,8 @@
     "confidence": 0.75,
     "target_price": 1620,
     "stop_loss": 1450,
-    "position_pct": 20,
-    "reasoning": "完整辩论后综合判断：多头在基本面（PE历史低位+盈利稳健）、资金面（北向连续净买入+主力流入）两个维度论证有力。空头指出的消费税改革风险被确认已被市场充分定价。交易员建议分批建仓，风控经理通过。整体偏多，建议20%仓位。",
+    "position_pct": 10,
+    "reasoning": "完整辩论后综合判断：多头在基本面（PE历史低位+盈利稳健）和资金面（北向连续净买入+主力流入）两个维度论证有力，confidence均>0.72。空头消费税改革风险被有效反驳（已被定价+强定价权）。三方风控均通过，建议首批10%仓位分批建仓，止损1450元。",
     "key_risks": ["消费税改革政策", "白酒景气度不及预期", "北向资金转向风险"],
     "analyst_verdicts": {
       "market": "看多",
@@ -28,20 +261,9 @@
       "hot_money": "看多",
       "lockup": "中性"
     },
-    "bull_bear_summary": "多头在基本面和资金面占据优势，空头政策风险论点被部分反驳",
+    "bull_bear_summary": "多头在基本面和资金面占优（bull 72 vs bear 48），空头政策风险被有效反驳",
     "risk_assessment": "pass",
-    "execution_plan": "分两批建仓：首批10%在1530-1540元区间，第二批10%在回调至1500元附近。止损1450元，止盈目标1620元。T+1约束下首日买入次日方可卖出。",
+    "execution_plan": "分两批建仓：首批10%在1530-1540元区间，第二批视走势在1500元附近加仓。T+1约束下首日买入次日方可卖出。",
     "next_review_trigger": "若跌破1480元（60日均线）需重新评估"
-  },
-  "analyst_verdicts": {
-    "market": { "direction": "看多", "reason": "均线金叉，MACD红柱放大，短期偏多" },
-    "fundamentals": { "direction": "看多", "reason": "PE处历史低位区间，盈利增速稳健" },
-    "news": { "direction": "看多", "reason": "新品发布+分红提升，消息面偏正面" },
-    "sentiment": { "direction": "中性", "reason": "情绪偏多但未到极端，缺乏反向信号" },
-    "policy": { "direction": "中性", "reason": "政策面中性偏正，消费税风险已被定价" },
-    "hot_money": { "direction": "看多", "reason": "北向连续净买入，主力资金流入" },
-    "lockup": { "direction": "中性", "reason": "无解禁压力，大股东持股稳定" }
-  },
-  "detail_dir": "2026-06-05_full/",
-  "trace_count": 17
+  }
 }

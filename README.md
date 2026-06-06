@@ -225,12 +225,18 @@ openclaw-trading-agents/
 
 ### 示例输出
 
-查看真实分析报告示例：
+查看分析报告示例：
 
 | 文件 | 说明 |
 |------|------|
-| [examples/report_quick_600519.json](examples/report_quick_600519.json) | Quick 模式 — 贵州茅台 7 分析师报告 |
-| [examples/report_full_600519.json](examples/report_full_600519.json) | Full 模式 — 含辩论、风控的完整报告 |
+| [examples/report_quick_600519.json](examples/report_quick_600519.json) | Quick 模式 — 7 分析师 + PM 综合（8 次 LLM 调用） |
+| [examples/report_full_600519.json](examples/report_full_600519.json) | Full 模式 — 完整辩论 + 风控流程（15+ 次 LLM 调用） |
+
+Full 模式比 Quick 多出的内容：
+- **多空辩论**：Bull↔Bear 2 轮对抗，每轮生成带置信度的 claim
+- **研究经理**：对辩论评分（Bull 72 vs Bear 48），输出 5 级方向决策
+- **交易员**：A 股执行计划（T+1、涨跌停、分批建仓）
+- **三方风控**：激进/保守/中性独立评估 → 风控经理 pass/revise/reject
 
 所有 LLM 输出通过 HTML 注释嵌入结构化结论：
 
