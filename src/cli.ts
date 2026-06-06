@@ -111,6 +111,7 @@ const config: TradingAgentsConfig = {
   risk_debate_rounds: riskDebateRounds,
   max_risk_retries: 1,
   report_dir: reportDir,
+  llm_concurrency: 3,
 };
 
 async function main() {

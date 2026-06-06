@@ -10,6 +10,7 @@ const mockConfig: TradingAgentsConfig = {
   debate_rounds: 2,
   risk_debate_rounds: 1,
   max_risk_retries: 1,
+  llm_concurrency: 3,
   report_dir: "/tmp/test-reports",
 };
 

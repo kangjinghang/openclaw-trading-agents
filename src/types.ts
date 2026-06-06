@@ -12,6 +12,7 @@ export interface TradingAgentsConfig {
   risk_debate_rounds: number;
   max_risk_retries: number;
   report_dir: string;
+  llm_concurrency: number;
 }
 
 /** Phase 1 output: single analyst report */

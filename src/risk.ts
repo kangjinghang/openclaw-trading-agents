@@ -16,6 +16,24 @@ import * as path from "path";
 
 const SKILLS_DIR = path.resolve(__dirname, "../skills");
 
+/** Run tasks with limited concurrency */
+async function pool<T>(
+  items: readonly T[],
+  fn: (item: T, index: number) => Promise<void>,
+  concurrency: number
+): Promise<void> {
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      await fn(items[i], i);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker())
+  );
+}
+
 const RISK_ROLES: Array<{
   role: RiskArgument["role"];
   instructions: string;
@@ -74,8 +92,12 @@ export async function runRiskDebate(
 
   const planText = `方向：${tradingPlan.direction}\n目标价：${tradingPlan.target_price}\n止损：${tradingPlan.stop_loss}\n仓位：${tradingPlan.position_pct}%\n执行计划：${tradingPlan.execution_plan}`;
 
-  const riskArguments = await Promise.all(
-    RISK_ROLES.map(async ({ role, instructions }) => {
+  const riskArguments: RiskArgument[] = new Array(RISK_ROLES.length);
+  const concurrency = config.llm_concurrency || 3;
+
+  await pool(
+    RISK_ROLES,
+    async ({ role, instructions }, idx) => {
       const riskRoleLabel = role === "aggressive" ? "激进风控" : role === "conservative" ? "保守风控" : "中性风控";
       const userMessage = loadAndRender(
         "debate/risk_debater.md",
@@ -101,8 +123,9 @@ export async function runRiskDebate(
         traceLogger,
       });
 
-      return parseRiskArgument(result.content, role);
-    })
+      riskArguments[idx] = parseRiskArgument(result.content, role);
+    },
+    concurrency
   );
 
   return {

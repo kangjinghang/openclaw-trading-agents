@@ -10,6 +10,7 @@ const DEFAULT_CONFIG: TradingAgentsConfig = {
   risk_debate_rounds: 1,
   max_risk_retries: 1,
   report_dir: "~/.openclaw/trading-reports",
+  llm_concurrency: 3,
 };
 
 function resolveConfig(userConfig?: Partial<TradingAgentsConfig>): TradingAgentsConfig {
@@ -19,6 +20,7 @@ function resolveConfig(userConfig?: Partial<TradingAgentsConfig>): TradingAgents
     risk_debate_rounds: userConfig?.risk_debate_rounds ?? DEFAULT_CONFIG.risk_debate_rounds,
     max_risk_retries: userConfig?.max_risk_retries ?? DEFAULT_CONFIG.max_risk_retries,
     report_dir: userConfig?.report_dir ?? DEFAULT_CONFIG.report_dir,
+    llm_concurrency: userConfig?.llm_concurrency ?? DEFAULT_CONFIG.llm_concurrency,
   };
 }
 

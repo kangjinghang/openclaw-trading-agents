@@ -24,6 +24,27 @@ import * as os from "os";
 const SKILLS_DIR = path.resolve(__dirname, "../skills");
 
 /**
+ * Run tasks with limited concurrency.
+ * Like Promise.all but with a cap on simultaneous executions.
+ */
+async function pool<T>(
+  items: readonly T[],
+  fn: (item: T, index: number) => Promise<void>,
+  concurrency: number
+): Promise<void> {
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      await fn(items[i], i);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker())
+  );
+}
+
+/**
  * Parse a direction string into a valid FinalDecision direction.
  * Supports Chinese and English direction names.
  */
@@ -145,51 +166,57 @@ async function runAnalystPhase(
     }
   }
 
-  // ── Phase 2: Run all 7 analysts in parallel ─────────────────────
+  // ── Phase 2: Run all 7 analysts with concurrency limit ─────────
   const promptsBaseDir = path.join(SKILLS_DIR, "trading-analysis", "prompts");
 
-  const analystPromises = ANALYST_CONFIGS.map(async (cfg) => {
-    try {
-      const dataJson = dataMap[cfg.role];
-      const userMessage = loadAndRender(
-        cfg.prompt,
-        { ticker, date, [cfg.dataKey]: dataJson },
-        promptsBaseDir
-      );
+  const analystReports: AnalystReport[] = new Array(ANALYST_CONFIGS.length);
+  const concurrency = config.llm_concurrency || 3;
 
-      const llmResult = await callLLM(openaiClient, {
-        model: config.models.analyst,
-        systemPrompt: cfg.systemPrompt,
-        userMessage,
-        temperature: 0.4,
-        maxTokens: 4000,
-        phase: "analyst",
-        role: cfg.role,
-        traceLogger,
-      });
+  await pool(
+    ANALYST_CONFIGS,
+    async (cfg, idx) => {
+      try {
+        const dataJson = dataMap[cfg.role];
+        const userMessage = loadAndRender(
+          cfg.prompt,
+          { ticker, date, [cfg.dataKey]: dataJson },
+          promptsBaseDir
+        );
 
-      totalTokens += llmResult.usage.total_tokens;
-      totalCostUsd += llmResult.costUsd;
+        const llmResult = await callLLM(openaiClient, {
+          model: config.models.analyst,
+          systemPrompt: cfg.systemPrompt,
+          userMessage,
+          temperature: 0.4,
+          maxTokens: 4000,
+          phase: "analyst",
+          role: cfg.role,
+          traceLogger,
+        });
 
-      const verdict = parseVerdict(llmResult.content);
+        totalTokens += llmResult.usage.total_tokens;
+        totalCostUsd += llmResult.costUsd;
 
-      return {
-        role: cfg.role,
-        content: llmResult.content,
-        verdict: verdict || { direction: "中性", reason: "无法解析结论" },
-        data_sources_used: [cfg.dataKey],
-      } as AnalystReport;
-    } catch (err: any) {
-      return {
-        role: cfg.role,
-        content: `[分析失败: ${err.message}]`,
-        verdict: { direction: "中性", reason: "分析失败" },
-        data_sources_used: [],
-      } as AnalystReport;
-    }
-  });
+        const verdict = parseVerdict(llmResult.content);
 
-  const analystReports = await Promise.all(analystPromises);
+        analystReports[idx] = {
+          role: cfg.role,
+          content: llmResult.content,
+          verdict: verdict || { direction: "中性", reason: "无法解析结论" },
+          data_sources_used: [cfg.dataKey],
+        } as AnalystReport;
+      } catch (err: any) {
+        analystReports[idx] = {
+          role: cfg.role,
+          content: `[分析失败: ${err.message}]`,
+          verdict: { direction: "中性", reason: "分析失败" },
+          data_sources_used: [],
+        } as AnalystReport;
+      }
+    },
+    concurrency
+  );
+
   return { analystReports, totalTokens, totalCostUsd };
 }
 
