@@ -3,6 +3,7 @@
 > 对比项目：
 > - `D:\workspace\github\TradingAgents-AShare` — A 股 fork，侧重反思记忆 + 结构化辩论
 > - `D:\workspace\github\TradingAgents-astock` — 原版 TradingAgents (65K⭐) 的 A 股深度 fork，7 周改造，47 文件
+> - `D:\workspace\github\TradingAgents-CN` — 企业级 fork，FastAPI+Vue3 平台，ChromaDB 向量记忆，多市场支持
 >
 > 记录时间：2026-06-07
 > 更新时间：2026-06-07
@@ -622,7 +623,456 @@ astock 项目。Streamlit 可视化界面，12 个文件。
 
 ---
 
-## 附录 A：完整对比总结（AShare + astock）
+---
+
+## 九、ChromaDB 向量记忆（P1 · 中等）
+
+### 来源
+
+CN 项目。与 AShare 的 BM25 关键词检索不同，CN 用 ChromaDB 做语义向量检索。
+
+### 现状对比
+
+| | 我们 | AShare | CN |
+|---|------|--------|-----|
+| 记忆能力 | ❌ 无 | BM25 关键词匹配 | ChromaDB 向量语义检索 |
+| 检索质量 | — | 关键词匹配，精确但不灵活 | 语义相似，能找到「意思相近」的历史反思 |
+| 依赖 | — | rank_bm25（纯 Python） | chromadb（需安装），但支持多 embedding provider |
+| 离线 | — | ✅ 完全离线 | ✅ 本地 ChromaDB，离线可用 |
+
+### 他们的做法
+
+```python
+# tradingagents/agents/utils/memory.py
+
+class ChromaDBManager:
+    """单例 ChromaDB 管理器，避免并发创建集合的冲突"""
+    _instance = None
+    _lock = threading.Lock()
+
+    def __init__(self, persist_directory):
+        self.client = chromadb.PersistentClient(path=persist_directory)
+
+    @classmethod
+    def get_instance(cls, persist_directory=None):
+        """线程安全的单例获取"""
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = cls(persist_directory)
+        return cls._instance
+
+
+class FinancialSituationMemory:
+    """ChromaDB 向量记忆系统"""
+
+    def __init__(self, name, config=None, llm_provider=None):
+        self.chroma_manager = ChromaDBManager.get_instance()
+        self.collection = self.chroma_manager.client.get_or_create_collection(name)
+        self.llm_provider = llm_provider
+
+    def add_situations(self, situations_and_advice):
+        """存储 (情况, 结论) 对，用 embedding 索引"""
+        for situation, recommendation in situations_and_advice:
+            embedding = self._get_embedding(situation)
+            self.collection.add(
+                documents=[situation],
+                embeddings=[embedding],
+                metadatas=[{"recommendation": recommendation}],
+                ids=[f"{self.name}_{len(self.collection)}"]
+            )
+
+    def get_memories(self, current_situation, n_matches=1):
+        """语义检索与当前情况最相似的历史反思"""
+        query_embedding = self._get_embedding(current_situation)
+        results = self.collection.query(
+            query_embeddings=[query_embedding],
+            n_results=n_matches
+        )
+        # 返回语义最相似的记忆
+
+    def _get_embedding(self, text):
+        """多 provider embedding 支持"""
+        if self.llm_provider == "dashscope":
+            response = TextEmbedding.call(model=self.embedding, input=text)
+        elif self.llm_provider in ("deepseek", "openai"):
+            response = self.client.embeddings.create(model=self.embedding, input=text)
+        return response.data[0].embedding
+```
+
+### 关键设计决策
+
+1. **ChromaDB vs BM25**：ChromaDB 能做语义匹配（「换手率异常高」≈「成交量爆量」），BM25 只能精确匹配关键词。但 ChromaDB 需要额外依赖和 embedding 开销
+2. **单例 + 线程锁**：避免多 agent 并发写入 ChromaDB 时的冲突
+3. **多 embedding provider**：支持 DashScope（阿里百炼）、DeepSeek、OpenAI 的 embedding 服务，根据当前 LLM provider 自动选择
+4. **PersistentClient**：数据持久化到本地文件，重启不丢失
+
+### 在 Node.js 中的实现思路
+
+1. **方案 A — 轻量版**：不用 ChromaDB，用简单的 TF-IDF + 余弦相似度（纯 JS 实现，零依赖）
+2. **方案 B — 完整版**：用 ChromaDB 的 HTTP API（ChromaDB Server 模式），Node.js 通过 HTTP 调用
+3. **方案 C — 混合版**：先实现 BM25（如 AShare 方案），后期可升级为向量检索
+4. **存储路径**：`~/.openclaw/memory/` 下每个角色一个 collection
+
+### 改动范围
+
+- 与「二、反思与记忆系统」合并实现
+- 如果选方案 A/C：无额外依赖
+- 如果选方案 B：需要部署 ChromaDB Server 或嵌入 Python sidecar
+
+---
+
+## 十、反爬虫对抗（P2 · 简单）
+
+### 来源
+
+CN 项目。AKShare 和东方财富的 HTTP 接口有反爬虫机制，普通 `requests` 会被封 IP。
+
+### 问题
+
+我们的数据脚本用 `mootdx`（TCP 协议）作为主数据源，不受影响。但 akshare fallback（HTTP）可能被反爬。
+
+### 他们的做法
+
+```python
+# tradingagents/dataflows/providers/china/akshare.py
+
+class AKShareProvider(BaseStockDataProvider):
+    """AKShare 数据提供者，带反爬虫对抗"""
+
+    def __init__(self):
+        # 使用 curl_cffi 伪造 TLS 指纹，绕过 Cloudflare/东财反爬
+        try:
+            from curl_cffi import requests as curl_requests
+            self._session = curl_requests.Session()
+            self._use_curl = True
+        except ImportError:
+            self._session = requests.Session()
+            self._use_curl = False
+
+    def _request_with_retry(self, url, max_retries=3):
+        """带反爬虫对抗的请求"""
+        for attempt in range(max_retries):
+            try:
+                # curl_cffi 伪造 Chrome TLS 指纹
+                resp = self._session.get(url, impersonate="chrome120")
+                if resp.status_code == 200:
+                    return resp.json()
+            except Exception:
+                time.sleep(2 ** attempt + random.uniform(0, 1))
+        return None
+```
+
+### 关键技术
+
+1. **curl_cffi**：Python 库，能伪造浏览器的 TLS 指纹（JA3），绕过基于 TLS 指纹的反爬检测
+2. **impersonate 参数**：模拟 Chrome/Firefox 的完整 HTTP/2 指纹
+3. **指数退避**：被封后等待 2^n 秒重试
+4. **降级策略**：curl_cffi 装不了就退回普通 requests
+
+### 在我们项目中的适用性
+
+- **mootdx**（TCP 通达信协议）：不受 HTTP 反爬影响 ✅
+- **akshare**（HTTP）：如果未来 akshare 加强反爬，可以引入 curl_cffi
+- **优先级低**：我们主数据源是 mootdx，akshare 只是 fallback
+
+### 改动范围
+
+- 仅影响 `skills/trading-kline/scripts/kline.py` 的 `fetch_from_akshare()` 函数
+- 需要在 `requirements.txt` 加 `curl_cffi`（可选依赖）
+
+---
+
+## 十一、Tool Call 限次保护（P2 · 简单）
+
+### 来源
+
+CN 项目。他们的 analyst 使用 LangGraph ReAct agent，可以循环调用工具。但 LLM 有时会陷入「调用工具 → 得到结果 → 再调用工具」的死循环。
+
+### 问题
+
+CN 项目的 analyst 是 tool-calling agent（LLM 决定何时调用工具），可能无限循环。我们的 analyst 是「一次性注入数据 + 一次性 LLM 调用」，不存在此问题。但如果未来改为 tool-calling 模式，需要此保护。
+
+### 他们的做法
+
+```python
+# tradingagents/agents/utils/agent_states.py
+
+class AgentState(MessagesState):
+    # 每个 analyst 有独立的工具调用计数器
+    market_tool_call_count: int
+    news_tool_call_count: int
+    fundamentals_tool_call_count: int
+    social_media_tool_call_count: int
+    # ...
+
+# tradingagents/graph/conditional_logic.py
+
+def should_continue_market(self, state):
+    """检查市场分析师是否需要继续调用工具"""
+    tool_call_count = state.get("market_tool_call_count", 0)
+    max_calls = 3  # 每个 analyst 最多调用 3 次工具
+
+    if tool_call_count >= max_calls:
+        logger.info(f"Market analyst tool calls reached limit ({max_calls}), moving to next node")
+        return "next_agent"
+
+    messages = state["messages"]
+    last_message = messages[-1]
+    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+        return "tools"  # 继续调用工具
+    return "next_agent"  # 没有工具调用，进入下一步
+```
+
+### 在我们项目中的适用性
+
+- **当前不适用**：我们的 analyst 不使用 tool-calling，而是预获取数据后一次性调用 LLM
+- **未来适用场景**：如果改为 ReAct agent 模式（LLM 自主决定何时获取什么数据），需要加入此保护
+- **简单实现**：在 agent state 中加计数器，超过阈值强制退出
+
+### 改动范围
+
+- 仅在改为 tool-calling agent 架构时才需要
+- 改动量小：状态加计数器 + 条件路由加判断
+
+---
+
+## 十二、多市场支持（P2 · 中等）
+
+### 来源
+
+CN 项目。支持 A 股、港股、美股三个市场，自动检测并适配。
+
+### 现状对比
+
+| | 我们 | CN |
+|---|------|-----|
+| 支持市场 | 仅 A 股 | A 股 + 港股 + 美股 |
+| 市场检测 | 手动传 ticker | 自动检测（6位=A股，5位=港股，字母=美股） |
+| 货币符号 | 固定 ¥ | 自适应（¥ / HK$ / $） |
+| 交易规则 | A 股规则（T+1, 涨跌停） | 按市场切换规则 |
+| 数据源 | mootdx + akshare | AKShare + Tushare + BaoStock + FinnHub + Yahoo |
+
+### 他们的市场检测
+
+```python
+def detect_market(ticker: str) -> str:
+    """自动检测市场类型"""
+    if ticker.isdigit():
+        if len(ticker) == 6:
+            return "china"      # A 股：600519
+        elif len(ticker) == 5:
+            return "hongkong"   # 港股：00700
+    elif ticker.isalpha():
+        return "us"             # 美股：AAPL
+    return "unknown"
+```
+
+### 他们的多市场数据路由
+
+```python
+# tradingagents/dataflows/__init__.py
+
+def get_stock_data(ticker, *args, **kwargs):
+    market = detect_market(ticker)
+    if market == "china":
+        return china_data.get_stock_data(ticker, *args, **kwargs)
+    elif market == "hongkong":
+        return hk_data.get_stock_data(ticker, *args, **kwargs)
+    elif market == "us":
+        return us_data.get_stock_data(ticker, *args, **kwargs)
+```
+
+### 他们的港股数据源优先级
+
+```python
+def _get_enabled_hk_data_sources() -> list:
+    """从数据库读取用户启用的港股数据源配置"""
+    # 动态配置：运行时可切换数据源优先级
+    # 默认：['akshare', 'yfinance']
+    # 可扩展：['akshare', 'yfinance', 'tushare', 'xueqiu']
+```
+
+### 在 Node.js 中的实现思路
+
+1. **市场检测函数**：在 `orchestrator.ts` 加 `detectMarket(ticker)` — 3 行代码
+2. **数据脚本路由**：每个市场独立的数据脚本目录（如 `skills/trading-kline-hk/`）
+3. **Prompt 差异化**：按市场选择不同的 prompt 模板（A 股用 T+1/涨跌停，港股用 T+0，美股用 PDT 规则）
+4. **货币符号**：在 `FinalDecision` 中加 `currency` 字段
+
+### 改动范围
+
+- `orchestrator.ts` — 加市场检测 + 路由
+- 新增港股/美股数据脚本
+- 新增/修改 prompt 模板
+- `types.ts` — 加 currency 字段
+
+---
+
+## 十三、多层缓存架构（P3 · 可选）
+
+### 来源
+
+CN 项目。MongoDB + Redis + 文件三层缓存。
+
+### 现状对比
+
+| | 我们 | CN |
+|---|------|-----|
+| 缓存层 | 文件缓存（SHA256 key, 4h TTL） | MongoDB + Redis + 文件三级 |
+| 缓存策略 | 固定 TTL | 自适应：行情 15min，财报 4h，新闻 1h |
+| 持久化 | JSON 文件 | MongoDB（可查询） |
+| 适用场景 | 单用户、单机 | 多用户、生产环境 |
+
+### 他们的缓存策略
+
+```python
+# tradingagents/dataflows/optimized_china_data.py
+
+class OptimizedChinaDataProvider:
+    """带缓存和限流的统一 A 股数据接口"""
+
+    CACHE_POLICIES = {
+        "realtime_quote": {"ttl": 900, "store": "redis"},     # 实时行情 15 分钟
+        "kline_daily": {"ttl": 3600, "store": "redis"},       # 日 K 线 1 小时
+        "financial_report": {"ttl": 14400, "store": "mongodb"},# 财报 4 小时
+        "company_info": {"ttl": 86400, "store": "mongodb"},    # 公司信息 24 小时
+        "news": {"ttl": 1800, "store": "redis"},               # 新闻 30 分钟
+    }
+
+    def get_data(self, data_type, ticker, **kwargs):
+        # 1. 检查 Redis（快速，但容量小）
+        cached = self.redis.get(cache_key)
+        if cached:
+            return cached
+
+        # 2. 检查 MongoDB（慢，但持久化）
+        cached = self.mongodb.find_one({"key": cache_key})
+        if cached and not self._is_expired(cached):
+            self.redis.set(cache_key, cached, ttl=policy["ttl"])
+            return cached
+
+        # 3. 从数据源获取
+        data = self._fetch_from_source(data_type, ticker, **kwargs)
+
+        # 4. 写入缓存
+        self.redis.set(cache_key, data, ttl=policy["ttl"])
+        self.mongodb.update_one({"key": cache_key}, {"$set": data}, upsert=True)
+
+        return data
+```
+
+### 在我们项目中的适用性
+
+- **当前不需要**：我们已有文件缓存 + 4h TTL，足够用
+- **未来场景**：多用户并发分析时，MongoDB 缓存可避免重复获取相同股票数据
+- **建议**：先保持现有文件缓存，仅在并发场景出现性能问题时再升级
+
+---
+
+## 十四、Web 平台架构（P3 · 参考）
+
+### 来源
+
+CN 项目。FastAPI 后端 + Vue 3 前端，商业授权。
+
+### 架构总览
+
+```
+                    ┌─────────────────────┐
+                    │   Nginx 反向代理     │
+                    │   (SSL + 负载均衡)    │
+                    └─────┬───────────┬───┘
+                          │           │
+              ┌───────────▼──┐  ┌─────▼──────────┐
+              │  FastAPI 后端 │  │  Vue 3 前端     │
+              │  (Python)     │  │  (Element Plus) │
+              │               │  │                  │
+              │  - REST API   │  │  - 股票分析      │
+              │  - WebSocket  │  │  - 实时进度      │
+              │  - SSE 推送   │  │  - 报告查看      │
+              │  - 用户管理   │  │  - 历史记录      │
+              │  - 定时任务   │  │  - PDF 导出      │
+              └───────┬───────┘  └──────────────────┘
+                      │
+          ┌───────────┼───────────┐
+          │           │           │
+    ┌─────▼───┐ ┌────▼────┐ ┌───▼────┐
+    │ MongoDB │ │  Redis  │ │ Chroma │
+    │ 数据存储 │ │ 缓存    │ │ 向量库 │
+    └─────────┘ └─────────┘ └────────┘
+```
+
+### 后端模块结构
+
+```
+app/
+├── main.py              # FastAPI 入口
+├── core/                # 认证、配置、安全
+├── middleware/           # 限流、日志、CORS
+├── models/              # MongoDB 数据模型
+├── routers/             # API 路由定义
+│   ├── analysis.py      # 分析相关 API
+│   ├── auth.py          # 认证 API
+│   ├── config.py        # 配置管理 API
+│   ├── stocks.py        # 股票操作 API
+│   └── scheduler.py     # 定时任务 API
+├── schemas/             # 请求/响应校验
+├── services/            # 业务逻辑层
+└── worker/              # 后台任务执行
+```
+
+### 前端功能
+
+```
+frontend/src/
+├── api/
+│   ├── analysis.ts      # 分析 API 调用
+│   ├── auth.ts          # 认证
+│   ├── config.ts        # 配置管理
+│   ├── favorites.ts     # 自选股
+│   ├── scheduler.ts     # 定时任务
+│   └── stocks.ts        # 股票数据
+├── views/               # 页面组件
+├── components/          # UI 组件
+└── stores/              # Pinia 状态管理
+```
+
+### 对我们的参考价值
+
+如果我们未来要做 Web UI，CN 项目的架构可以作为参考：
+1. **不推荐照搬**：FastAPI + Vue + MongoDB + Redis + ChromaDB 依赖太多
+2. **推荐简化版**：
+   - 后端：用 Node.js（与我们现有 stack 一致），Express 或 Hono
+   - 前端：轻量 SPA 或直接用 Streamlit（如 astock 方案）
+   - 缓存：保持现有文件缓存
+   - 数据库：可选 SQLite（如 astock 的 checkpointer）
+3. **最小可行方案**：Streamlit（astock 已验证）+ 文件存储，5 个文件即可
+
+---
+
+## 附录 A：完整对比总结（AShare + astock + CN）
+
+| 特性 | 我们 | AShare | astock | CN | 优先级 | 难度 |
+|------|------|--------|--------|-----|------|------|
+| 信号提取增强 | ✅ 3 层 fallback | 4 层 fallback | 类似 | 类似 | — | — |
+| VPA 量价预计算 | ✅ 已有 | 完整量价预计算 | 类似 | 无 | — | — |
+| 数据质量门控 | ✅ 已有 | 无 | 两层验证 | 无 | — | — |
+| 交易日历 | ❌ | 完整日历+市场阶段 | 完整日历+市场阶段 | 有 | **P0** | 很简单 |
+| 反思与记忆 | ❌ | BM25+5 角色记忆 | 简化版反思 | ChromaDB 向量记忆 | **P1** | 中等 |
+| 结构化 Claim 辩论 | ❌ | 完整 claim 状态机 | 无 | 无 | **P1** | 较难 |
+| 结构化输出 Schema | ❌ | 无 | Pydantic schema | 有 | **P1** | 中等 |
+| 断点续跑 | ❌ | 无 | SQLite checkpoint | 无 | **P1** | 难 |
+| ChromaDB 向量记忆 | ❌ | 无 | 无 | ChromaDB 语义检索 | **P1** | 中等 |
+| 反爬虫对抗 | ❌ | 无 | 东财限流 | curl_cffi TLS 指纹 | **P2** | 简单 |
+| Tool Call 限次 | ❌ | 无 | 无 | 计数器防死循环 | **P2** | 简单 |
+| 多市场支持 | ❌ 仅 A 股 | 仅 A 股 | 仅 A 股 | A 股+港股+美股 | **P2** | 中等 |
+| 更多免费数据源 | 部分 | 多源 | 7 个零鉴权源 | Tushare+AKShare+BaoStock+FinnHub | **P2** | 简单 |
+| 北向资金自缓存 | ❌ | 无 | 实时+CSV 累积 | 无 | **P2** | 简单 |
+| 多层缓存架构 | 文件缓存 | 无 | 无 | MongoDB+Redis+文件 | **P3** | 中等 |
+| Web UI | HTML 报告 | 无 | Streamlit | FastAPI+Vue3 | **P3** | 难 |
+| Docker 部署 | ❌ | 无 | Dockerfile | docker-compose+nginx | **P3** | 中等 |
+| 定时调度 | ❌ | DB+scheduler | 无 | Worker+调度器 | **P3** | 难 |
+| 回测服务 | ❌ | 完整回测框架 | 无 | 模拟交易 | **P3** | 难 |
 
 | 特性 | 我们 | AShare | astock | 优先级 | 难度 |
 |------|------|--------|--------|--------|------|
