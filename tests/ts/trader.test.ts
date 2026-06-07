@@ -368,7 +368,7 @@ Standard.
     const callArgs = mockCreate.mock.calls[0][0] as any;
     expect(callArgs.model).toBe("gpt-4o");
     expect(callArgs.temperature).toBe(0.3);
-    expect(callArgs.max_tokens).toBe(3000);
+    expect(callArgs.max_tokens).toBe(16000);
     expect(callArgs.messages[0].content).toContain(
       "A-share trader creating specific execution plans"
     );

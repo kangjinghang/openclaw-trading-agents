@@ -133,7 +133,7 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
     mockClient.chat.completions.create = mockCreate;
 
     // Run the analysis
-    const result = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
+    const [result] = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
 
     // Verify result structure
     expect(result).toBeDefined();
@@ -197,7 +197,7 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
     const mockCreate = createMockLLM('看多', '技术面向好', '买入', '建议买入');
     mockClient.chat.completions.create = mockCreate;
 
-    const result = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
+    const [result] = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
 
     expect(result.final.direction).toBe('Buy'); // '买入' maps to 'Buy'
     expect(result.analysts).toHaveLength(7);
@@ -222,7 +222,7 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
     const mockCreate = createMockLLM('中性', 'partial data', 'Hold', '继续持有');
     mockClient.chat.completions.create = mockCreate;
 
-    const result = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
+    const [result] = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
 
     // Should still produce 7 analyst reports (with degraded data)
     expect(result.analysts).toHaveLength(7);
@@ -238,7 +238,7 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
     const mockCreate = createMockLLM('中性', '观望', '持有', '继续持有');
     mockClient.chat.completions.create = mockCreate;
 
-    const result = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
+    const [result] = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
     expect(result.final.direction).toBe('Hold');
   });
 
@@ -294,7 +294,7 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
 
     mockClient.chat.completions.create = mockCreate;
 
-    const result = await runFullAnalysis('600519', '2026-06-05', config, mockClient);
+    const [result] = await runFullAnalysis('600519', '2026-06-05', config, mockClient);
 
     expect(result.mode).toBe('full');
     expect(result.analysts).toHaveLength(7);
@@ -326,7 +326,7 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
     const mockCreate = createMockLLM('看多|看空|中性', 'test fallback', 'Buy|Hold|Sell', '综合判断');
     mockClient.chat.completions.create = mockCreate;
 
-    const result = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
+    const [result] = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
 
     // parseDirection takes the first option from pipe-separated values
     expect(result.final.direction).toBe('Buy'); // "Buy|Hold|Sell" → first = "Buy"
@@ -335,5 +335,39 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
     for (const report of result.analysts) {
       expect(report.verdict.direction).toBe('看多|看空|中性');
     }
+  });
+
+  it('should degrade gracefully when portfolio manager verdict parsing fails', async () => {
+    vi.mocked(execPython).mockResolvedValue({
+      success: true,
+      data: { ticker: '600519', data: [] }
+    });
+
+    const mockCreate = vi.fn(async (params: any) => {
+      const systemPrompt = params.messages?.[0]?.content || '';
+      const isAnalyst = !systemPrompt.includes('portfolio') && !systemPrompt.includes('manager');
+
+      if (isAnalyst) {
+        // 5 看多, 2 中性 → majority = 看多
+        const userMessage = params.messages?.[1]?.content || '';
+        const isFundOrHotMoney = userMessage.includes('基本面') || userMessage.includes('游资');
+        const direction = isFundOrHotMoney ? '中性' : '看多';
+        return mockAnalystResponse('market', direction, `${direction} reason`);
+      }
+
+      // Portfolio manager returns content WITHOUT VERDICT
+      return {
+        choices: [{ message: { content: 'I have analyzed the reports but cannot reach a clear conclusion.' } }],
+        usage: { prompt_tokens: 800, completion_tokens: 300, total_tokens: 1100 }
+      };
+    });
+    mockClient.chat.completions.create = mockCreate;
+
+    const [result] = await runQuickAnalysis('600519', '2026-06-05', config, mockClient);
+
+    // Should NOT throw — degrades to analyst majority vote
+    expect(result.final.direction).toBe('Buy'); // 看多 → Buy (majority of 7 analysts)
+    expect(result.final.reasoning).toContain('分析师多数意见');
+    expect(result.analysts).toHaveLength(7);
   });
 });

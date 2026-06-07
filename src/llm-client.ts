@@ -3,6 +3,8 @@
 import OpenAI from "openai";
 import { TraceLogger } from "./trace-logger";
 import { LLMCallTrace, Verdict } from "./types";
+import { LLMError } from "./errors";
+import { LLM_MAX_RETRIES, LLM_TIMEOUT_MS, LLM_DEFAULT_MAX_TOKENS, LLM_RETRY_DELAY_MS } from "./constants";
 
 /** Cost per 1M tokens (input, output) */
 export const MODEL_COSTS: Record<string, { input: number; output: number }> = {
@@ -57,7 +59,9 @@ function calculateCost(
 }
 
 /**
- * Make an LLM chat completion call, record trace, and return result
+ * Make an LLM chat completion call, record trace, and return result.
+ * Automatically retries up to LLM_MAX_RETRIES times if the response content is empty.
+ * Each attempt has a timeout of LLM_TIMEOUT_MS to prevent indefinite hangs.
  */
 export async function callLLM(
   client: OpenAI,
@@ -68,116 +72,148 @@ export async function callLLM(
     systemPrompt,
     userMessage,
     temperature = 0.4,
-    maxTokens = 4000,
+    maxTokens = LLM_DEFAULT_MAX_TOKENS,
     phase,
     role,
     traceLogger,
   } = options;
 
-  const traceId = generateTraceId();
-  const startTime = Date.now();
-  const timestamp = new Date().toISOString();
+  let lastError: unknown;
 
-  try {
-    const response = await client.chat.completions.create({
-      model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userMessage },
-      ],
-      temperature,
-      max_tokens: maxTokens,
-    });
+  for (let attempt = 0; attempt <= LLM_MAX_RETRIES; attempt++) {
+    const traceId = generateTraceId();
+    const startTime = Date.now();
+    const timestamp = new Date().toISOString();
 
-    const endTime = Date.now();
-    const durationMs = endTime - startTime;
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
 
-    const content = response.choices[0]?.message?.content || "";
-    const usage = {
-      prompt_tokens: response.usage?.prompt_tokens || 0,
-      completion_tokens: response.usage?.completion_tokens || 0,
-      total_tokens: response.usage?.total_tokens || 0,
-    };
+      let response;
+      try {
+        response = await client.chat.completions.create({
+          model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userMessage },
+          ],
+          temperature,
+          max_tokens: maxTokens,
+        }, { signal: controller.signal });
+      } finally {
+        clearTimeout(timeout);
+      }
 
-    const costUsd = calculateCost(
-      model,
-      usage.prompt_tokens,
-      usage.completion_tokens
-    );
+      const endTime = Date.now();
+      const durationMs = endTime - startTime;
 
-    // Parse verdict from content
-    const parsedVerdict = parseVerdict(content);
+      const content = response.choices[0]?.message?.content || "";
+      const usage = {
+        prompt_tokens: response.usage?.prompt_tokens || 0,
+        completion_tokens: response.usage?.completion_tokens || 0,
+        total_tokens: response.usage?.total_tokens || 0,
+      };
 
-    // Record trace
-    const trace: LLMCallTrace = {
-      trace_id: traceId,
-      call_index: traceLogger.count,
-      phase,
-      role,
-      request: {
+      const costUsd = calculateCost(
         model,
-        system_prompt: systemPrompt,
-        user_message: userMessage,
-        temperature,
-        max_tokens: maxTokens,
-      },
-      response: {
-        raw_content: content,
-        parsed_verdict: parsedVerdict || undefined,
-      },
-      meta: {
-        timestamp,
-        duration_ms: durationMs,
-        usage,
-        cost_usd: costUsd,
-      },
-    };
+        usage.prompt_tokens,
+        usage.completion_tokens
+      );
 
-    traceLogger.record(trace);
+      const parsedVerdict = parseVerdict(content);
 
-    return {
-      content,
-      usage,
-      costUsd,
-      traceId,
-    };
-  } catch (error) {
-    // Record error trace
-    const endTime = Date.now();
-    const durationMs = endTime - startTime;
-
-    const errorTrace: LLMCallTrace = {
-      trace_id: traceId,
-      call_index: traceLogger.count,
-      phase,
-      role,
-      request: {
-        model,
-        system_prompt: systemPrompt,
-        user_message: userMessage,
-        temperature,
-        max_tokens: maxTokens,
-      },
-      response: {
-        raw_content: "",
-        parsed_verdict: undefined,
-      },
-      meta: {
-        timestamp,
-        duration_ms: durationMs,
-        usage: {
-          prompt_tokens: 0,
-          completion_tokens: 0,
-          total_tokens: 0,
+      const trace: LLMCallTrace = {
+        trace_id: traceId,
+        call_index: traceLogger.count,
+        phase,
+        role,
+        request: {
+          model,
+          system_prompt: systemPrompt,
+          user_message: userMessage,
+          temperature,
+          max_tokens: maxTokens,
         },
-        cost_usd: 0,
-      },
-    };
+        response: {
+          raw_content: content,
+          parsed_verdict: parsedVerdict || undefined,
+        },
+        meta: {
+          timestamp,
+          duration_ms: durationMs,
+          usage,
+          cost_usd: costUsd,
+        },
+      };
 
-    traceLogger.record(errorTrace);
+      traceLogger.record(trace);
 
-    throw error;
+      // If content is non-empty, return immediately
+      if (content.trim().length > 0) {
+        return { content, usage, costUsd, traceId };
+      }
+
+      // Empty response — retry if attempts remain
+      if (attempt < LLM_MAX_RETRIES) {
+        console.error(`  [LLM] ${phase}/${role} returned empty content, retrying (${attempt + 1}/${LLM_MAX_RETRIES})...`);
+        // Brief pause before retry to avoid immediate re-hit
+        await new Promise((r) => setTimeout(r, LLM_RETRY_DELAY_MS + Math.random() * LLM_RETRY_DELAY_MS));
+      }
+    } catch (error) {
+      const endTime = Date.now();
+      const durationMs = endTime - startTime;
+
+      const errorTrace: LLMCallTrace = {
+        trace_id: traceId,
+        call_index: traceLogger.count,
+        phase,
+        role,
+        request: {
+          model,
+          system_prompt: systemPrompt,
+          user_message: userMessage,
+          temperature,
+          max_tokens: maxTokens,
+        },
+        response: {
+          raw_content: "",
+          parsed_verdict: undefined,
+        },
+        meta: {
+          timestamp,
+          duration_ms: durationMs,
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+          cost_usd: 0,
+        },
+      };
+
+      traceLogger.record(errorTrace);
+
+      lastError = error;
+
+      // API error — retry if attempts remain
+      if (attempt < LLM_MAX_RETRIES) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        console.error(`  [LLM] ${phase}/${role} API error: ${errMsg}, retrying (${attempt + 1}/${LLM_MAX_RETRIES})...`);
+        await new Promise((r) => setTimeout(r, LLM_RETRY_DELAY_MS + Math.random() * LLM_RETRY_DELAY_MS));
+      }
+    }
   }
+
+  // All retries exhausted
+  if (lastError) {
+    const msg = lastError instanceof Error ? lastError.message : String(lastError);
+    throw new LLMError(msg, phase, role, lastError);
+  }
+
+  // All retries returned empty content — log warning and return empty result
+  console.error(`  [LLM] WARNING: ${phase}/${role} returned empty content after ${LLM_MAX_RETRIES + 1} attempts`);
+  return {
+    content: "",
+    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    costUsd: 0,
+    traceId: generateTraceId(),
+  };
 }
 
 /**

@@ -17,11 +17,55 @@ import {
   AnalystReport,
   FinalDecision,
   ScriptResult,
+  RunMeta,
 } from "./types";
+import { AbortError, ParseError, EnvironmentError } from "./errors";
+import { DATA_FETCH_STAGGER_MS, LLM_CALL_STAGGER_MS, DEFAULT_CONCURRENCY } from "./constants";
 import * as path from "path";
 import * as os from "os";
+import * as fs from "fs";
 
 const SKILLS_DIR = path.resolve(__dirname, "../skills");
+
+/** Pre-run validation: check environment before starting analysis */
+function validateEnvironment(reportDir: string): void {
+  const errors: string[] = [];
+
+  // Check report_dir is writable
+  try {
+    const absDir = reportDir.replace("~", os.homedir());
+    fs.mkdirSync(absDir, { recursive: true });
+    const testFile = path.join(absDir, ".write-test");
+    fs.writeFileSync(testFile, "test", "utf-8");
+    fs.unlinkSync(testFile);
+  } catch (err: any) {
+    errors.push(`report_dir "${reportDir}" is not writable: ${err.message}`);
+  }
+
+  // Check skills directory exists
+  if (!fs.existsSync(SKILLS_DIR)) {
+    errors.push(`skills directory not found: ${SKILLS_DIR}`);
+  }
+
+  if (errors.length > 0) {
+    throw new EnvironmentError(`环境预检失败:\n  ${errors.join("\n  ")}`);
+  }
+}
+
+/** Generate a short run ID for log correlation */
+function generateRunId(): string {
+  return `run-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 7)}`;
+}
+
+/** Structured progress log to stderr */
+function logProgress(runId: string, message: string, tokens?: number, costUsd?: number): void {
+  const ts = new Date().toISOString().slice(11, 19);
+  let suffix = "";
+  if (tokens !== undefined && costUsd !== undefined) {
+    suffix = ` — ${tokens.toLocaleString()} tokens, $${costUsd.toFixed(4)}`;
+  }
+  console.error(`  [${ts}] [${runId.slice(0, 12)}] ${message}${suffix}`);
+}
 
 /**
  * Run tasks with limited concurrency and staggered start.
@@ -142,13 +186,15 @@ async function runAnalystPhase(
   date: string,
   config: TradingAgentsConfig,
   openaiClient: OpenAI,
-  traceLogger: TraceLogger
+  traceLogger: TraceLogger,
+  runId: string
 ): Promise<{ analystReports: AnalystReport[]; totalTokens: number; totalCostUsd: number }> {
   let totalTokens = 0;
   let totalCostUsd = 0;
 
   // ── Phase 1: Fetch data from all 7 scripts with concurrency limit ──
-  const dataConcurrency = config.llm_concurrency || 3;
+  logProgress(runId, "[1/4] 数据采集 7 个数据源...");
+  const dataConcurrency = config.llm_concurrency || DEFAULT_CONCURRENCY;
   const dataResults: Array<{ role: string; result: ScriptResult }> = new Array(ANALYST_CONFIGS.length);
 
   await pool(
@@ -159,13 +205,20 @@ async function runAnalystPhase(
       try {
         const result: ScriptResult = await execPython(scriptPath, args);
         dataResults[idx] = { role: cfg.role, result };
+        if (!result.success) {
+          logProgress(runId, `  数据采集 ${cfg.role} 失败: ${result.error?.slice(0, 80)}`);
+        }
       } catch (err: any) {
         dataResults[idx] = { role: cfg.role, result: { success: false, error: err.message } as ScriptResult };
+        logProgress(runId, `  数据采集 ${cfg.role} 异常: ${err.message?.slice(0, 80)}`);
       }
     },
     dataConcurrency,
-    1500  // stagger: 0~1.5s jitter between data script starts (Eastmoney rate limit)
+    DATA_FETCH_STAGGER_MS
   );
+
+  const dataFailed = dataResults.filter(d => !d.result.success).length;
+  logProgress(runId, `[1/4] 数据采集完成 (${ANALYST_CONFIGS.length - dataFailed}/${ANALYST_CONFIGS.length} 成功${dataFailed > 0 ? `, ${dataFailed} 失败` : ""})`);
 
   const dataMap: Record<string, string> = {};
   for (const { role, result } of dataResults) {
@@ -177,10 +230,11 @@ async function runAnalystPhase(
   }
 
   // ── Phase 2: Run all 7 analysts with concurrency limit ─────────
+  logProgress(runId, "[2/4] 分析师阶段 7 个分析师...");
   const promptsBaseDir = path.join(SKILLS_DIR, "trading-analysis", "prompts");
 
   const analystReports: AnalystReport[] = new Array(ANALYST_CONFIGS.length);
-  const concurrency = config.llm_concurrency || 3;
+  const concurrency = config.llm_concurrency || DEFAULT_CONCURRENCY;
 
   await pool(
     ANALYST_CONFIGS,
@@ -198,7 +252,6 @@ async function runAnalystPhase(
           systemPrompt: cfg.systemPrompt,
           userMessage,
           temperature: 0.4,
-          maxTokens: 4000,
           phase: "analyst",
           role: cfg.role,
           traceLogger,
@@ -216,6 +269,7 @@ async function runAnalystPhase(
           data_sources_used: [cfg.dataKey],
         } as AnalystReport;
       } catch (err: any) {
+        logProgress(runId, `  分析师 ${cfg.role} 失败: ${err.message?.slice(0, 80)}`);
         analystReports[idx] = {
           role: cfg.role,
           content: `[分析失败: ${err.message}]`,
@@ -225,8 +279,11 @@ async function runAnalystPhase(
       }
     },
     concurrency,
-    800  // stagger: 0~0.8s jitter between LLM calls (API rate limit)
+    LLM_CALL_STAGGER_MS
   );
+
+  const analystEmpty = analystReports.filter(r => r.content.startsWith("[分析失败")).length;
+  logProgress(runId, `[2/4] 分析师阶段完成${analystEmpty > 0 ? ` (${analystEmpty} 个失败)` : ""}`);
 
   return { analystReports, totalTokens, totalCostUsd };
 }
@@ -242,16 +299,24 @@ export async function runQuickAnalysis(
   ticker: string,
   date: string,
   config: TradingAgentsConfig,
-  openaiClient: OpenAI
-): Promise<QuickAnalysisResult> {
+  openaiClient: OpenAI,
+  signal?: AbortSignal
+): Promise<[QuickAnalysisResult, RunMeta]> {
   const startTime = Date.now();
+  const runId = generateRunId();
   const traceDir = path.join(os.homedir(), ".openclaw", "traces", `${ticker}_${date}`);
-  const traceLogger = new TraceLogger(traceDir);
+  const traceLogger = new TraceLogger(traceDir, runId);
   const reportStore = new ReportStore(config.report_dir);
 
-  const { analystReports, totalTokens, totalCostUsd } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger);
+  logProgress(runId, `开始 Quick 分析 ${ticker} (${date})`);
+  validateEnvironment(config.report_dir);
+
+  const { analystReports, totalTokens, totalCostUsd } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId);
+
+  if (signal?.aborted) throw new AbortError();
 
   // ── Portfolio Manager ────────────────────────────────────────────
+  logProgress(runId, "[3/4] 投资组合经理决策...");
   const promptsBaseDir = path.join(SKILLS_DIR, "trading-analysis", "prompts");
   const allReportsText = analystReports
     .map((r) => `## ${r.role} 分析师报告\n\n${r.content}\n\nVERDICT: ${r.verdict.direction} — ${r.verdict.reason}`)
@@ -264,7 +329,6 @@ export async function runQuickAnalysis(
     systemPrompt: "You are a portfolio manager making final trading decisions based on analyst reports.",
     userMessage: portfolioPrompt,
     temperature: 0.3,
-    maxTokens: 4000,
     phase: "portfolio",
     role: "portfolio_manager",
     traceLogger,
@@ -274,8 +338,22 @@ export async function runQuickAnalysis(
   const allCost = totalCostUsd + portfolioResult.costUsd;
 
   const portfolioVerdict = parseVerdict(portfolioResult.content);
-  if (!portfolioVerdict) {
-    throw new Error("Failed to parse portfolio manager verdict from LLM response");
+  let direction: FinalDecision["direction"];
+  let reasoning: string;
+
+  if (portfolioVerdict) {
+    direction = parseDirection(portfolioVerdict.direction);
+    reasoning = portfolioVerdict.reason;
+  } else {
+    // Fallback: majority vote from analysts
+    logProgress(runId, "  WARNING: 投资组合经理结论解析失败，使用分析师多数意见");
+    const verdictCounts: Record<string, number> = {};
+    for (const report of analystReports) {
+      verdictCounts[report.verdict.direction] = (verdictCounts[report.verdict.direction] || 0) + 1;
+    }
+    const majority = Object.entries(verdictCounts).sort((a, b) => b[1] - a[1])[0][0];
+    direction = parseDirection(majority);
+    reasoning = `投资组合经理解析失败，使用分析师多数意见 (${majority})`;
   }
 
   const analystVerdicts: Record<string, string> = {};
@@ -287,12 +365,12 @@ export async function runQuickAnalysis(
     ticker,
     company_name: ticker,
     date,
-    direction: parseDirection(portfolioVerdict.direction),
+    direction,
     confidence: 0.7,
     target_price: 0,
     stop_loss: 0,
     position_pct: 0,
-    reasoning: portfolioVerdict.reason,
+    reasoning,
     key_risks: [],
     analyst_verdicts: analystVerdicts,
     bull_bear_summary: "",
@@ -303,8 +381,23 @@ export async function runQuickAnalysis(
 
   const result: QuickAnalysisResult = { ticker, date, mode: "quick", analysts: analystReports, final: finalDecision };
   const durationMs = Date.now() - startTime;
-  reportStore.save(ticker, date, "quick", result, durationMs, allTokens, allCost);
-  return result;
+
+  logProgress(runId, `[4/4] 保存报告...`);
+  reportStore.save(ticker, date, "quick", result, durationMs, allTokens, allCost, runId);
+  logProgress(runId, `完成 (${(durationMs / 1000).toFixed(1)}s)`, allTokens, allCost);
+
+  // Write run summary for auditing
+  const meta: RunMeta = {
+    run_id: runId,
+    trace_dir: traceDir,
+    duration_ms: durationMs,
+    total_tokens: allTokens,
+    total_cost_usd: allCost,
+    llm_call_count: traceLogger.count,
+  };
+  fs.writeFileSync(path.join(traceDir, "run_summary.json"), JSON.stringify({ ...meta, ticker, date, mode: "quick", direction }, null, 2), "utf-8");
+
+  return [result, meta];
 }
 
 /**
@@ -316,32 +409,56 @@ export async function runFullAnalysis(
   ticker: string,
   date: string,
   config: TradingAgentsConfig,
-  openaiClient: OpenAI
-): Promise<FullAnalysisResult> {
+  openaiClient: OpenAI,
+  signal?: AbortSignal
+): Promise<[FullAnalysisResult, RunMeta]> {
   const startTime = Date.now();
+  const runId = generateRunId();
   const traceDir = path.join(os.homedir(), ".openclaw", "traces", `${ticker}_${date}_full`);
-  const traceLogger = new TraceLogger(traceDir);
+  const traceLogger = new TraceLogger(traceDir, runId);
   const reportStore = new ReportStore(config.report_dir);
 
+  logProgress(runId, `开始 Full 分析 ${ticker} (${date})`);
+  validateEnvironment(config.report_dir);
+
   // Phase 1-2: Analysts
-  const { analystReports } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger);
+  const { analystReports } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId);
+
+  if (signal?.aborted) throw new AbortError();
 
   // Phase 3: Bull↔Bear Debate
+  logProgress(runId, `[3/7] 多空辩论 (${config.debate_rounds} 轮)...`);
   const debate = await runBullBearDebate(analystReports, config, openaiClient, traceLogger);
+  logProgress(runId, `[3/7] 多空辩论完成 (Bull ${debate.rounds.flatMap(r => r.bull_claims).length} claims, Bear ${debate.rounds.flatMap(r => r.bear_claims).length} claims)`);
+
+  if (signal?.aborted) throw new AbortError();
 
   // Phase 4: Research Manager
+  logProgress(runId, `[4/7] 研究经理裁决...`);
   const researchDecision = await runResearchManager(analystReports, debate, config, openaiClient, traceLogger);
+  logProgress(runId, `[4/7] 研究经理裁决: ${researchDecision.direction} (信心 ${researchDecision.confidence})`);
 
-  // Phase 5: Trader (with revise loop)
+  if (signal?.aborted) throw new AbortError();
+
+  // Phase 5: Trader
+  logProgress(runId, `[5/7] 交易员制定执行计划...`);
   let tradingPlan = await runTrader(researchDecision, analystReports, config, openaiClient, traceLogger, ticker, date);
+  logProgress(runId, `[5/7] 交易计划: ${tradingPlan.direction} 目标价 ${tradingPlan.target_price} 止损 ${tradingPlan.stop_loss}`);
+
+  if (signal?.aborted) throw new AbortError();
 
   // Phase 6-7: Risk Debate + Risk Manager (with revise loop)
+  logProgress(runId, `[6/7] 风控辩论 (3 方)...`);
   let riskDebate = await runRiskDebate(tradingPlan, analystReports, config, openaiClient, traceLogger);
+  logProgress(runId, `[6/7] 风控辩论完成`);
+
+  logProgress(runId, `[7/7] 风控经理评估...`);
   let riskAssessment = await runRiskManager(riskDebate, tradingPlan, config, openaiClient, traceLogger);
 
   let retries = 0;
   while (riskAssessment.status === "revise" && retries < config.max_risk_retries) {
     retries++;
+    logProgress(runId, `  风控要求修订 (${retries}/${config.max_risk_retries}), 重新生成交易计划...`);
     tradingPlan = await runTrader(researchDecision, analystReports, config, openaiClient, traceLogger, ticker, date);
     if (riskAssessment.max_position_override) {
       tradingPlan.position_pct = Math.min(tradingPlan.position_pct, riskAssessment.max_position_override);
@@ -352,8 +469,11 @@ export async function runFullAnalysis(
 
   // If still revise after max retries, treat as pass
   if (riskAssessment.status === "revise") {
+    logProgress(runId, `  风控修订次数已达上限，视为通过`);
     riskAssessment = { ...riskAssessment, status: "pass" };
   }
+
+  logProgress(runId, `[7/7] 风控评估: ${riskAssessment.status} (风险评分 ${riskAssessment.risk_score})`);
 
   // Assemble FinalDecision
   const analystVerdicts: Record<string, string> = {};
@@ -393,6 +513,19 @@ export async function runFullAnalysis(
   };
 
   const durationMs = Date.now() - startTime;
-  reportStore.saveFull(ticker, date, result, durationMs);
-  return result;
+  reportStore.saveFull(ticker, date, result, durationMs, runId);
+  logProgress(runId, `完成 (${(durationMs / 1000).toFixed(1)}s, ${traceLogger.count} LLM calls)`, traceLogger.totalTokens, traceLogger.totalCostUsd);
+
+  // Write run summary for auditing
+  const meta: RunMeta = {
+    run_id: runId,
+    trace_dir: traceDir,
+    duration_ms: durationMs,
+    total_tokens: traceLogger.totalTokens,
+    total_cost_usd: traceLogger.totalCostUsd,
+    llm_call_count: traceLogger.count,
+  };
+  fs.writeFileSync(path.join(traceDir, "run_summary.json"), JSON.stringify({ ...meta, ticker, date, mode: "full", direction: tradingPlan.direction }, null, 2), "utf-8");
+
+  return [result, meta];
 }

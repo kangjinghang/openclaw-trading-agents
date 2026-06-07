@@ -21,7 +21,7 @@ describe("TraceLogger", () => {
     // Create temp directory
     traceDir = fs.mkdtempSync(path.join(os.tmpdir(), "trace-test-"));
 
-    const logger = new TraceLogger(traceDir);
+    const logger = new TraceLogger(traceDir, "run-test-001");
 
     const trace: LLMCallTrace = {
       trace_id: "trace-test-123",
@@ -66,6 +66,7 @@ describe("TraceLogger", () => {
     const parsedTrace = JSON.parse(fileContent);
 
     expect(parsedTrace.trace_id).toBe("trace-test-123");
+    expect(parsedTrace.run_id).toBe("run-test-001");
     expect(parsedTrace.phase).toBe("analyst");
     expect(parsedTrace.role).toBe("value_investor");
     expect(parsedTrace.request.model).toBe("gpt-4o");
@@ -77,7 +78,7 @@ describe("TraceLogger", () => {
     // Create temp directory
     traceDir = fs.mkdtempSync(path.join(os.tmpdir(), "trace-test-"));
 
-    const logger = new TraceLogger(traceDir);
+    const logger = new TraceLogger(traceDir, "run-test-002");
 
     const trace1: LLMCallTrace = {
       trace_id: "trace-001",

@@ -12,6 +12,7 @@ import {
   RiskDebateResult,
   RiskAssessment,
 } from "./types";
+import { LLM_CALL_STAGGER_MS, DEFAULT_CONCURRENCY } from "./constants";
 import * as path from "path";
 
 const SKILLS_DIR = path.resolve(__dirname, "../skills");
@@ -97,7 +98,7 @@ export async function runRiskDebate(
   const planText = `方向：${tradingPlan.direction}\n目标价：${tradingPlan.target_price}\n止损：${tradingPlan.stop_loss}\n仓位：${tradingPlan.position_pct}%\n执行计划：${tradingPlan.execution_plan}`;
 
   const riskArguments: RiskArgument[] = new Array(RISK_ROLES.length);
-  const concurrency = config.llm_concurrency || 3;
+  const concurrency = config.llm_concurrency || DEFAULT_CONCURRENCY;
 
   await pool(
     RISK_ROLES,
@@ -121,7 +122,6 @@ export async function runRiskDebate(
         systemPrompt: `You are a ${role} risk assessor for A-share trading.`,
         userMessage,
         temperature: 0.4,
-        maxTokens: 2000,
         phase: "risk_debate",
         role: `${role}_risk`,
         traceLogger,
@@ -130,7 +130,7 @@ export async function runRiskDebate(
       riskArguments[idx] = parseRiskArgument(result.content, role);
     },
     concurrency,
-    800  // stagger: 0~0.8s jitter between risk LLM calls
+    LLM_CALL_STAGGER_MS
   );
 
   return {
@@ -167,7 +167,6 @@ export async function runRiskManager(
     systemPrompt: "You are a risk manager making final pass/revise/reject decisions for A-share trading plans.",
     userMessage,
     temperature: 0.3,
-    maxTokens: 2000,
     phase: "risk",
     role: "risk_manager",
     traceLogger,

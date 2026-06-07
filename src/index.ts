@@ -49,7 +49,7 @@ export default {
       async execute(toolCallId: string, params: { ticker: string; date?: string }) {
         const date = params.date || new Date().toISOString().split("T")[0];
         try {
-          const result = await runQuickAnalysis(params.ticker, date, config, client);
+          const [result] = await runQuickAnalysis(params.ticker, date, config, client);
           return { type: "text", text: JSON.stringify(result, null, 2) };
         } catch (err: any) {
           return {
@@ -80,7 +80,7 @@ export default {
       async execute(toolCallId: string, params: { ticker: string; date?: string }) {
         const date = params.date || new Date().toISOString().split("T")[0];
         try {
-          const result = await runFullAnalysis(params.ticker, date, config, client);
+          const [result] = await runFullAnalysis(params.ticker, date, config, client);
           return { type: "text", text: JSON.stringify(result, null, 2) };
         } catch (err: any) {
           return {

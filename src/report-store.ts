@@ -10,6 +10,27 @@ export class ReportStore {
     fs.mkdirSync(baseDir, { recursive: true });
   }
 
+  /** Write JSON to file atomically (write .tmp then rename), logging errors instead of crashing */
+  private writeJson(filePath: string, data: unknown): void {
+    const tmpPath = filePath + ".tmp";
+    try {
+      fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), "utf-8");
+      fs.renameSync(tmpPath, filePath);
+    } catch (err) {
+      console.error(`[ReportStore] Failed to write ${filePath}: ${err instanceof Error ? err.message : err}`);
+      try { fs.unlinkSync(tmpPath); } catch { /* ignore cleanup failure */ }
+    }
+  }
+
+  /** Create directory, logging errors instead of crashing */
+  private mkdir(dirPath: string): void {
+    try {
+      fs.mkdirSync(dirPath, { recursive: true });
+    } catch (err) {
+      console.error(`[ReportStore] Failed to create directory ${dirPath}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
   /**
    * Save a quick analysis result to disk.
    * Creates: {baseDir}/{ticker}/{date}_quick.json (summary)
@@ -22,17 +43,17 @@ export class ReportStore {
     result: QuickAnalysisResult,
     durationMs: number,
     totalTokens: number,
-    totalCostUsd: number
+    totalCostUsd: number,
+    runId?: string
   ): void {
     const tickerDir = path.join(this.baseDir, ticker);
     const detailDir = path.join(tickerDir, `${date}_${mode}`);
-    fs.mkdirSync(tickerDir, { recursive: true });
-    fs.mkdirSync(path.join(detailDir, "01_analysts"), { recursive: true });
+    this.mkdir(tickerDir);
+    this.mkdir(path.join(detailDir, "01_analysts"));
 
     // Save analyst details
     for (const report of result.analysts) {
-      const analystPath = path.join(detailDir, "01_analysts", `${report.role}.json`);
-      fs.writeFileSync(analystPath, JSON.stringify(report, null, 2), "utf-8");
+      this.writeJson(path.join(detailDir, "01_analysts", `${report.role}.json`), report);
     }
 
     // Save summary
@@ -43,6 +64,7 @@ export class ReportStore {
 
     const summary: AnalysisReport = {
       id: `${ticker}_${date}_${mode}`,
+      run_id: runId,
       ticker,
       company_name: result.final.company_name,
       date,
@@ -57,8 +79,7 @@ export class ReportStore {
       trace_count: result.analysts.length + 1,
     };
 
-    const summaryPath = path.join(tickerDir, `${date}_${mode}.json`);
-    fs.writeFileSync(summaryPath, JSON.stringify(summary, null, 2), "utf-8");
+    this.writeJson(path.join(tickerDir, `${date}_${mode}.json`), summary);
   }
 
   /**
@@ -68,51 +89,34 @@ export class ReportStore {
     ticker: string,
     date: string,
     result: FullAnalysisResult,
-    durationMs: number
+    durationMs: number,
+    runId?: string
   ): void {
     const tickerDir = path.join(this.baseDir, ticker);
     const detailDir = path.join(tickerDir, `${date}_full`);
-    fs.mkdirSync(path.join(detailDir, "01_analysts"), { recursive: true });
-    fs.mkdirSync(path.join(detailDir, "02_debate"), { recursive: true });
-    fs.mkdirSync(path.join(detailDir, "05_risk"), { recursive: true });
+    this.mkdir(path.join(detailDir, "01_analysts"));
+    this.mkdir(path.join(detailDir, "02_debate"));
+    this.mkdir(path.join(detailDir, "05_risk"));
 
     // 01_analysts
     for (const report of result.analysts) {
-      fs.writeFileSync(
-        path.join(detailDir, "01_analysts", `${report.role}.json`),
-        JSON.stringify(report, null, 2), "utf-8"
-      );
+      this.writeJson(path.join(detailDir, "01_analysts", `${report.role}.json`), report);
     }
 
     // 02_debate
     for (const round of result.debate.rounds) {
-      fs.writeFileSync(
-        path.join(detailDir, "02_debate", `round_${round.round}.json`),
-        JSON.stringify(round, null, 2), "utf-8"
-      );
+      this.writeJson(path.join(detailDir, "02_debate", `round_${round.round}.json`), round);
     }
 
     // 03_research
-    fs.writeFileSync(
-      path.join(detailDir, "03_research.json"),
-      JSON.stringify(result.research_decision, null, 2), "utf-8"
-    );
+    this.writeJson(path.join(detailDir, "03_research.json"), result.research_decision);
 
     // 04_trading_plan
-    fs.writeFileSync(
-      path.join(detailDir, "04_trading_plan.json"),
-      JSON.stringify(result.trading_plan, null, 2), "utf-8"
-    );
+    this.writeJson(path.join(detailDir, "04_trading_plan.json"), result.trading_plan);
 
     // 05_risk
-    fs.writeFileSync(
-      path.join(detailDir, "05_risk", "risk_debate.json"),
-      JSON.stringify(result.risk_debate, null, 2), "utf-8"
-    );
-    fs.writeFileSync(
-      path.join(detailDir, "05_risk", "risk_manager.json"),
-      JSON.stringify(result.risk_assessment, null, 2), "utf-8"
-    );
+    this.writeJson(path.join(detailDir, "05_risk", "risk_debate.json"), result.risk_debate);
+    this.writeJson(path.join(detailDir, "05_risk", "risk_manager.json"), result.risk_assessment);
 
     // Summary
     const analystVerdicts: Record<string, { direction: string; reason: string }> = {};
@@ -122,6 +126,7 @@ export class ReportStore {
 
     const summary: AnalysisReport = {
       id: `${ticker}_${date}_full`,
+      run_id: runId,
       ticker,
       company_name: result.final.company_name,
       date,
@@ -136,9 +141,6 @@ export class ReportStore {
       trace_count: result.analysts.length + 4 + 1 + 1 + 3 + 1,
     };
 
-    fs.writeFileSync(
-      path.join(tickerDir, `${date}_full.json`),
-      JSON.stringify(summary, null, 2), "utf-8"
-    );
+    this.writeJson(path.join(tickerDir, `${date}_full.json`), summary);
   }
 }

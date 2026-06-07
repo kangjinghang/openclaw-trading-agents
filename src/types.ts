@@ -59,6 +59,7 @@ export interface QuickAnalysisResult {
 /** Summary JSON saved to trading-reports/ */
 export interface AnalysisReport {
   id: string;
+  run_id?: string;
   ticker: string;
   company_name: string;
   date: string;
@@ -76,6 +77,7 @@ export interface AnalysisReport {
 /** Single LLM call trace for auditing */
 export interface LLMCallTrace {
   trace_id: string;
+  run_id?: string;
   call_index: number;
   phase: "analyst" | "debate" | "research" | "trader" | "risk_debate" | "risk" | "portfolio";
   role: string;
@@ -105,7 +107,7 @@ export interface LLMCallTrace {
 /** Result from a Python data script */
 export interface ScriptResult {
   success: boolean;
-  data?: any;
+  data?: Record<string, unknown>;
   error?: string;
   _source?: string;
 }
@@ -199,4 +201,14 @@ export interface FullAnalysisResult {
   risk_debate: RiskDebateResult;
   risk_assessment: RiskAssessment;
   final: FinalDecision;
+}
+
+/** Metadata about an analysis run for auditing */
+export interface RunMeta {
+  run_id: string;
+  trace_dir: string;
+  duration_ms: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  llm_call_count: number;
 }

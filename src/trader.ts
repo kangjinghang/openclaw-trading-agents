@@ -14,35 +14,45 @@ import * as path from "path";
 
 const SKILLS_DIR = path.resolve(__dirname, "../skills");
 
-function parseNumberField(content: string, fieldRegex: RegExp): number {
-  const match = content.match(fieldRegex);
-  if (!match) return 0;
-  const val = parseFloat(match[1]);
-  return isNaN(val) ? 0 : val;
-}
-
 /**
  * Parse a price/percentage field from LLM output.
  * Supports: "120元", "**目标价格**：120", "| **目标价格** | 1750 元 |",
- *           "P × 1.08", "5% - 8%", markdown tables, etc.
- * Returns the first parseable number found.
+ *           "P × 1.08", "5% - 8%", markdown tables, descriptive text with embedded prices.
+ * Returns the first parseable number found that looks like a price/percentage (not a date/period).
  */
-function parseNumericField(content: string, fieldPattern: string): number {
+function parseNumericField(content: string, fieldPattern: string, isPercent: boolean = false): number {
   const escaped = fieldPattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // Optional suffix after field name (e.g. "目标价格（上行）" or "目标价格/止损价格")
   const suffix = '[^：:|\\n]*?';
-  // Pattern 1: inline with colon (e.g. "**目标价格**：120元" or "- **目标价格**: 1750 元")
+  // Pattern 1: inline with colon — capture the full value line
   const re1 = new RegExp(
-    `\\*{0,2}${escaped}${suffix}\\*{0,2}\\s*[：:]\\s*[^\\n]*?([\\d]+(?:[.,]\\d+)?)`,
+    `\\*{0,2}${escaped}${suffix}\\*{0,2}\\s*[：:]\\s*([^\\n]+)`,
   );
-  // Pattern 2: table cell (e.g. "| **目标价格（上行）** | **1750 元** |")
+  // Pattern 2: table cell
   const re2 = new RegExp(
-    `\\|\\s*\\*{0,2}${escaped}[^|]*?\\*{0,2}\\s*\\|\\s*[^|]*?([\\d]+(?:[.,]\\d+)?)`,
+    `\\|\\s*\\*{0,2}${escaped}[^|]*?\\*{0,2}\\s*\\|\\s*([^|]+)`,
   );
-  const match = content.match(re1) || content.match(re2);
-  if (!match) return 0;
-  const val = parseFloat(match[1].replace(",", ""));
-  return isNaN(val) ? 0 : val;
+
+  const lineMatch = content.match(re1) || content.match(re2);
+  if (!lineMatch) return 0;
+
+  const lineText = lineMatch[1];
+  // Extract all numbers from the line
+  const allNumbers = lineText.match(/\d[\d,.]*/g);
+  if (!allNumbers) return 0;
+
+  // Filter out numbers that are time periods (followed by 日/年/月/周/天)
+  for (const numStr of allNumbers) {
+    const idx = lineText.indexOf(numStr);
+    const after = lineText.substring(idx + numStr.length).trimStart();
+    // Skip if followed by 日/年/月/周/天 (time period like "200日", "20日/50日")
+    if (/^[日年月周天]/.test(after)) continue;
+    // For price fields, skip numbers followed by % (percentages are not prices)
+    if (!isPercent && /^%/.test(after)) continue;
+
+    const val = parseFloat(numStr.replace(/,/g, ''));
+    if (!isNaN(val) && val > 0) return val;
+  }
+  return 0;
 }
 
 function parseListSection(content: string, header: string): string[] {
@@ -95,7 +105,6 @@ export async function runTrader(
       "You are an A-share trader creating specific execution plans based on research decisions.",
     userMessage,
     temperature: 0.3,
-    maxTokens: 3000,
     phase: "trader",
     role: "trader",
     traceLogger,
@@ -110,9 +119,9 @@ export async function runTrader(
         : direction === "Underweight"
         ? "Sell"
         : direction,
-    target_price: parseNumericField(result.content, "目标价格"),
-    stop_loss: parseNumericField(result.content, "止损价格"),
-    position_pct: parseNumericField(result.content, "建议仓位"),
+    target_price: parseNumericField(result.content, "目标价格", false),
+    stop_loss: parseNumericField(result.content, "止损价格", false),
+    position_pct: parseNumericField(result.content, "建议仓位", true),
     execution_plan: result.content.slice(0, 3000),
     entry_signals: parseListSection(result.content, "入场信号"),
     exit_signals: parseListSection(result.content, "退出信号"),

@@ -2,6 +2,7 @@
 
 import { spawn } from 'child_process';
 import { ScriptResult } from './types';
+import { PYTHON_SCRIPT_TIMEOUT_MS } from './constants';
 
 /**
  * Execute a Python script and capture its JSON output
@@ -16,7 +17,7 @@ export async function execPython(
   args: string[] = [],
   stdinData: any = null,
   pythonCmd: string = 'python3',
-  timeoutMs: number = 30000
+  timeoutMs: number = PYTHON_SCRIPT_TIMEOUT_MS
 ): Promise<ScriptResult> {
   return new Promise((resolve) => {
     const python = spawn(pythonCmd, [scriptPath, ...args]);
@@ -122,7 +123,7 @@ export async function execSkillScript(
   projectRoot: string,
   args: string[] = [],
   stdinData: any = null,
-  timeoutMs: number = 30000
+  timeoutMs: number = PYTHON_SCRIPT_TIMEOUT_MS
 ): Promise<ScriptResult> {
   const scriptPath = `${projectRoot}/skills/${skillName}/scripts/${scriptName}.py`;
 

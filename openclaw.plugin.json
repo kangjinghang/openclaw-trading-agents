@@ -20,6 +20,7 @@
     "debate_rounds": { "type": "number", "default": 2 },
     "risk_debate_rounds": { "type": "number", "default": 1 },
     "max_risk_retries": { "type": "number", "default": 1 },
+    "llm_concurrency": { "type": "number", "default": 3 },
     "report_dir": { "type": "string", "default": "~/.openclaw/trading-reports" }
   }
 }

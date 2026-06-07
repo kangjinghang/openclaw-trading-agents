@@ -89,7 +89,6 @@ export async function runResearchManager(
     systemPrompt: "You are a research manager evaluating Bull↔Bear debate quality and making trading direction decisions.",
     userMessage,
     temperature: 0.3,
-    maxTokens: 3000,
     phase: "research",
     role: "research_manager",
     traceLogger,

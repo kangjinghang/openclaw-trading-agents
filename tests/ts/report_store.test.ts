@@ -90,5 +90,40 @@ describe("ReportStore", () => {
     expect(analyst.role).toBe("market");
     expect(analyst.verdict.direction).toBe("Buy");
     expect(analyst.data_sources_used).toEqual(["market_data", "technical_indicators"]);
+
+    // Verify no .tmp files left behind (atomic write cleanup)
+    const allFiles = fs.readdirSync(path.join(tmpDir, "600519"), { recursive: true }) as string[];
+    const tmpFiles = allFiles.filter(f => String(f).endsWith(".tmp"));
+    expect(tmpFiles).toHaveLength(0);
+  });
+
+  it("Should not leave .tmp files on successful write (atomic writes)", () => {
+    tmpDir = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "report-store-test-"));
+
+    const result: QuickAnalysisResult = {
+      ticker: "000001",
+      date: "2026-01-01",
+      mode: "quick",
+      analysts: [],
+      final: {
+        ticker: "000001", company_name: "TEST", date: "2026-01-01",
+        direction: "Hold", confidence: 0.5, target_price: 0, stop_loss: 0,
+        position_pct: 0, reasoning: "test", key_risks: [],
+        analyst_verdicts: {}, bull_bear_summary: "",
+        risk_assessment: "pass", execution_plan: "", next_review_trigger: "",
+      },
+    };
+
+    const store = new ReportStore(tmpDir);
+    store.save("000001", "2026-01-01", "quick", result, 1000, 0, 0, "run-test");
+
+    // Check no .tmp files anywhere in the output
+    const allFiles = fs.readdirSync(path.join(tmpDir, "000001"), { recursive: true }) as string[];
+    const tmpFiles = allFiles.filter(f => String(f).endsWith(".tmp"));
+    expect(tmpFiles).toHaveLength(0);
+
+    // Verify summary has run_id
+    const summary = JSON.parse(fs.readFileSync(path.join(tmpDir, "000001", "2026-01-01_quick.json"), "utf-8"));
+    expect(summary.run_id).toBe("run-test");
   });
 });
