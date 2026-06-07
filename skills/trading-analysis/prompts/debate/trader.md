@@ -23,6 +23,10 @@
 
 {{analyst_reports}}
 
+## 数据质量
+
+{{quality_summary}}
+
 ## 输出要求
 
 请制定具体的交易执行计划：

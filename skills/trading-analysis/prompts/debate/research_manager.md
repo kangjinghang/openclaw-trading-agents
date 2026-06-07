@@ -26,6 +26,10 @@
 
 {{analyst_reports}}
 
+## 数据质量
+
+{{quality_summary}}
+
 ## 多空辩论记录
 
 {{debate_rounds}}

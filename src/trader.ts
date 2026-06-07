@@ -70,6 +70,7 @@ function parseListSection(content: string, header: string): string[] {
 export async function runTrader(
   researchDecision: ResearchDecision,
   analystReports: AnalystReport[],
+  qualitySummary: string,
   config: TradingAgentsConfig,
   openaiClient: OpenAI,
   traceLogger: TraceLogger,
@@ -95,6 +96,7 @@ export async function runTrader(
       date: date || "",
       research_decision: decisionText,
       analyst_reports: reportsText,
+      quality_summary: qualitySummary,
     },
     promptsBaseDir
   );

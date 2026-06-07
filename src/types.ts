@@ -110,6 +110,7 @@ export interface ScriptResult {
   data?: Record<string, unknown>;
   error?: string;
   _source?: string;
+  vpa?: string;
 }
 
 // ── Phase 3: Debate types ──
@@ -201,6 +202,21 @@ export interface FullAnalysisResult {
   risk_debate: RiskDebateResult;
   risk_assessment: RiskAssessment;
   final: FinalDecision;
+}
+
+/** Quality gate result for a single analyst report. */
+export interface QualityGrade {
+  role: string;
+  grade: "A" | "B" | "C" | "D" | "F";
+  issues: string[];
+}
+
+/** Quality gate summary for all analyst reports. */
+export interface QualitySummary {
+  grades: QualityGrade[];
+  failed_count: number;
+  warn_count: number;
+  summary_text: string;
 }
 
 /** Metadata about an analysis run for auditing */

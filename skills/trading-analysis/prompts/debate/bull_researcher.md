@@ -22,6 +22,10 @@
 
 {{analyst_reports}}
 
+## 数据质量
+
+{{quality_summary}}
+
 {{opponent_claims}}
 
 ## 输出要求

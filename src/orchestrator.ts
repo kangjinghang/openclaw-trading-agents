@@ -10,6 +10,7 @@ import { runBullBearDebate } from "./debate";
 import { runResearchManager } from "./research-manager";
 import { runTrader } from "./trader";
 import { runRiskDebate, runRiskManager } from "./risk";
+import { validateAnalystReports } from "./quality-gate";
 import {
   TradingAgentsConfig,
   QuickAnalysisResult,
@@ -18,6 +19,7 @@ import {
   FinalDecision,
   ScriptResult,
   RunMeta,
+  QualitySummary,
 } from "./types";
 import { AbortError, ParseError, EnvironmentError } from "./errors";
 import { DATA_FETCH_STAGGER_MS, LLM_CALL_STAGGER_MS, DEFAULT_CONCURRENCY } from "./constants";
@@ -221,9 +223,13 @@ async function runAnalystPhase(
   logProgress(runId, `[1/4] 数据采集完成 (${ANALYST_CONFIGS.length - dataFailed}/${ANALYST_CONFIGS.length} 成功${dataFailed > 0 ? `, ${dataFailed} 失败` : ""})`);
 
   const dataMap: Record<string, string> = {};
+  const vpaMap: Record<string, string> = {};
   for (const { role, result } of dataResults) {
     if (result.success && result.data) {
       dataMap[role] = JSON.stringify(result.data, null, 2);
+      if (result.vpa) {
+        vpaMap[role] = result.vpa;
+      }
     } else {
       dataMap[role] = `[数据缺失: ${result.error || "unknown error"}]`;
     }
@@ -243,7 +249,7 @@ async function runAnalystPhase(
         const dataJson = dataMap[cfg.role];
         const userMessage = loadAndRender(
           cfg.prompt,
-          { ticker, date, [cfg.dataKey]: dataJson },
+          { ticker, date, [cfg.dataKey]: dataJson, vpa: vpaMap[cfg.role] || "" },
           promptsBaseDir
         );
 
@@ -315,6 +321,10 @@ export async function runQuickAnalysis(
 
   if (signal?.aborted) throw new AbortError();
 
+  // ── Quality Gate ──────────────────────────────────────────────────
+  const quality = validateAnalystReports(analystReports);
+  logProgress(runId, `[2/4] 质量门控: ${quality.grades.map(g => `${g.role}=${g.grade}`).join(", ")}`);
+
   // ── Portfolio Manager ────────────────────────────────────────────
   logProgress(runId, "[3/4] 投资组合经理决策...");
   const promptsBaseDir = path.join(SKILLS_DIR, "trading-analysis", "prompts");
@@ -322,7 +332,7 @@ export async function runQuickAnalysis(
     .map((r) => `## ${r.role} 分析师报告\n\n${r.content}\n\nVERDICT: ${r.verdict.direction} — ${r.verdict.reason}`)
     .join("\n\n---\n\n");
 
-  const portfolioPrompt = loadAndRender("portfolio_manager.md", { ticker, date, analyst_reports: allReportsText }, promptsBaseDir);
+  const portfolioPrompt = loadAndRender("portfolio_manager.md", { ticker, date, analyst_reports: allReportsText, quality_summary: quality.summary_text }, promptsBaseDir);
 
   const portfolioResult = await callLLM(openaiClient, {
     model: config.models.decision,
@@ -426,23 +436,27 @@ export async function runFullAnalysis(
 
   if (signal?.aborted) throw new AbortError();
 
+  // Quality Gate
+  const quality = validateAnalystReports(analystReports);
+  logProgress(runId, `质量门控: ${quality.grades.map(g => `${g.role}=${g.grade}`).join(", ")}`);
+
   // Phase 3: Bull↔Bear Debate
   logProgress(runId, `[3/7] 多空辩论 (${config.debate_rounds} 轮)...`);
-  const debate = await runBullBearDebate(analystReports, config, openaiClient, traceLogger);
+  const debate = await runBullBearDebate(analystReports, quality.summary_text, config, openaiClient, traceLogger);
   logProgress(runId, `[3/7] 多空辩论完成 (Bull ${debate.rounds.flatMap(r => r.bull_claims).length} claims, Bear ${debate.rounds.flatMap(r => r.bear_claims).length} claims)`);
 
   if (signal?.aborted) throw new AbortError();
 
   // Phase 4: Research Manager
   logProgress(runId, `[4/7] 研究经理裁决...`);
-  const researchDecision = await runResearchManager(analystReports, debate, config, openaiClient, traceLogger);
+  const researchDecision = await runResearchManager(analystReports, debate, quality.summary_text, config, openaiClient, traceLogger);
   logProgress(runId, `[4/7] 研究经理裁决: ${researchDecision.direction} (信心 ${researchDecision.confidence})`);
 
   if (signal?.aborted) throw new AbortError();
 
   // Phase 5: Trader
   logProgress(runId, `[5/7] 交易员制定执行计划...`);
-  let tradingPlan = await runTrader(researchDecision, analystReports, config, openaiClient, traceLogger, ticker, date);
+  let tradingPlan = await runTrader(researchDecision, analystReports, quality.summary_text, config, openaiClient, traceLogger, ticker, date);
   logProgress(runId, `[5/7] 交易计划: ${tradingPlan.direction} 目标价 ${tradingPlan.target_price} 止损 ${tradingPlan.stop_loss}`);
 
   if (signal?.aborted) throw new AbortError();
@@ -459,7 +473,7 @@ export async function runFullAnalysis(
   while (riskAssessment.status === "revise" && retries < config.max_risk_retries) {
     retries++;
     logProgress(runId, `  风控要求修订 (${retries}/${config.max_risk_retries}), 重新生成交易计划...`);
-    tradingPlan = await runTrader(researchDecision, analystReports, config, openaiClient, traceLogger, ticker, date);
+    tradingPlan = await runTrader(researchDecision, analystReports, quality.summary_text, config, openaiClient, traceLogger, ticker, date);
     if (riskAssessment.max_position_override) {
       tradingPlan.position_pct = Math.min(tradingPlan.position_pct, riskAssessment.max_position_override);
     }

@@ -53,6 +53,7 @@ function parse5TierDirection(raw: string): ResearchDecision["direction"] {
 export async function runResearchManager(
   analystReports: AnalystReport[],
   debate: DebateResult,
+  qualitySummary: string,
   config: TradingAgentsConfig,
   openaiClient: OpenAI,
   traceLogger: TraceLogger
@@ -80,6 +81,7 @@ export async function runResearchManager(
       debate_rounds: debateRoundsText,
       bull_summary: debate.bull_summary,
       bear_summary: debate.bear_summary,
+      quality_summary: qualitySummary,
     },
     promptsBaseDir
   );

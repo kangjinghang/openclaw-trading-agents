@@ -51,6 +51,7 @@ function extractSummary(content: string): string {
  */
 export async function runBullBearDebate(
   analystReports: AnalystReport[],
+  qualitySummary: string,
   config: TradingAgentsConfig,
   openaiClient: OpenAI,
   traceLogger: TraceLogger
@@ -77,7 +78,7 @@ export async function runBullBearDebate(
 
     const bullMessage = loadAndRender(
       "debate/bull_researcher.md",
-      { ticker: "", date: "", analyst_reports: reportsText, opponent_claims: bullOpponentText },
+      { ticker: "", date: "", analyst_reports: reportsText, opponent_claims: bullOpponentText, quality_summary: qualitySummary },
       promptsBaseDir
     );
 
@@ -104,7 +105,7 @@ export async function runBullBearDebate(
 
     const bearMessage = loadAndRender(
       "debate/bear_researcher.md",
-      { ticker: "", date: "", analyst_reports: reportsText, opponent_claims: bearOpponentText },
+      { ticker: "", date: "", analyst_reports: reportsText, opponent_claims: bearOpponentText, quality_summary: qualitySummary },
       promptsBaseDir
     );
 

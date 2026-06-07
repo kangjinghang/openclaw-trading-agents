@@ -79,6 +79,10 @@
 
 {{analyst_reports}}
 
+## 数据质量
+
+{{quality_summary}}
+
 ## 决策框架
 
 在综合分析师报告时，请按以下框架思考：
