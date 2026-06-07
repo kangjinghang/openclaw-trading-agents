@@ -218,30 +218,88 @@ export async function callLLM(
 
 /**
  * Extract verdict from LLM output.
- * Looks for <!-- VERDICT: {"direction": "...", "reason": "..."} -->
+ *
+ * Extraction strategy (in priority order):
+ * 1. VERDICT tag: <!-- VERDICT: {"direction": "...", "reason": "..."} -->
+ * 2. Explicit patterns: "最终裁决：买入", "方向：看空", "核心定性：持有"
+ * 3. Keyword scan: look for direction keywords in the first 20 lines
+ *
+ * Returns null only if no direction signal can be found at all.
  */
 export function parseVerdict(
   content: string
 ): { direction: string; reason: string } | null {
-  const verdictRegex = /<!--\s*VERDICT:\s*(\{[^}]+\})\s*-->/;
+  // ── Layer 1: VERDICT tag ──────────────────────────────────────
+  const verdictRegex = /<!--\s*VERDICT:\s*(\{.*?\})\s*-->/s;
   const match = content.match(verdictRegex);
-
-  if (!match) {
-    return null;
-  }
-
-  try {
-    const verdict = JSON.parse(match[1]);
-
-    if (typeof verdict.direction !== "string" || typeof verdict.reason !== "string") {
-      return null;
+  if (match) {
+    try {
+      const verdict = JSON.parse(match[1]);
+      if (typeof verdict.direction === "string" && typeof verdict.reason === "string") {
+        return { direction: verdict.direction, reason: verdict.reason };
+      }
+    } catch {
+      // Fall through to next layer
     }
-
-    return {
-      direction: verdict.direction,
-      reason: verdict.reason,
-    };
-  } catch {
-    return null;
   }
+
+  // ── Layer 2: Explicit label patterns ──────────────────────────
+  const explicitPatterns = [
+    /(?:最终裁决|最终建议|核心定性|方向|结论|综合判断)[:：]\s*([^\n*]{1,30})/,
+  ];
+  for (const pattern of explicitPatterns) {
+    const m = content.match(pattern);
+    if (m) {
+      const classified = classifyDirection(m[1].trim());
+      if (classified) {
+        return { direction: classified, reason: `fallback(explicit): ${m[1].trim()}` };
+      }
+    }
+  }
+
+  // ── Layer 3: Keyword scan in first 20 lines ───────────────────
+  const head = content.split("\n").slice(0, 20).join("\n");
+  const keywordResult = classifyDirection(head);
+  if (keywordResult) {
+    return { direction: keywordResult, reason: "fallback(keyword)" };
+  }
+
+  return null;
+}
+
+/**
+ * Classify a text snippet into a canonical direction via keyword matching.
+ * Returns "Buy", "Sell", "Hold", or null if no signal found.
+ */
+function classifyDirection(text: string): string | null {
+  const upper = text.toUpperCase();
+
+  const buyKeywords = [
+    "BUY", "买入", "增持", "做多", "看多", "偏多", "建仓",
+  ];
+  const sellKeywords = [
+    "SELL", "卖出", "减持", "做空", "看空", "偏空", "清仓", "回避",
+  ];
+  const holdKeywords = [
+    "HOLD", "持有", "观望", "中性", "谨慎",
+  ];
+
+  // Score each category by counting keyword hits
+  let buyScore = 0, sellScore = 0, holdScore = 0;
+  for (const kw of buyKeywords) {
+    if (upper.includes(kw.toUpperCase())) buyScore++;
+  }
+  for (const kw of sellKeywords) {
+    if (upper.includes(kw.toUpperCase())) sellScore++;
+  }
+  for (const kw of holdKeywords) {
+    if (upper.includes(kw.toUpperCase())) holdScore++;
+  }
+
+  // Return the highest-scoring category; ties broken by priority: Sell > Buy > Hold
+  const maxScore = Math.max(buyScore, sellScore, holdScore);
+  if (maxScore === 0) return null;
+  if (sellScore === maxScore) return "Sell";
+  if (buyScore === maxScore) return "Buy";
+  return "Hold";
 }
