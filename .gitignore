@@ -6,5 +6,7 @@ __pycache__/
 .pytest_cache/
 .env
 trading-reports/
+.openclaw/
 .claude/
+.superpowers/
 *.egg-info/
