@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenClaw Trading Agents — Dashboard</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0f1019;--surface:#1a1b2e;--surface2:#1e1f32;--border:#2d2e45;--border2:#3d3e55;--text:#e2e4f0;--text2:#8b8da0;--text3:#6b6d82;--green:#4ade80;--green20:#4ade8020;--yellow:#fbbf24;--yellow20:#fbbf2420;--red:#f87171;--red20:#f8717120;--blue:#60a5fa;--blue20:#3b82f620;--purple:#a78bfa;--purple20:#8b5cf620;--mono:'Cascadia Code','Fira Code','JetBrains Mono',monospace}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:14px;line-height:1.5;min-height:100vh}
+a{color:var(--blue);text-decoration:none}
+/* Header */
+.header{display:flex;align-items:center;justify-content:space-between;padding:16px 24px;border-bottom:1px solid var(--border);background:var(--surface)}
+.header h1{font-size:18px;font-weight:600;color:var(--text)}
+.header h1 span{color:var(--text2);font-weight:400;font-size:13px;margin-left:8px}
+.filters{display:flex;gap:8px;align-items:center}
+.filters input,.filters select{background:var(--surface2);border:1px solid var(--border2);border-radius:6px;padding:6px 12px;color:var(--text);font-size:13px;outline:none}
+.filters input:focus,.filters select:focus{border-color:var(--blue)}
+.filters select option{background:var(--surface2);color:var(--text)}
+/* Main */
+.main{padding:16px 24px}
+.empty{text-align:center;color:var(--text3);padding:60px 0;font-size:15px}
+/* Table */
+table{width:100%;border-collapse:collapse}
+thead th{text-align:left;padding:8px 12px;color:var(--text3);font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border);white-space:nowrap}
+tbody tr{border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s}
+tbody tr:hover{background:var(--surface)}
+tbody td{padding:8px 12px;font-size:13px;white-space:nowrap}
+/* Badges */
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}
+.badge-buy{background:var(--green20);color:var(--green)}
+.badge-hold{background:var(--yellow20);color:var(--yellow)}
+.badge-sell{background:var(--red20);color:var(--red)}
+.badge-pass{background:var(--green20);color:var(--green)}
+.badge-revise{background:var(--yellow20);color:var(--yellow)}
+.badge-reject{background:var(--red20);color:var(--red)}
+.badge-quick{background:var(--purple20);color:var(--purple)}
+.badge-full{background:var(--blue20);color:var(--blue)}
+/* Confidence bar */
+.conf-bar{display:flex;align-items:center;gap:6px}
+.conf-track{width:48px;height:4px;background:var(--border);border-radius:2px;overflow:hidden}
+.conf-fill{height:100%;border-radius:2px}
+.conf-val{color:var(--text2);font-size:11px;font-family:var(--mono)}
+/* Analyst dots */
+.analyst-dots{display:flex;gap:2px}
+.analyst-dot{width:12px;height:12px;border-radius:2px}
+/* Modal */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;justify-content:center;align-items:flex-start;padding:24px;overflow-y:auto}
+.modal-overlay.active{display:flex}
+.modal{background:var(--bg);border:1px solid var(--border2);border-radius:12px;width:100%;max-width:960px;min-height:400px}
+.modal-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)}
+.modal-title{font-size:18px;font-weight:600}
+.modal-title .company{color:var(--text2);font-size:14px;font-weight:400;margin-left:8px}
+.modal-close{background:none;border:none;color:var(--text2);font-size:20px;cursor:pointer;padding:4px 8px;border-radius:4px}
+.modal-close:hover{background:var(--surface2);color:var(--text)}
+/* Tabs */
+.tabs{display:flex;gap:4px;padding:0 20px;border-bottom:1px solid var(--border);background:var(--surface)}
+.tab{padding:10px 16px;font-size:13px;color:var(--text2);cursor:pointer;border-bottom:2px solid transparent;transition:all .15s}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--blue);border-bottom-color:var(--blue)}
+.tab-content{padding:20px}
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+/* Summary bar */
+.summary-bar{display:flex;gap:16px;padding:12px 20px;border-bottom:1px solid var(--border);background:var(--surface);flex-wrap:wrap}
+.summary-item{display:flex;flex-direction:column;gap:2px}
+.summary-item .label{font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.3px}
+.summary-item .value{font-size:15px;font-weight:600}
+/* Analyst cards */
+.analyst-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-bottom:12px}
+.analyst-card{background:var(--surface2);border-radius:8px;padding:12px;border-left:3px solid var(--border2);cursor:pointer;transition:background .15s}
+.analyst-card:hover{background:var(--border)}
+.analyst-card.dir-buy{border-left-color:var(--green)}
+.analyst-card.dir-hold{border-left-color:var(--yellow)}
+.analyst-card.dir-sell{border-left-color:var(--red)}
+.analyst-card .card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.analyst-card .role{font-size:13px;font-weight:500;color:var(--text)}
+.analyst-card .reason{font-size:11px;color:var(--text2);line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.analyst-card .source{font-size:10px;color:var(--text3);margin-top:4px}
+/* Expanded analyst */
+.analyst-expanded{background:var(--surface2);border-radius:8px;padding:16px;margin-bottom:12px;display:none}
+.analyst-expanded.show{display:block}
+.analyst-expanded h4{font-size:14px;margin-bottom:8px}
+.analyst-expanded .md-content{font-size:13px;color:var(--text2);line-height:1.7;max-height:400px;overflow-y:auto}
+.md-content h1,.md-content h2,.md-content h3,.md-content h4{color:var(--text);margin:12px 0 6px}
+.md-content h1{font-size:16px}.md-content h2{font-size:15px}.md-content h3{font-size:14px}.md-content h4{font-size:13px}
+.md-content p{margin:4px 0}
+.md-content ul,.md-content ol{padding-left:20px;margin:4px 0}
+.md-content li{margin:2px 0}
+.md-content strong{color:var(--text)}.md-content em{color:var(--text2)}
+.md-content code{background:var(--border);padding:1px 5px;border-radius:3px;font-family:var(--mono);font-size:12px}
+.md-content hr{border:none;border-top:1px solid var(--border);margin:12px 0}
+/* Score bar */
+.score-bar{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.score-track{flex:1;height:8px;background:var(--border);border-radius:4px;overflow:hidden;display:flex}
+.score-bull{background:var(--green)}
+.score-bear{background:var(--red)}
+.score-labels{display:flex;justify-content:space-between;font-size:11px;color:var(--text2);margin-top:4px}
+/* Plan grid */
+.plan-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}
+.plan-box{background:var(--surface2);border-radius:8px;padding:14px}
+.plan-box h4{font-size:12px;font-weight:600;margin-bottom:8px}
+.plan-items{display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:13px}
+.plan-items .k{color:var(--text3)}
+/* Debate */
+.debate-round{margin-bottom:12px}
+.debate-round h4{font-size:13px;font-weight:600;margin-bottom:8px;color:var(--text2)}
+.debate-row{display:flex;gap:10px}
+.debate-side{flex:1;border-radius:8px;padding:12px;font-size:12px;line-height:1.5}
+.debate-bull{background:#4ade8010;border:1px solid #4ade8030}
+.debate-bear{background:#f8717110;border:1px solid #f8717130}
+.debate-side .side-label{font-weight:600;font-size:11px;margin-bottom:6px}
+/* Trace table */
+.trace-detail{background:var(--surface2);border-radius:8px;padding:12px;margin-top:8px;font-family:var(--mono);font-size:12px;max-height:200px;overflow-y:auto;line-height:1.6;white-space:pre-wrap;word-break:break-all;color:var(--text2)}
+.trace-detail .prompt-label{color:var(--blue)}
+.trace-detail .resp-label{color:var(--green)}
+/* Responsive */
+@media(max-width:768px){.header{flex-direction:column;gap:12px}.plan-grid{grid-template-columns:1fr}.analyst-grid{grid-template-columns:1fr}.debate-row{flex-direction:column}}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1 data-i18n="title">OpenClaw Trading Agents <span>Dashboard</span></h1>
+  <div class="filters">
+    <input type="text" id="search" data-i18n-placeholder="searchPlaceholder" />
+    <select id="mode-filter">
+      <option value="" data-i18n="allModes"></option>
+      <option value="quick">Quick</option>
+      <option value="full">Full</option>
+    </select>
+    <button id="lang-toggle" style="background:var(--surface2);border:1px solid var(--border2);border-radius:6px;padding:6px 12px;color:var(--text2);font-size:13px;cursor:pointer" title="Switch language"></button>
+  </div>
+</div>
+
+<div class="main">
+  <table id="report-table">
+    <thead>
+      <tr>
+        <th data-i18n="thTicker"></th>
+        <th data-i18n="thDate"></th>
+        <th data-i18n="thMode"></th>
+        <th data-i18n="thDirection"></th>
+        <th data-i18n="thConfidence"></th>
+        <th data-i18n="thAnalysts"></th>
+        <th data-i18n="thCost"></th>
+        <th data-i18n="thDuration"></th>
+        <th data-i18n="thRisk"></th>
+      </tr>
+    </thead>
+    <tbody id="report-tbody"></tbody>
+  </table>
+  <div class="empty" id="empty-msg" style="display:none"></div>
+</div>
+
+<!-- Detail modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="modal-title"></div>
+      <button class="modal-close" id="modal-close">&times;</button>
+    </div>
+    <div class="summary-bar" id="summary-bar"></div>
+    <div class="tabs" id="tabs">
+      <div class="tab active" data-tab="analysts" data-i18n="tabAnalysts"></div>
+      <div class="tab" data-tab="detail" data-i18n="tabDetail"></div>
+      <div class="tab" data-tab="traces" data-i18n="tabTraces"></div>
+    </div>
+    <div class="tab-content">
+      <div class="tab-panel active" id="panel-analysts"></div>
+      <div class="tab-panel" id="panel-detail"></div>
+      <div class="tab-panel" id="panel-traces"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── i18n ──
+const I18N = {
+  zh: {
+    title: 'OpenClaw Trading Agents <span>控制台</span>',
+    searchPlaceholder: '搜索股票代码...',
+    allModes: '全部模式',
+    thTicker: '股票代码', thDate: '日期', thMode: '模式', thDirection: '方向',
+    thConfidence: '信心度', thAnalysts: '分析师', thCost: '费用', thDuration: '耗时', thRisk: '风控',
+    tabAnalysts: '分析师', tabDetail: '详情', tabTraces: '调用追踪',
+    labelDate: '日期', labelDirection: '方向', labelConfidence: '信心度',
+    labelTokens: 'Token', labelCost: '费用', labelDuration: '耗时', labelMode: '模式',
+    loading: '加载中...', empty: '暂无报告，请先运行分析。',
+    loadFailed: '加载失败：',
+    noDetail: '暂无详情数据。',
+    noTraces: '暂无调用追踪数据。',
+    researchDecision: '研究决策', bull: '多头', bear: '空头',
+    tradingPlan: '交易计划', riskAssessment: '风控评估',
+    target: '目标价', stop: '止损价', position: '仓位', direction: '方向',
+    entry: '入场信号', exit: '退出信号', risks: '风险提示',
+    score: '评分', status: '状态', debate: '辩论', round: '第{n}轮',
+    systemPrompt: '系统提示', response: '模型回复',
+    errorPrefix: '错误：',
+    roleNames: { market:'技术面', fundamentals:'基本面', news:'新闻', sentiment:'情绪', policy:'政策', hot_money:'资金流', lockup:'解禁' },
+    phaseNames: { analyst:'分析师', portfolio:'组合经理', debate:'辩论', research:'研究', trader:'交易', risk_debate:'风控辩论', risk:'风控' },
+  },
+  en: {
+    title: 'OpenClaw Trading Agents <span>Dashboard</span>',
+    searchPlaceholder: 'Search ticker...',
+    allModes: 'All modes',
+    thTicker: 'Ticker', thDate: 'Date', thMode: 'Mode', thDirection: 'Direction',
+    thConfidence: 'Confidence', thAnalysts: 'Analysts', thCost: 'Cost', thDuration: 'Duration', thRisk: 'Risk',
+    tabAnalysts: 'Analysts', tabDetail: 'Detail', tabTraces: 'Traces',
+    labelDate: 'Date', labelDirection: 'Direction', labelConfidence: 'Confidence',
+    labelTokens: 'Tokens', labelCost: 'Cost', labelDuration: 'Duration', labelMode: 'Mode',
+    loading: 'Loading...', empty: 'No reports found. Run an analysis first.',
+    loadFailed: 'Failed to load reports: ',
+    noDetail: 'No detail data available.',
+    noTraces: 'No traces available.',
+    researchDecision: 'Research Decision', bull: 'Bull', bear: 'Bear',
+    tradingPlan: 'Trading Plan', riskAssessment: 'Risk Assessment',
+    target: 'Target', stop: 'Stop', position: 'Position', direction: 'Direction',
+    entry: 'Entry', exit: 'Exit', risks: 'Risks',
+    score: 'Score', status: 'Status', debate: 'Debate', round: 'Round {n}',
+    systemPrompt: 'System prompt', response: 'Response',
+    errorPrefix: 'Error: ',
+    roleNames: { market:'Market', fundamentals:'Fundamentals', news:'News', sentiment:'Sentiment', policy:'Policy', hot_money:'Hot Money', lockup:'Lockup' },
+    phaseNames: { analyst:'Analyst', portfolio:'Portfolio', debate:'Debate', research:'Research', trader:'Trader', risk_debate:'Risk Debate', risk:'Risk' },
+  }
+};
+
+let lang = localStorage.getItem('dashboard-lang') || 'zh';
+function t(key) { return I18N[lang]?.[key] ?? I18N.en[key] ?? key; }
+function roleName(role) { return I18N[lang]?.roleNames?.[role] || capitalize(role); }
+function phaseName(phase) { return I18N[lang]?.phaseNames?.[phase] || phase; }
+
+function applyI18n() {
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.dataset.i18n;
+    if (key === 'title') { el.innerHTML = t(key); return; }
+    el.textContent = t(key);
+  });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+    el.placeholder = t(el.dataset.i18nPlaceholder);
+  });
+  const btn = document.getElementById('lang-toggle');
+  btn.textContent = lang === 'zh' ? 'EN' : '中文';
+  document.title = lang === 'zh' ? 'OpenClaw Trading Agents — 控制台' : 'OpenClaw Trading Agents — Dashboard';
+}
+
+// ── State ──
+let reports = [];
+let currentReport = null;
+let currentTraces = [];
+
+// ── Init ──
+(async function init() {
+  applyI18n();
+  document.getElementById('lang-toggle').addEventListener('click', () => {
+    lang = lang === 'zh' ? 'en' : 'zh';
+    localStorage.setItem('dashboard-lang', lang);
+    applyI18n();
+    renderTable();
+    if (currentReport) openModal(currentReport.id);
+  });
+
+  try {
+    const res = await fetch('/api/reports');
+    reports = await res.json();
+    renderTable();
+  } catch (e) {
+    const em = document.getElementById('empty-msg');
+    em.style.display = 'block';
+    em.textContent = t('loadFailed') + e.message;
+  }
+
+  document.getElementById('search').addEventListener('input', renderTable);
+  document.getElementById('mode-filter').addEventListener('change', renderTable);
+  document.getElementById('modal-close').addEventListener('click', closeModal);
+  document.getElementById('modal').addEventListener('click', e => {
+    if (e.target === e.currentTarget) closeModal();
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+    });
+  });
+})();
+
+// ── Render table ──
+function renderTable() {
+  const search = document.getElementById('search').value.trim().toLowerCase();
+  const modeFilter = document.getElementById('mode-filter').value;
+  const tbody = document.getElementById('report-tbody');
+  const empty = document.getElementById('empty-msg');
+
+  let filtered = reports;
+  if (search) filtered = filtered.filter(r => r.ticker.includes(search) || r.company_name.toLowerCase().includes(search));
+  if (modeFilter) filtered = filtered.filter(r => r.mode === modeFilter);
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = '';
+    empty.style.display = 'block';
+    empty.textContent = t('empty');
+    return;
+  }
+  empty.style.display = 'none';
+
+  tbody.innerHTML = filtered.map(r => {
+    const dirClass = directionClass(r.direction);
+    const dots = renderDots(r.analyst_verdicts);
+    const conf = (r.confidence * 100).toFixed(0);
+    const confColor = r.confidence >= 0.7 ? 'var(--green)' : r.confidence >= 0.4 ? 'var(--yellow)' : 'var(--red)';
+    const cost = r.total_cost_usd < 0.01 ? '<$0.01' : '$' + r.total_cost_usd.toFixed(2);
+    const dur = r.duration_ms < 1000 ? r.duration_ms + 'ms' : (r.duration_ms / 1000).toFixed(1) + 's';
+    const riskBadge = r.risk_assessment ? badgeHtml(r.risk_assessment, 'badge-' + r.risk_assessment) : '<span style="color:var(--text3)">—</span>';
+
+    return `<tr data-id="${r.id}">
+      <td style="font-weight:500">${r.ticker}</td>
+      <td style="color:var(--text2)">${r.date}</td>
+      <td>${badgeHtml(r.mode, 'badge-' + r.mode)}</td>
+      <td>${badgeHtml(r.direction, dirClass)}</td>
+      <td><div class="conf-bar"><div class="conf-track"><div class="conf-fill" style="width:${conf}%;background:${confColor}"></div></div><span class="conf-val">${conf}%</span></div></td>
+      <td>${dots}</td>
+      <td style="color:var(--text2);font-size:12px">${cost}</td>
+      <td style="color:var(--text2);font-size:12px">${dur}</td>
+      <td>${riskBadge}</td>
+    </tr>`;
+  }).join('');
+
+  tbody.querySelectorAll('tr').forEach(tr => {
+    tr.addEventListener('click', () => openModal(tr.dataset.id));
+  });
+}
+
+function renderDots(verdicts) {
+  const order = ['market','fundamentals','news','sentiment','policy','hot_money','lockup'];
+  if (!verdicts || Object.keys(verdicts).length === 0) return '<span style="color:var(--text3)">—</span>';
+  return '<div class="analyst-dots">' + order.filter(r => verdicts[r]).map(role => {
+    const dir = verdicts[role].direction || '中性';
+    const color = dir.includes('看多') || dir === 'Buy' || dir === 'Overweight' ? 'var(--green)' : dir.includes('看空') || dir === 'Sell' || dir === 'Underweight' ? 'var(--red)' : 'var(--yellow)';
+    return `<div class="analyst-dot" style="background:${color}" title="${roleName(role)}: ${dir}"></div>`;
+  }).join('') + '</div>';
+}
+
+function badgeHtml(text, cls) {
+  return `<span class="badge ${cls}">${text}</span>`;
+}
+
+function directionClass(dir) {
+  if (!dir) return 'badge-hold';
+  const d = dir.toLowerCase();
+  if (d === 'buy' || d === 'overweight' || d === 'strong buy') return 'badge-buy';
+  if (d === 'sell' || d === 'underweight' || d === 'strong sell') return 'badge-sell';
+  return 'badge-hold';
+}
+
+// ── Modal ──
+async function openModal(id) {
+  const report = reports.find(r => r.id === id);
+  if (!report) return;
+
+  currentReport = report;
+  document.getElementById('modal').classList.add('active');
+
+  document.getElementById('modal-title').innerHTML =
+    `${report.ticker} <span class="company">${report.company_name}</span>`;
+
+  const dirCls = directionClass(report.direction);
+  const conf = (report.confidence * 100).toFixed(0);
+  const cost = report.total_cost_usd < 0.01 ? '<$0.01' : '$' + report.total_cost_usd.toFixed(2);
+  const dur = report.duration_ms < 1000 ? report.duration_ms + 'ms' : (report.duration_ms / 1000).toFixed(1) + 's';
+  document.getElementById('summary-bar').innerHTML = `
+    <div class="summary-item"><span class="label">${t('labelDate')}</span><span class="value">${report.date}</span></div>
+    <div class="summary-item"><span class="label">${t('labelDirection')}</span><span class="value">${badgeHtml(report.direction, dirCls)}</span></div>
+    <div class="summary-item"><span class="label">${t('labelConfidence')}</span><span class="value">${conf}%</span></div>
+    <div class="summary-item"><span class="label">${t('labelTokens')}</span><span class="value">${report.total_tokens.toLocaleString()}</span></div>
+    <div class="summary-item"><span class="label">${t('labelCost')}</span><span class="value">${cost}</span></div>
+    <div class="summary-item"><span class="label">${t('labelDuration')}</span><span class="value">${dur}</span></div>
+    <div class="summary-item"><span class="label">${t('labelMode')}</span><span class="value">${badgeHtml(report.mode, 'badge-' + report.mode)}</span></div>
+  `;
+
+  const detailTab = document.querySelector('.tab[data-tab="detail"]');
+  detailTab.style.display = report.mode === 'full' ? '' : 'none';
+
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelector('.tab[data-tab="analysts"]').classList.add('active');
+  document.getElementById('panel-analysts').classList.add('active');
+
+  loadAnalysts(report);
+  if (report.mode === 'full') loadFullDetail(report);
+  loadTraces(report);
+}
+
+function closeModal() {
+  document.getElementById('modal').classList.remove('active');
+  currentReport = null;
+  currentTraces = [];
+}
+
+// ── Analysts panel ──
+async function loadAnalysts(report) {
+  const panel = document.getElementById('panel-analysts');
+  panel.innerHTML = `<div style="color:var(--text3)">${t('loading')}</div>`;
+
+  try {
+    const dateMode = report.id;
+    const [ticker, ...rest] = dateMode.split('_');
+    const mode = rest.pop();
+    const date = rest.join('_');
+    const detailPath = `${date}_${mode}`;
+
+    const roles = ['market','fundamentals','news','sentiment','policy','hot_money','lockup'];
+    const analysts = await Promise.all(roles.map(async role => {
+      try {
+        const res = await fetch(`/api/detail/${ticker}/${detailPath}/01_analysts/${role}.json`);
+        if (res.ok) return await res.json();
+      } catch {}
+      const v = report.analyst_verdicts[role];
+      if (v) return { role, verdict: v, content: '', data_sources_used: [] };
+      return null;
+    }));
+
+    const valid = analysts.filter(Boolean);
+
+    panel.innerHTML = `
+      <div class="analyst-grid">
+        ${valid.map(a => {
+          const dir = a.verdict?.direction || '中性';
+          const dCls = directionClass(dir);
+          const cardCls = dir.includes('看多') || dir === 'Buy' ? 'dir-buy' : dir.includes('看空') || dir === 'Sell' ? 'dir-sell' : 'dir-hold';
+          return `<div class="analyst-card ${cardCls}" data-role="${a.role}">
+            <div class="card-head">
+              <span class="role">${roleName(a.role)}</span>
+              ${badgeHtml(dir, dCls)}
+            </div>
+            <div class="reason">${a.verdict?.reason || ''}</div>
+            <div class="source">${(a.data_sources_used || []).join(', ')}</div>
+          </div>`;
+        }).join('')}
+      </div>
+      <div class="analyst-expanded" id="analyst-expanded">
+        <h4 id="expanded-title"></h4>
+        <div class="md-content" id="expanded-content"></div>
+      </div>
+    `;
+
+    panel.querySelectorAll('.analyst-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const role = card.dataset.role;
+        const analyst = valid.find(a => a.role === role);
+        if (!analyst || !analyst.content) return;
+        const expanded = document.getElementById('analyst-expanded');
+        document.getElementById('expanded-title').textContent = roleName(role);
+        document.getElementById('expanded-content').innerHTML = renderMd(analyst.content);
+        expanded.classList.toggle('show');
+      });
+    });
+
+  } catch (e) {
+    panel.innerHTML = `<div style="color:var(--red)">${t('errorPrefix')}${e.message}</div>`;
+  }
+}
+
+// ── Full mode detail panel ──
+async function loadFullDetail(report) {
+  const panel = document.getElementById('panel-detail');
+  panel.innerHTML = `<div style="color:var(--text3)">${t('loading')}</div>`;
+
+  const dateMode = report.id;
+  const [ticker, ...rest] = dateMode.split('_');
+  const mode = rest.pop();
+  const date = rest.join('_');
+  const detailPath = `${date}_${mode}`;
+
+  try {
+    const [research, trading, riskMgr, debateFiles] = await Promise.all([
+      fetchJson(`/api/detail/${ticker}/${detailPath}/03_research.json`),
+      fetchJson(`/api/detail/${ticker}/${detailPath}/04_trading_plan.json`),
+      fetchJson(`/api/detail/${ticker}/${detailPath}/05_risk/risk_manager.json`),
+      loadDebateRounds(ticker, detailPath),
+    ]);
+
+    let html = '';
+
+    if (research) {
+      const bullScore = research.bull_score || 0;
+      const bearScore = research.bear_score || 0;
+      const total = bullScore + bearScore || 1;
+      html += `
+        <h4 style="margin-bottom:8px">${t('researchDecision')}</h4>
+        <div class="score-bar">
+          <div class="score-track">
+            <div class="score-bull" style="width:${(bullScore/total*100).toFixed(0)}%"></div>
+            <div class="score-bear" style="width:${(bearScore/total*100).toFixed(0)}%"></div>
+          </div>
+          ${badgeHtml(research.direction || research.verdict?.direction || 'Hold', directionClass(research.direction || ''))}
+        </div>
+        <div class="score-labels"><span>${t('bull')} ${bullScore}</span><span>${t('bear')} ${bearScore}</span></div>
+        <p style="color:var(--text2);font-size:13px;margin:8px 0 16px;line-height:1.6">${research.reasoning || ''}</p>
+      `;
+    }
+
+    html += '<div class="plan-grid">';
+    if (trading) {
+      html += `
+        <div class="plan-box">
+          <h4 style="color:var(--green)">${t('tradingPlan')}</h4>
+          <div class="plan-items">
+            <div><span class="k">${t('target')}:</span> <span style="color:var(--green)">¥${formatNum(trading.target_price)}</span></div>
+            <div><span class="k">${t('stop')}:</span> <span style="color:var(--red)">¥${formatNum(trading.stop_loss)}</span></div>
+            <div><span class="k">${t('position')}:</span> <span>${trading.position_pct}%</span></div>
+            <div><span class="k">${t('direction')}:</span> <span>${badgeHtml(trading.direction || '', directionClass(trading.direction || ''))}</span></div>
+          </div>
+          ${(trading.entry_signals || []).length ? `<div style="margin-top:8px;font-size:12px"><span class="k">${t('entry')}:</span> ${trading.entry_signals.join('; ')}</div>` : ''}
+          ${(trading.exit_signals || []).length ? `<div style="font-size:12px"><span class="k">${t('exit')}:</span> ${trading.exit_signals.join('; ')}</div>` : ''}
+          ${(trading.key_risks || []).length ? `<div style="font-size:12px;color:var(--red)"><span class="k">${t('risks')}:</span> ${trading.key_risks.join('; ')}</div>` : ''}
+        </div>
+      `;
+    }
+    if (riskMgr) {
+      const riskCls = riskMgr.status === 'pass' ? 'badge-pass' : riskMgr.status === 'reject' ? 'badge-reject' : 'badge-revise';
+      html += `
+        <div class="plan-box">
+          <h4 style="color:var(--yellow)">${t('riskAssessment')}</h4>
+          <div class="plan-items">
+            <div><span class="k">${t('score')}:</span> <span>${riskMgr.risk_score}/100</span></div>
+            <div><span class="k">${t('status')}:</span> ${badgeHtml(riskMgr.status || '', riskCls)}</div>
+          </div>
+          <p style="color:var(--text2);font-size:12px;margin-top:8px;line-height:1.5">${riskMgr.reasoning || ''}</p>
+        </div>
+      `;
+    }
+    html += '</div>';
+
+    if (debateFiles.length > 0) {
+      html += `<h4 style="margin-bottom:8px">${t('debate')}</h4>`;
+      for (const round of debateFiles) {
+        html += `
+          <div class="debate-round">
+            <h4>${t('round').replace('{n}', round.round)}</h4>
+            <div class="debate-row">
+              <div class="debate-side debate-bull">
+                <div class="side-label" style="color:var(--green)">${t('bull')}</div>
+                ${(round.bull_claims || []).map(c => `<div style="margin-bottom:6px">${c.evidence || c.topic || ''}</div>`).join('')}
+              </div>
+              <div class="debate-side debate-bear">
+                <div class="side-label" style="color:var(--red)">${t('bear')}</div>
+                ${(round.bear_claims || []).map(c => `<div style="margin-bottom:6px">${c.evidence || c.topic || ''}</div>`).join('')}
+              </div>
+            </div>
+          </div>
+        `;
+      }
+    }
+
+    panel.innerHTML = html || `<div style="color:var(--text3)">${t('noDetail')}</div>`;
+  } catch (e) {
+    panel.innerHTML = `<div style="color:var(--red)">${t('errorPrefix')}${e.message}</div>`;
+  }
+}
+
+async function loadDebateRounds(ticker, detailPath) {
+  const rounds = [];
+  for (let i = 1; i <= 4; i++) {
+    const data = await fetchJson(`/api/detail/${ticker}/${detailPath}/02_debate/round_${i}.json`);
+    if (data) rounds.push(data);
+    else break;
+  }
+  return rounds;
+}
+
+// ── Traces panel ──
+async function loadTraces(report) {
+  const panel = document.getElementById('panel-traces');
+  panel.innerHTML = `<div style="color:var(--text3)">${t('loading')}</div>`;
+
+  try {
+    const dateMode = report.id;
+    const [ticker, ...rest] = dateMode.split('_');
+    const date = rest.length > 1 ? rest.slice(0, -1).join('_') : rest[0];
+
+    let traces;
+    if (report.run_id) {
+      const res = await fetch(`/api/traces?run_id=${encodeURIComponent(report.run_id)}`);
+      traces = await res.json();
+    } else {
+      const res = await fetch(`/api/traces?ticker=${ticker}&date=${date}`);
+      traces = await res.json();
+    }
+
+    currentTraces = traces;
+
+    if (traces.length === 0) {
+      panel.innerHTML = `<div style="color:var(--text3)">${t('noTraces')}</div>`;
+      return;
+    }
+
+    panel.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>${t('thMode')}</th><th>${t('thAnalysts')}</th><th>Model</th><th>${t('labelTokens')}</th><th>${t('thCost')}</th><th>${t('thDuration')}</th><th>${t('thDirection')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${traces.map((tr, i) => {
+            const phase = tr.phase || '';
+            const usage = tr.meta?.usage || {};
+            const total = usage.total_tokens || 0;
+            const cost = (tr.meta?.cost_usd || 0);
+            const dur = tr.meta?.duration_ms ? (tr.meta.duration_ms / 1000).toFixed(1) + 's' : '—';
+            const verdict = tr.response?.parsed_verdict?.direction || '';
+            return `<tr data-trace="${i}" style="cursor:pointer">
+              <td style="color:var(--text3)">${tr.call_index ?? i + 1}</td>
+              <td>${phaseBadgeHtml(phase)}</td>
+              <td>${phaseName(tr.role || phase)}</td>
+              <td style="color:var(--text2)">${tr.request?.model || ''}</td>
+              <td style="color:var(--text2)">${total.toLocaleString()}</td>
+              <td style="color:var(--text2)">$${cost.toFixed(4)}</td>
+              <td style="color:var(--text2)">${dur}</td>
+              <td>${verdict ? badgeHtml(verdict, directionClass(verdict)) : ''}</td>
+            </tr>
+            <tr><td colspan="8" style="padding:0"><div class="trace-detail" id="trace-${i}" style="display:none"></div></td></tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    `;
+
+    panel.querySelectorAll('tr[data-trace]').forEach(tr => {
+      tr.addEventListener('click', () => {
+        const idx = parseInt(tr.dataset.trace);
+        const detail = document.getElementById('trace-' + idx);
+        if (!detail) return;
+        if (detail.style.display === 'none') {
+          const tc = currentTraces[idx];
+          const sys = (tc.request?.system_prompt || '').slice(0, 200);
+          const resp = (tc.response?.raw_content || '').slice(0, 500);
+          detail.innerHTML = `<span class="prompt-label">${t('systemPrompt')}:</span> ${sys}...\n\n<span class="resp-label">${t('response')}:</span> ${resp}...`;
+          detail.style.display = 'block';
+        } else {
+          detail.style.display = 'none';
+        }
+      });
+    });
+
+  } catch (e) {
+    panel.innerHTML = `<div style="color:var(--red)">${t('errorPrefix')}${e.message}</div>`;
+  }
+}
+
+const phaseColors = {
+  analyst: ['var(--purple20)','var(--purple)'],
+  portfolio: ['var(--blue20)','var(--blue)'],
+  debate: ['var(--yellow20)','var(--yellow)'],
+  research: ['#60a5fa20','#60a5fa'],
+  trader: ['var(--green20)','var(--green)'],
+  risk_debate: ['var(--yellow20)','var(--yellow)'],
+  risk: ['var(--red20)','var(--red)'],
+};
+
+function phaseBadgeHtml(phase) {
+  const c = phaseColors[phase] || ['var(--border2)','var(--text2)'];
+  return `<span class="badge" style="background:${c[0]};color:${c[1]}">${phaseName(phase)}</span>`;
+}
+
+// ── Helpers ──
+async function fetchJson(url) {
+  try {
+    const res = await fetch(url);
+    return res.ok ? await res.json() : null;
+  } catch { return null; }
+}
+
+function capitalize(s) {
+  if (!s) return '';
+  return s.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function formatNum(n) {
+  if (n == null) return '—';
+  return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+}
+
+// ── Simple markdown → HTML ──
+function renderMd(md) {
+  if (!md) return '';
+  let html = escapeHtml(md);
+  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  html = html.replace(/((?:^[*\-] .+$\n?)+)/gm, match => {
+    const items = match.trim().split('\n').map(l => '<li>' + l.replace(/^[*\-] /, '') + '</li>').join('');
+    return '<ul>' + items + '</ul>';
+  });
+  html = html.replace(/((?:^\d+\. .+$\n?)+)/gm, match => {
+    const items = match.trim().split('\n').map(l => '<li>' + l.replace(/^\d+\. /, '') + '</li>').join('');
+    return '<ol>' + items + '</ol>';
+  });
+  html = html.replace(/^---+$/gm, '<hr>');
+  html = html.replace(/\n\n+/g, '</p><p>');
+  html = html.replace(/\n/g, '<br>');
+  html = '<p>' + html + '</p>';
+  html = html.replace(/<p>\s*(<\/?(?:h[1-6]|ul|ol|li|hr|div|table)[^>]*>)/g, '$1');
+  html = html.replace(/(<\/(?:h[1-6]|ul|ol|li|hr|div|table)>)\s*<\/p>/g, '$1');
+  return html;
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+</script>
+</body>
+</html>
