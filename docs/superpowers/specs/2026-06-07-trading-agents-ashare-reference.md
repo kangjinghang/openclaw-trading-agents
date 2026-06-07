@@ -4,9 +4,10 @@
 > - `D:\workspace\github\TradingAgents-AShare` — A 股 fork，侧重反思记忆 + 结构化辩论
 > - `D:\workspace\github\TradingAgents-astock` — 原版 TradingAgents (65K⭐) 的 A 股深度 fork，7 周改造，47 文件
 > - `D:\workspace\github\TradingAgents-CN` — 企业级 fork，FastAPI+Vue3 平台，ChromaDB 向量记忆，多市场支持
+> - `D:\workspace\github\PanWatch` — 自托管 AI 盯盘助手，FastAPI+React，实时监控+持仓管理+全渠道推送+模拟交易
 >
 > 记录时间：2026-06-07
-> 更新时间：2026-06-07
+> 更新时间：2026-06-08
 > 目的：记录值得借鉴的所有设计，供未来统一规划实现
 
 ---
@@ -1050,68 +1051,393 @@ frontend/src/
 
 ---
 
-## 附录 A：完整对比总结（AShare + astock + CN）
+---
 
-| 特性 | 我们 | AShare | astock | CN | 优先级 | 难度 |
-|------|------|--------|--------|-----|------|------|
-| 信号提取增强 | ✅ 3 层 fallback | 4 层 fallback | 类似 | 类似 | — | — |
-| VPA 量价预计算 | ✅ 已有 | 完整量价预计算 | 类似 | 无 | — | — |
-| 数据质量门控 | ✅ 已有 | 无 | 两层验证 | 无 | — | — |
-| 交易日历 | ❌ | 完整日历+市场阶段 | 完整日历+市场阶段 | 有 | **P0** | 很简单 |
-| 反思与记忆 | ❌ | BM25+5 角色记忆 | 简化版反思 | ChromaDB 向量记忆 | **P1** | 中等 |
-| 结构化 Claim 辩论 | ❌ | 完整 claim 状态机 | 无 | 无 | **P1** | 较难 |
-| 结构化输出 Schema | ❌ | 无 | Pydantic schema | 有 | **P1** | 中等 |
-| 断点续跑 | ❌ | 无 | SQLite checkpoint | 无 | **P1** | 难 |
-| ChromaDB 向量记忆 | ❌ | 无 | 无 | ChromaDB 语义检索 | **P1** | 中等 |
-| 反爬虫对抗 | ❌ | 无 | 东财限流 | curl_cffi TLS 指纹 | **P2** | 简单 |
-| Tool Call 限次 | ❌ | 无 | 无 | 计数器防死循环 | **P2** | 简单 |
-| 多市场支持 | ❌ 仅 A 股 | 仅 A 股 | 仅 A 股 | A 股+港股+美股 | **P2** | 中等 |
-| 更多免费数据源 | 部分 | 多源 | 7 个零鉴权源 | Tushare+AKShare+BaoStock+FinnHub | **P2** | 简单 |
-| 北向资金自缓存 | ❌ | 无 | 实时+CSV 累积 | 无 | **P2** | 简单 |
-| 多层缓存架构 | 文件缓存 | 无 | 无 | MongoDB+Redis+文件 | **P3** | 中等 |
-| Web UI | HTML 报告 | 无 | Streamlit | FastAPI+Vue3 | **P3** | 难 |
-| Docker 部署 | ❌ | 无 | Dockerfile | docker-compose+nginx | **P3** | 中等 |
-| 定时调度 | ❌ | DB+scheduler | 无 | Worker+调度器 | **P3** | 难 |
-| 回测服务 | ❌ | 完整回测框架 | 无 | 模拟交易 | **P3** | 难 |
+## 十五、建议池与稳定性逻辑（P0 · 简单）
 
-| 特性 | 我们 | AShare | astock | 优先级 | 难度 |
-|------|------|--------|--------|--------|------|
-| 信号提取增强 | ✅ 3 层 fallback | 4 层 fallback | 类似 | — | — |
-| VPA 量价预计算 | ✅ 已有 | 完整量价预计算 | 类似 | — | — |
-| 数据质量门控 | ✅ 已有 | 无 | 两层验证（硬检查+LLM复审） | — | — |
-| 交易日历 | ❌ | 完整日历+市场阶段 | 完整日历+市场阶段 | **P0** | 很简单 |
-| 反思与记忆 | ❌ | BM25+5 角色记忆 | 简化版反思（CSI300 基准） | **P1** | 中等 |
-| 结构化 Claim 辩论 | ❌ | 完整 claim 状态机 | 无 | **P1** | 较难 |
-| 结构化输出 Schema | ❌ | 无 | Pydantic schema 约束 LLM | **P1** | 中等 |
-| 断点续跑 | ❌ | 无 | SQLite per-ticker checkpoint | **P1** | 难 |
-| 更多数据源 | 部分 | 多源 | 7 个免费零鉴权数据源 | **P2** | 简单 |
-| 北向资金自缓存 | ❌ | 无 | 实时+本地 CSV 累积 | **P2** | 简单 |
-| 意图解析 | ticker+date | 自然语言→结构化意图 | 无 | **P2** | 中等 |
-| Context 体系 | 直接注入 | instrument/market/user 三级 | 类似 | **P2** | 中等 |
-| 回测服务 | ❌ | 完整回测框架 | 无 | **P3** | 难 |
-| 定时调度 | ❌ | DB + scheduler | 无 | **P3** | 难 |
-| Web UI | HTML 报告 | 无 | Streamlit 12 文件 | **P3** | 难 |
-| 多数据源注册表 | 脚本内 fallback | 抽象 Provider+Registry | interface.py 路由层 | **P3** | 中等 |
+### 来源
+
+PanWatch。`src/core/suggestion_pool.py`。
+
+### 问题
+
+我们的 analyst 报告是一次性的——分析完就结束，没有持久化、没有过期、没有去重。未来做定时调度时，同一股票可能短时间内被多次分析，产生大量重复建议。
+
+### 他们的做法
+
+```python
+# suggestion_pool.py — 统一建议池
+
+# 1. 按 Agent 设过期时间
+AGENT_EXPIRY_HOURS = {
+    "premarket_outlook": 12,   # 盘前建议当日有效
+    "intraday_monitor": 6,     # 盘中建议 6 小时有效
+    "daily_report": 16,        # 盘后建议隔夜有效
+    "news_digest": 12,         # 新闻速递半天有效
+}
+
+# 2. 去重窗口（同一 Agent 对同一股票）
+def _dedupe_window_minutes(agent_name):
+    if agent_name == "intraday_monitor": return 30
+    if agent_name == "news_digest": return 60
+    return 180
+
+# 3. 防翻转逻辑
+action_rank = {
+    "alert": 4, "avoid": 4, "sell": 4,
+    "reduce": 3, "buy": 2, "add": 2,
+    "hold": 1, "watch": 0,
+}
+# 新建议比旧的更温和时 → 保留旧的、只延长过期时间
+if (now - latest_created) <= change_window and new_r < old_r:
+    latest.expires_at = expires_at  # 延长
+    return True  # 不创建新建议
+```
+
+关键设计：
+- **持久化**：所有建议写入 SQLite，有 created_at / expires_at
+- **去重**：同一 Agent + 同一股票 + 相同 action+signal，在窗口内不重复
+- **防翻转**：建议有严重度排名，新建议更温和时保留旧的，避免 AI 观点反复摇摆
+- **过期清理**：定时清理 7 天前的过期记录
+
+### 实现建议
+
+在 `src/` 下新增 `suggestion-pool.ts`：
+- `saveSuggestion(report: AnalystReport, verdict: Verdict): void`
+- `getSuggestionsForStock(ticker: string): Suggestion[]`
+- `cleanupExpiredSuggestions(days: number): number`
+- 防翻转逻辑可直接复用 action_rank 思路
+- 存储可先用 JSON 文件，后续升级 SQLite
+
+---
+
+## 十六、事件驱动门控（P1 · 简单）
+
+### 来源
+
+PanWatch。`src/core/intraday_event_gate.py`。
+
+### 问题
+
+当前我们是手动触发分析。未来做盘中实时监控时，不能每次 tick 都调 AI（太贵、太慢），需要智能判断何时触发分析。
+
+### 他们的做法
+
+```python
+# intraday_event_gate.py — 事件门控
+
+def check_and_update(*, symbol, change_pct, volume_ratio, kline_summary,
+                     price_threshold, volume_threshold) -> EventDecision:
+    reasons = []
+
+    # 触发条件 1：涨跌幅超过阈值
+    if abs(change_pct) >= price_threshold:
+        reasons.append("price_threshold")
+
+    # 触发条件 2：量比超过阈值
+    if volume_ratio >= volume_threshold:
+        reasons.append("volume_threshold")
+
+    # 触发条件 3：技术状态变化（对比上一次）
+    new_sig = _tech_sig(kline_summary)  # {trend, macd, rsi, kdj, boll, pattern}
+    old_sig = previous_state.get("tech_sig")
+    if old_sig != new_sig:
+        reasons.append("tech_state_changed")
+
+    # 持久化最新状态到 JSON 文件
+    write_json_atomic(state_path, state)
+    return EventDecision(should_analyze=bool(reasons), reasons=reasons)
+```
+
+关键设计：
+- **状态 diff**：只对比技术指标组合是否变化，不关心数值大小
+- **持久化**：状态存 JSON 文件，重启不丢失
+- **原子写入**：write_json_atomic 先写临时文件再 rename，防数据损坏
+- **仅作参考信号**：门控不阻断分析，只是标记是否有事件触发，最终由上层决定是否通知
+
+### 实现建议
+
+在 `src/` 下新增 `event-gate.ts`：
+- `checkAndUpdate(symbol, quote, klineSummary, thresholds): EventDecision`
+- 状态持久化到 `~/.openclaw/trading-reports/event-state.json`
+- 技术指标摘要：`{ trend, macdStatus, rsiStatus, kdjStatus, bollStatus }`
+- 纯函数，无外部依赖
+
+---
+
+## 十七、数据覆盖度评分（P1 · 简单）
+
+### 来源
+
+PanWatch。`src/core/context_builder.py` 的 `_estimate_quality_score()`。
+
+### 问题
+
+我们的质量门控 (`quality-gate.ts`) 是**硬检查**——检查空报告、错误标记、短长度。但没有评估数据源的覆盖度：即使报告很长，如果多个数据源失败了，分析质量也不高。
+
+### 他们的做法
+
+```python
+def _estimate_quality_score(coverage) -> int:
+    score = 100
+    if not coverage.get("quote"):          score -= 35  # 无行情，最关键
+    if not coverage.get("technical"):      score -= 25  # 无技术面
+    if not coverage.get("kline_history"):  score -= 10  # 无历史K线
+    if not coverage.get("news_realtime"):  score -= 15  # 无实时新闻
+    if not coverage.get("news_extended"):  score -= 10  # 无扩展新闻
+    if not coverage.get("history_news"):   score -= 10  # 无历史新闻
+    if not coverage.get("events"):         score -= 5   # 无事件
+    return max(0, min(100, score))
+```
+
+质量分还会追踪趋势（improving / deteriorating / flat），存入数据库供后续参考。
+
+### 与我们现有质量门控的互补
+
+| 维度 | 我们现有 | PanWatch 做法 | 结合方案 |
+|------|---------|-------------|---------|
+| 报告内容 | A-F 硬检查 | — | 保留 |
+| 数据覆盖度 | — | 0-100 软评分 | 新增 |
+| 趋势追踪 | — | improving/flat/deteriorating | 新增 |
+
+### 实现建议
+
+在 `src/quality-gate.ts` 中扩展：
+- 新增 `estimateCoverageScore(sources: DataSourceResult[]): number`
+- 每个 analyst report 的 `data_sources_used` 已有字段，可直接统计
+- 覆盖度评分加入 `QualitySummary`，注入 prompt 时给下游 agent 参考
+
+---
+
+## 十八、预测结果追踪（P1 · 中等）
+
+### 来源
+
+PanWatch。`src/core/prediction_outcome.py` + `src/core/context_store.py`。
+
+### 问题
+
+分析做完就结束了，不知道历史建议是否靠谱。没有反馈回路就无法改进。
+
+### 他们的做法
+
+**分析时记录预测**（每次 AI 给出操作建议后自动执行）：
+```python
+# 记录预测：1 天后和 5 天后各一条
+for horizon in (1, 5):
+    save_agent_prediction_outcome(
+        agent_name="intraday_monitor",
+        stock_symbol=symbol,
+        prediction_date=today,
+        horizon_days=horizon,
+        action="buy",
+        trigger_price=current_price,
+    )
+```
+
+**后台定时评估**：
+```python
+def evaluate_pending_prediction_outcomes():
+    pending = list_pending_prediction_outcomes(max_horizon_days=10)
+    for rec in pending:
+        target_day = prediction_date + horizon_days
+        if target_day > today: continue  # 还没到期
+
+        # 拿目标日期的实际收盘价
+        outcome_price = _pick_close_on_or_before(klines, target_day)
+        outcome_ret = (outcome_price - base_price) / base_price * 100
+
+        mark_agent_prediction_outcome(
+            record_id=rec.id,
+            outcome_price=outcome_price,
+            outcome_return_pct=outcome_ret,
+            status="evaluated",
+        )
+```
+
+关键设计：
+- **多时间窗口**：1 天和 5 天两个 horizon，覆盖短线和中线
+- **K 线缓存**：评估时批量获取 K 线数据，避免逐条请求
+- **完整闭环**：预测 → 实际结果 → 准确率统计
+
+### 实现建议
+
+在 `src/` 下新增 `prediction-tracker.ts`：
+- 分析完成时自动记录：`savePrediction(ticker, date, action, price, horizonDays)`
+- 需要定时评估器（可集成到 dashboard 或独立 cron）
+- 存储：先 JSON 文件，后续 SQLite
+
+---
+
+## 十九、分层新闻上下文（P2 · 中等）
+
+### 来源
+
+PanWatch。`src/core/context_builder.py` + `src/core/news_ranker.py`。
+
+### 问题
+
+我们的 news.py 脚本只抓当日新闻，没有跨天记忆，没有时间分层。AI 缺少历史新闻背景。
+
+### 他们的做法
+
+```python
+# 三层新闻结构，按时间窗口分层
+news = {
+    "realtime": pack_news[:8],           # 最近 6-12h，最多 8 条
+    "extended": pack_news[:12],          # 最近 24-72h，最多 12 条
+    "history": historical_news[:15],     # 过去 7 天，最多 15 条
+    "history_topic": topic_summary,      # 历史新闻主题概括
+}
+```
+
+还有**跨天历史新闻记忆**：从数据库中读取过去 7 天所有 agent 分析过的相关新闻，按 symbol 过滤、去重、排序后提供给 AI。
+
+### 实现建议
+
+在 news.py 或 orchestrator 中：
+- 增加 `history_days=7` 参数，扩展新闻抓取时间窗口
+- 按时间分层打包，而不是一个大列表
+- 历史新闻做主题摘要（可用 AI 做，或简单用关键词聚合）
+
+---
+
+## 二十、持仓约束注入（P2 · 中等）
+
+### 来源
+
+PanWatch。`src/core/context_builder.py` 的 `_build_portfolio_constraints()`。
+
+### 问题
+
+我们的 trader prompt 不知道用户是否已经持有该股、仓位多大、成本多少。交易计划可能不切实际。
+
+### 他们的做法
+
+```python
+{
+    "has_position": True,
+    "position": {
+        "total_quantity": 1000,
+        "avg_cost": 25.80,
+        "trading_style": "swing",   # 短线/波段/长线
+    },
+    "single_position_ratio": 0.28,  # 该股占总仓位 28%
+    "risk_budget_hint": "normal",   # strict(>35%) / normal(>20%) / relaxed
+    "total_available_funds": 50000,
+}
+```
+
+### 实现建议
+
+- 在 `trading_full` 的调用参数中增加可选的持仓信息
+- 如果用户提供了持仓数据，注入 trader prompt
+- risk_budget_hint 让 AI 知道风控约束
+
+---
+
+## 二十一、通知去重与静默时段（P2 · 简单）
+
+### 来源
+
+PanWatch。`src/core/notify_dedupe.py` + `src/core/notify_policy.py`。
+
+### 问题
+
+如果未来加推送功能，需要防止短时间内重复推送相同内容。
+
+### 他们的做法
+
+- **内容去重**：基于 agent_name + title + content 哈希，TTL 内不重复推送
+- **静默时段**：可配置"免打扰"时间（如 23:00-07:00），支持跨午夜
+- **失败安全**：去重逻辑出错时宁可多发，不可漏发
+- **per-Agent TTL**：盘中 30 分钟、盘前 12 小时、新闻 1 小时
+
+### 实现建议
+
+等推送功能开发时再考虑。核心模式是 content hash + TTL + quiet hours。
+
+---
+
+## 二十二、模拟交易引擎（P3 · 复杂）
+
+### 来源
+
+PanWatch。`src/core/paper_trading_engine.py` + `src/core/paper_trading_scheduler.py`。
+
+### 功能概述
+
+- 多市场资金分配（CN:HK:US 可配比例）
+- 100 股整数倍买入
+- 动态止损/止盈计算
+- 峰值资产和最大回撤跟踪
+- 60 秒扫描 + 入场/出场自动触发
+- 完整的 P&L 报表
+
+### 借鉴价值
+
+长期可考虑，但优先级低。需要先有策略信号系统 (src/core/signals/) 才能驱动。
+
+---
+
+## 附录 A：完整对比总结（AShare + astock + CN + PanWatch）
+
+| 特性 | 我们 | AShare | astock | CN | PanWatch | 优先级 | 难度 |
+|------|------|--------|--------|-----|----------|--------|------|
+| 信号提取增强 | ✅ 3 层 fallback | 4 层 fallback | 类似 | 类似 | — | — | — |
+| VPA 量价预计算 | ✅ 已有 | 完整量价预计算 | 类似 | 无 | 完整技术指标 | — | — |
+| 数据质量门控 | ✅ 硬检查 | 无 | 两层验证 | 无 | 覆盖度评分 | — | — |
+| 交易日历 | ❌ | 完整日历+市场阶段 | 完整日历+市场阶段 | 有 | 按市场交易时段 | **P0** | 很简单 |
+| 建议池+防翻转 | ❌ | 无 | 无 | 无 | 完整持久化+去重+防翻转 | **P0** | 简单 |
+| 事件驱动门控 | ❌ | 无 | 无 | 无 | 技术状态 diff 触发 | **P1** | 简单 |
+| 数据覆盖度评分 | ❌ | 无 | 无 | 无 | 0-100 软评分+趋势追踪 | **P1** | 简单 |
+| 预测结果追踪 | ❌ | 无 | 无 | 无 | 多 horizon 闭环反馈 | **P1** | 中等 |
+| 反思与记忆 | ❌ | BM25+5 角色记忆 | 简化版反思 | ChromaDB 向量记忆 | 跨天上下文快照 | **P1** | 中等 |
+| 结构化 Claim 辩论 | ❌ | 完整 claim 状态机 | 无 | 无 | 无 | **P1** | 较难 |
+| 结构化输出 Schema | ❌ | 无 | Pydantic schema | 有 | JSON+宽松 fallback | **P1** | 中等 |
+| 断点续跑 | ❌ | 无 | SQLite checkpoint | 无 | 无 | **P1** | 难 |
+| ChromaDB 向量记忆 | ❌ | 无 | 无 | ChromaDB 语义检索 | 无 | **P1** | 中等 |
+| 分层新闻上下文 | ❌ | 无 | 无 | 无 | realtime/extended/history 三层 | **P2** | 中等 |
+| 持仓约束注入 | ❌ | 无 | 无 | 无 | 仓位占比+风控提示+交易风格 | **P2** | 中等 |
+| 通知去重+静默 | ❌ | 无 | 无 | 无 | content hash+TTL+quiet hours | **P2** | 简单 |
+| 反爬虫对抗 | ❌ | 无 | 东财限流 | curl_cffi TLS 指纹 | 腾讯 API 稳定源 | **P2** | 简单 |
+| Tool Call 限次 | ❌ | 无 | 无 | 计数器防死循环 | 无 | **P2** | 简单 |
+| 多市场支持 | ❌ 仅 A 股 | 仅 A 股 | 仅 A 股 | A 股+港股+美股 | A 股+港股+美股 | **P2** | 中等 |
+| 更多免费数据源 | 部分 | 多源 | 7 个零鉴权源 | Tushare+AKShare+BaoStock+FinnHub | efinance+akshare+tencent | **P2** | 简单 |
+| 北向资金自缓存 | ❌ | 无 | 实时+CSV 累积 | 无 | 无 | **P2** | 简单 |
+| 模拟交易引擎 | ❌ | 完整回测框架 | 无 | 无 | Paper Trading 完整系统 | **P3** | 难 |
+| 多层缓存架构 | 文件缓存 | 无 | 无 | MongoDB+Redis+文件 | SQLite+JSON 文件 | **P3** | 中等 |
+| Web UI | HTML 报告 | 无 | Streamlit | FastAPI+Vue3 | FastAPI+React+shadcn/ui | **P3** | 难 |
+| Docker 部署 | ❌ | 无 | Dockerfile | docker-compose+nginx | Docker 一键部署 | **P3** | 中等 |
+| 定时调度 | ❌ | DB+scheduler | 无 | Worker+调度器 | APScheduler 多调度器 | **P3** | 难 |
 
 ## 附录 B：推荐实现顺序
 
 ```
 Phase 1（基础加固）
   ├── 交易日历（防止非交易日浪费 LLM 调用）
+  ├── 建议池+防翻转（操作建议持久化、去重）
   └── 结构化输出 Schema（减少解析失败率）
 
 Phase 2（智能增强）
+  ├── 事件驱动门控（智能调度，减少无效 AI 调用）
+  ├── 数据覆盖度评分（与现有质量门控互补）
+  ├── 预测结果追踪（闭环反馈，验证分析准确率）
   ├── 反思与记忆系统（从历史中学习）
   ├── 结构化 Claim 辩论（提升辩论质量）
   └── 断点续跑（防止长时间分析中断丢失）
 
-Phase 3（数据扩展）
+Phase 3（数据扩展 + 上下文增强）
+  ├── 分层新闻上下文（跨天新闻记忆）
+  ├── 持仓约束注入（交易计划更贴合实际）
   ├── 腾讯财经 PE/PB 数据
   ├── 同花顺 EPS 一致预期
   └── 北向资金本地缓存
 
 Phase 4（平台化，可选）
+  ├── 通知去重+静默时段
+  ├── 模拟交易引擎
   ├── Web UI
   ├── 定时调度
-  └── 回测服务
+  └── 多市场支持
 ```
