@@ -23,3 +23,9 @@ export const LLM_CALL_STAGGER_MS = 800;
 
 /** Default concurrency for parallel operations */
 export const DEFAULT_CONCURRENCY = 3;
+
+/** TTL for data script cache entries (4 hours — covers repeated runs same day) */
+export const CACHE_TTL_MS = 4 * 60 * 60 * 1000;
+
+/** Default cache directory for data script results */
+export const DEFAULT_CACHE_DIR = "~/.openclaw/cache";
