@@ -70,7 +70,7 @@ describe('runResearchManager', () => {
     ];
     const debate = mockDebateResult();
 
-    const result = await runResearchManager(reports, debate, mockConfig, mockClient, mockTraceLogger);
+    const result = await runResearchManager(reports, debate, "", mockConfig, mockClient, mockTraceLogger);
 
     expect(result.direction).toBe('Overweight');
     expect(result.confidence).toBe(0.72);
@@ -108,7 +108,7 @@ describe('runResearchManager', () => {
     ];
     const debate = mockDebateResult();
 
-    const result = await runResearchManager(reports, debate, mockConfig, mockClient, mockTraceLogger);
+    const result = await runResearchManager(reports, debate, "", mockConfig, mockClient, mockTraceLogger);
 
     expect(result.direction).toBe('Buy');
     expect(result.verdict.direction).toBe('买入');
@@ -135,7 +135,7 @@ describe('runResearchManager', () => {
     ];
     const debate = mockDebateResult();
 
-    const result = await runResearchManager(reports, debate, mockConfig, mockClient, mockTraceLogger);
+    const result = await runResearchManager(reports, debate, "", mockConfig, mockClient, mockTraceLogger);
 
     expect(result.direction).toBe('Hold');
     expect(result.confidence).toBe(0.5);
@@ -163,7 +163,7 @@ describe('runResearchManager', () => {
     ];
     const debate = mockDebateResult();
 
-    const result = await runResearchManager(reports, debate, mockConfig, mockClient, mockTraceLogger);
+    const result = await runResearchManager(reports, debate, "", mockConfig, mockClient, mockTraceLogger);
 
     expect(result.direction).toBe('Sell');
     expect(result.bull_score).toBe(50);

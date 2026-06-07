@@ -108,6 +108,7 @@ describe("runTrader", () => {
     const result = await runTrader(
       decision,
       reports,
+      "",
       mockConfig,
       mockClient,
       mockTraceLogger
@@ -167,6 +168,7 @@ describe("runTrader", () => {
     const result = await runTrader(
       decision,
       [],
+      "",
       mockConfig,
       mockClient,
       mockTraceLogger
@@ -219,6 +221,7 @@ describe("runTrader", () => {
     const result = await runTrader(
       decision,
       [],
+      "",
       mockConfig,
       mockClient,
       mockTraceLogger
@@ -263,6 +266,7 @@ describe("runTrader", () => {
     const result = await runTrader(
       mockResearchDecision(),
       [],
+      "",
       mockConfig,
       mockClient,
       mockTraceLogger
@@ -310,6 +314,7 @@ Standard T+1.
     const result = await runTrader(
       mockResearchDecision(),
       [],
+      "",
       mockConfig,
       mockClient,
       mockTraceLogger
@@ -359,6 +364,7 @@ Standard.
     await runTrader(
       mockResearchDecision(),
       [],
+      "",
       mockConfig,
       mockClient,
       mockTraceLogger

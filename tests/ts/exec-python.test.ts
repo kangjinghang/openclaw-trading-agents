@@ -4,7 +4,27 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execPython, execSkillScript } from '../../src/exec-python';
 import { writeFile, rm } from 'fs/promises';
 import { join } from 'path';
-import { mkdir } from 'fs/promises';
+import { mkdir, readdir } from 'fs/promises';
+import * as os from 'os';
+import * as path from 'path';
+import * as fs from 'fs';
+
+/** Clear all cache files to prevent cross-run interference */
+async function clearCache() {
+  const cacheDir = join(os.homedir(), '.openclaw', 'cache');
+  try {
+    const files = await readdir(cacheDir);
+    for (const f of files) {
+      if (f.endsWith('.json')) {
+        await rm(join(cacheDir, f), { force: true });
+      }
+    }
+  } catch {
+    // dir may not exist
+  }
+}
+
+// Tests use useCache:false to avoid cache interference
 
 describe('execPython', () => {
   const tmpDir = join(process.cwd(), 'test-tmp');
@@ -13,10 +33,12 @@ describe('execPython', () => {
   beforeEach(async () => {
     await mkdir(tmpDir, { recursive: true });
     testScriptPath = join(tmpDir, 'test-script.py');
+    await clearCache();
   });
 
   afterEach(async () => {
     await rm(tmpDir, { recursive: true, force: true });
+    await clearCache();
   });
 
   it('should execute Python script and return JSON output', async () => {
@@ -33,7 +55,7 @@ print(json.dumps(result))
 `;
 
     await writeFile(testScriptPath, script, 'utf-8');
-    const result = await execPython(testScriptPath);
+    const result = await execPython(testScriptPath, [], null, 'python3', 30_000, false);
 
     expect(result.success).toBe(true);
     expect(result.data).toEqual({
@@ -57,7 +79,7 @@ print(json.dumps(result))
 `;
 
     await writeFile(testScriptPath, script, 'utf-8');
-    const result = await execPython(testScriptPath, ['arg1', 'arg2', 'arg3']);
+    const result = await execPython(testScriptPath, ['arg1', 'arg2', 'arg3'], null, 'python3', 30_000, false);
 
     expect(result.success).toBe(true);
     expect(result.data).toEqual({
@@ -82,7 +104,7 @@ print(json.dumps(result))
 
     await writeFile(testScriptPath, script, 'utf-8');
     const inputData = { ticker: 'AAPL', timeframe: '1d' };
-    const result = await execPython(testScriptPath, [], inputData);
+    const result = await execPython(testScriptPath, [], inputData, 'python3', 30_000, false);
 
     expect(result.success).toBe(true);
     expect(result.data).toEqual({
@@ -99,7 +121,7 @@ raise ValueError("This is a test error")
 `;
 
     await writeFile(testScriptPath, script, 'utf-8');
-    const result = await execPython(testScriptPath);
+    const result = await execPython(testScriptPath, [], null, 'python3', 30_000, false);
 
     expect(result.success).toBe(false);
     expect(result.error).toBeDefined();
@@ -114,7 +136,7 @@ print("More invalid output")
 `;
 
     await writeFile(testScriptPath, script, 'utf-8');
-    const result = await execPython(testScriptPath);
+    const result = await execPython(testScriptPath, [], null, 'python3', 30_000, false);
 
     expect(result.success).toBe(false);
     expect(result.error).toBeDefined();
@@ -123,7 +145,7 @@ print("More invalid output")
 
   it('should handle missing Python interpreter', async () => {
     // Use a non-existent Python command
-    const result = await execPython(testScriptPath, [], null, 'nonexistent-python');
+    const result = await execPython(testScriptPath, [], null, 'nonexistent-python', 30_000, false);
 
     expect(result.success).toBe(false);
     expect(result.error).toBeDefined();
@@ -135,7 +157,7 @@ print("More invalid output")
 `;
 
     await writeFile(testScriptPath, script, 'utf-8');
-    const result = await execPython(testScriptPath);
+    const result = await execPython(testScriptPath, [], null, 'python3', 30_000, false);
 
     expect(result.success).toBe(false);
     expect(result.error).toBeDefined();
@@ -150,10 +172,12 @@ describe('execSkillScript', () => {
     await mkdir(join(tmpDir, 'skills'), { recursive: true });
     await mkdir(join(tmpDir, 'skills', 'test-skill'), { recursive: true });
     await mkdir(join(tmpDir, 'skills', 'test-skill', 'scripts'), { recursive: true });
+    await clearCache();
   });
 
   afterEach(async () => {
     await rm(tmpDir, { recursive: true, force: true });
+    await clearCache();
   });
 
   it('should execute a skill script by name', async () => {

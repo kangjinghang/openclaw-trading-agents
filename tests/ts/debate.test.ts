@@ -71,7 +71,7 @@ describe("runBullBearDebate", () => {
     mockCreate.mockResolvedValueOnce(mockDebateResponse("bear", 2) as any);
 
     const reports = mockAnalystReports();
-    const result = await runBullBearDebate(reports, mockConfig, mockClient, mockTraceLogger);
+    const result = await runBullBearDebate(reports, "", mockConfig, mockClient, mockTraceLogger);
 
     expect(mockCreate).toHaveBeenCalledTimes(4);
     expect(result.rounds).toHaveLength(2);
@@ -92,7 +92,7 @@ describe("runBullBearDebate", () => {
     mockCreate.mockResolvedValueOnce(mockDebateResponse("bear", 2) as any);
 
     const reports = mockAnalystReports();
-    await runBullBearDebate(reports, mockConfig, mockClient, mockTraceLogger);
+    await runBullBearDebate(reports, "", mockConfig, mockClient, mockTraceLogger);
 
     // Bear in round 1 should receive Bull's claims
     const bearR1Call = mockCreate.mock.calls[1];
