@@ -12,7 +12,7 @@ from http_helpers import tencent_quote, em_get, output_json, normalize_ticker
 
 
 def fetch_fundamentals(ticker, date):
-    """Fetch fundamentals from Tencent (valuation) + mootdx (financials) + 同花顺 (EPS)."""
+    """Fetch fundamentals from Tencent (valuation) + mootdx (financials) + Eastmoney (EPS)."""
     code = normalize_ticker(ticker)
     data = {"ticker": code, "date": date}
 
@@ -35,7 +35,7 @@ def fetch_fundamentals(ticker, date):
     except Exception as e:
         data["valuation_error"] = str(e)
 
-    # 2. mootdx: quarterly financial snapshot
+    # 2. mootdx: quarterly financial snapshot (expanded fields)
     try:
         from mootdx.quotes import Quotes
         market = 1 if code.startswith("6") else 0
@@ -53,6 +53,9 @@ def fetch_fundamentals(ticker, date):
                 "weifenpeilirun": "undistributed_profit",
                 "zongzichan": "total_assets",
                 "gudongrenshu": "shareholder_count",
+                "jingyingxianjinliu": "operating_cash_flow",
+                "zichanfuzhailv": "debt_ratio",
+                "xishoumaoliv": "gross_margin",
             }
             snapshot = {}
             for py_name, en_name in field_map.items():
@@ -60,6 +63,14 @@ def fetch_fundamentals(ticker, date):
                     val = row[py_name]
                     if val is not None and str(val) != "nan":
                         snapshot[en_name] = float(val) if not isinstance(val, str) else val
+
+            # Compute ROE if we have net_profit and net_assets
+            if snapshot.get("net_profit") and snapshot.get("net_assets"):
+                try:
+                    snapshot["roe"] = round(snapshot["net_profit"] / snapshot["net_assets"] * 100, 2)
+                except (ZeroDivisionError, TypeError):
+                    pass
+
             if snapshot:
                 data["financial_snapshot"] = snapshot
     except Exception as e:
@@ -91,7 +102,104 @@ def fetch_fundamentals(ticker, date):
     except Exception as e:
         data["stock_info_error"] = str(e)
 
+    # 4. Eastmoney Datacenter: quarterly financial trends (last 4 quarters)
+    try:
+        data["quarterly_trends"] = _fetch_quarterly_financials(code)
+    except Exception as e:
+        data["quarterly_trends_error"] = str(e)
+
+    # 5. Eastmoney: consensus EPS / target price / ratings
+    try:
+        data["consensus_eps"] = _fetch_consensus_eps(code)
+    except Exception as e:
+        data["consensus_eps_error"] = str(e)
+
     return data
+
+
+def _fetch_quarterly_financials(code):
+    """Fetch last 4 quarters of revenue/net profit/EPS/YoY from Eastmoney Datacenter."""
+    market_code = "1" if code.startswith("6") else "0"
+    secid = f"{market_code}.{code}"
+
+    url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+    params = {
+        "reportName": "RPT_LICO_FN_CPD",
+        "columns": "ALL",
+        "filter": f'(SECURITY_CODE="{code}")',
+        "pageNumber": "1",
+        "pageSize": "5",
+        "sortColumns": "REPORT_DATE",
+        "sortTypes": "-1",
+        "source": "WEB",
+        "client": "WEB",
+    }
+    r = em_get(url, params=params, timeout=15)
+    d = r.json()
+
+    results = []
+    items = d.get("result", {}).get("data", [])
+    for item in (items or [])[:4]:
+        quarter = {}
+        if item.get("REPORT_DATE"):
+            quarter["report_date"] = item["REPORT_DATE"][:10]
+        if item.get("TOTAL_OPERATE_INCOME"):
+            quarter["revenue_yi"] = round(float(item["TOTAL_OPERATE_INCOME"]) / 1e8, 2)
+        if item.get("PARENT_NETPROFIT"):
+            quarter["net_profit_yi"] = round(float(item["PARENT_NETPROFIT"]) / 1e8, 2)
+        if item.get("BASIC_EPS"):
+            quarter["eps"] = float(item["BASIC_EPS"])
+        if item.get("TOTAL_OPERATE_INCOME") and item.get("YSTZ"):
+            quarter["revenue_yoy"] = round(float(item["YSTZ"]), 2)
+        if item.get("PARENT_NETPROFIT") and item.get("SJLTZ"):
+            quarter["net_profit_yoy"] = round(float(item["SJLTZ"]), 2)
+        if item.get("WEIGHTAVG_ROE"):
+            quarter["roe"] = round(float(item["WEIGHTAVG_ROE"]), 2)
+        if item.get("XSMLL"):
+            quarter["gross_margin"] = round(float(item["XSMLL"]), 2)
+        results.append(quarter)
+
+    return results
+
+
+def _fetch_consensus_eps(code):
+    """Fetch analyst consensus EPS / target price / rating from Eastmoney."""
+    market_code = "1" if code.startswith("6") else "0"
+    secid = f"{market_code}.{code}"
+
+    url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+    params = {
+        "reportName": "RPT_WEB_RESPREDICT",
+        "columns": "ALL",
+        "filter": f'(SECURITY_CODE="{code}")',
+        "pageNumber": "1",
+        "pageSize": "5",
+        "sortColumns": "REPORTDATE",
+        "sortTypes": "-1",
+        "source": "WEB",
+        "client": "WEB",
+    }
+    r = em_get(url, params=params, timeout=15)
+    d = r.json()
+
+    items = d.get("result", {}).get("data", [])
+    if not items:
+        return None
+
+    item = items[0]
+    result = {}
+    if item.get("PREDICT_EPS_THISYEAR"):
+        result["consensus_eps"] = round(float(item["PREDICT_EPS_THISYEAR"]), 2)
+    if item.get("PREDICT_EPS_NEXTYEAR"):
+        result["consensus_eps_next_year"] = round(float(item["PREDICT_EPS_NEXTYEAR"]), 2)
+    if item.get("TARGET_PRICE"):
+        result["target_price"] = round(float(item["TARGET_PRICE"]), 2)
+    if item.get("RESEARCHER_NUM"):
+        result["analyst_count"] = int(item["RESEARCHER_NUM"])
+    if item.get("RATING"):
+        result["avg_rating"] = item["RATING"]
+
+    return result if result else None
 
 
 def main():

@@ -111,6 +111,7 @@ export interface ScriptResult {
   error?: string;
   _source?: string;
   vpa?: string;
+  technical_indicators?: string;
 }
 
 // ── Phase 3: Debate types ──

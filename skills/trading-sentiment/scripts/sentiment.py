@@ -10,6 +10,89 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"
 from http_helpers import em_get, output_json, normalize_ticker
 
 
+# ── Sentiment keyword dictionaries ──────────────────────────────
+
+_POSITIVE_WORDS = [
+    "利好", "上涨", "涨停", "大涨", "暴涨", "突破", "新高", "业绩大增", "超预期",
+    "增持", "回购", "分红", "纳入", "中标", "签约", "获批", "合作", "创新高",
+    "景气", "增长", "盈利", "翻倍", "扭亏", "龙头", "强势", "资金流入", "反弹",
+    "看好", "推荐", "买入", "升级", "催化", "加速", "扩张", "订单", "放量上涨",
+    "政策利好", "降准", "降息", "扶持", "补贴", "刺激",
+]
+
+_NEGATIVE_WORDS = [
+    "利空", "下跌", "跌停", "大跌", "暴跌", "新低", "亏损", "下滑", "减持",
+    "质押", "违规", "处罚", "退市", "风险", "警示", "警告", "诉讼", "仲裁",
+    "业绩下滑", "不及预期", "商誉减值", "爆雷", "违约", "清仓", "资金流出",
+    "恐慌", "抛售", "看空", "下调", "降级", "收紧", "调控", "限制", "缩量下跌",
+    "调控", "监管", "问询", "立案", "冻结", "查封", "强制", "暴跌",
+]
+
+
+def _score_sentiment(articles):
+    """Score news sentiment using keyword matching. Returns score, label, and counts."""
+    positive_count = 0
+    negative_count = 0
+    neutral_count = 0
+
+    for article in articles:
+        title = article.get("title", "")
+        content = article.get("content", "")
+        text = f"{title} {content}"
+
+        pos_hits = sum(1 for w in _POSITIVE_WORDS if w in text)
+        neg_hits = sum(1 for w in _NEGATIVE_WORDS if w in text)
+
+        if pos_hits > neg_hits:
+            positive_count += 1
+        elif neg_hits > pos_hits:
+            negative_count += 1
+        else:
+            neutral_count += 1
+
+    total = len(articles)
+    if total == 0:
+        return {"score": 0.0, "label": "中性", "positive": 0, "negative": 0, "neutral": 0}
+
+    # Score: normalized to [-1, +1]
+    score = (positive_count - negative_count) / total
+
+    # Label
+    if score > 0.5:
+        label = "乐观"
+    elif score > 0.2:
+        label = "偏乐观"
+    elif score > -0.2:
+        label = "中性"
+    elif score > -0.5:
+        label = "偏悲观"
+    else:
+        label = "悲观"
+
+    return {
+        "score": round(score, 3),
+        "label": label,
+        "positive": positive_count,
+        "negative": negative_count,
+        "neutral": neutral_count,
+        "total": total,
+    }
+
+
+def _check_hot_rank_position(hot_rank, code):
+    """Check if the stock appears in hot rankings and return its position."""
+    if not hot_rank:
+        return None
+    for i, item in enumerate(hot_rank):
+        if item.get("code") == code:
+            return {
+                "rank": i + 1,
+                "name": item.get("name", ""),
+                "change_pct": item.get("change_pct", 0),
+            }
+    return None
+
+
 def _fetch_hot_rank(date):
     """Fetch hot stock rankings from Eastmoney."""
     try:
@@ -75,13 +158,21 @@ def _fetch_stock_news_eastmoney(code, page_size=15):
 
 
 def fetch_sentiment(ticker, date):
-    """Fetch sentiment indicators."""
+    """Fetch sentiment indicators with pre-computed sentiment score."""
     code = normalize_ticker(ticker)
     data = {"ticker": code, "date": date}
 
     data["hot_rank"] = _fetch_hot_rank(date)
-    data["stock_news"] = _fetch_stock_news_eastmoney(code)
-    data["news_count"] = len(data.get("stock_news") or [])
+    articles = _fetch_stock_news_eastmoney(code)
+    data["stock_news"] = articles
+    data["news_count"] = len(articles)
+
+    # Pre-compute sentiment score
+    if articles:
+        data["news_sentiment"] = _score_sentiment(articles)
+
+    # Check hot rank position
+    data["stock_hot_position"] = _check_hot_rank_position(data.get("hot_rank"), code)
 
     return data
 

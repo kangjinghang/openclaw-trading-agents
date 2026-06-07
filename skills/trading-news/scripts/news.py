@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Fetch stock news (individual + macro/global) for A-share stocks."""
+"""Fetch stock news (individual + macro/global) for A-share stocks with time-layered categorization."""
 
 import argparse
 import json
 import sys
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
 from http_helpers import em_get, output_json, normalize_ticker
@@ -13,7 +13,7 @@ from http_helpers import em_get, output_json, normalize_ticker
 _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
 
-def _fetch_news_eastmoney(code, page_size=20):
+def _fetch_news_eastmoney(code, page_size=50):
     """Fetch individual stock news from Eastmoney search API."""
     url = "https://search-api-web.eastmoney.com/search/jsonp"
     inner_param = {
@@ -92,13 +92,75 @@ def _fetch_global_news_cls(limit=10):
     return articles
 
 
+def _parse_news_time(time_str):
+    """Parse news time string into datetime. Returns None if parsing fails."""
+    if not time_str:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y年%m月%d日 %H:%M"):
+        try:
+            return datetime.strptime(time_str.strip(), fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _categorize_news(articles, reference_date_str):
+    """Categorize articles into time layers based on reference date."""
+    try:
+        ref_date = datetime.strptime(reference_date_str, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        ref_date = datetime.now()
+
+    now = ref_date.replace(hour=23, minute=59, second=59)
+    cutoff_6h = now - timedelta(hours=6)
+    cutoff_24h = now - timedelta(hours=24)
+    cutoff_7d = now - timedelta(days=7)
+
+    layers = {
+        "realtime_6h": [],
+        "extended_24h": [],
+        "history_7d": [],
+    }
+
+    for article in articles:
+        pub_time = _parse_news_time(article.get("time", ""))
+        if pub_time is None:
+            layers["history_7d"].append(article)
+            continue
+
+        if pub_time >= cutoff_6h:
+            layers["realtime_6h"].append(article)
+        elif pub_time >= cutoff_24h:
+            layers["extended_24h"].append(article)
+        elif pub_time >= cutoff_7d:
+            layers["history_7d"].append(article)
+        else:
+            # Older than 7 days, skip from layers but keep in flat list
+            pass
+
+    stats = {
+        "realtime_6h_count": len(layers["realtime_6h"]),
+        "extended_24h_count": len(layers["extended_24h"]),
+        "history_7d_count": len(layers["history_7d"]),
+        "total_categorized": sum(len(v) for v in layers.values()),
+    }
+
+    return layers, stats
+
+
 def fetch_news(ticker, date, lookback_days=7):
-    """Fetch individual stock news + macro news."""
+    """Fetch individual stock news + macro news with time-layered categorization."""
     code = normalize_ticker(ticker)
     data = {"ticker": code, "date": date, "lookback_days": lookback_days}
 
     try:
-        data["stock_news"] = _fetch_news_eastmoney(code)
+        articles = _fetch_news_eastmoney(code)
+        data["stock_news"] = articles
+
+        # Categorize into time layers
+        layers, stats = _categorize_news(articles, date)
+        data["news_layers"] = layers
+        data["layer_stats"] = stats
     except Exception as e:
         data["stock_news_error"] = str(e)
 

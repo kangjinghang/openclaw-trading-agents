@@ -29,6 +29,99 @@ import * as fs from "fs";
 
 const SKILLS_DIR = path.resolve(__dirname, "../skills");
 
+/** Generate a data quality description for an analyst based on their ScriptResult */
+function generateDataQuality(result: ScriptResult): string {
+  if (!result.success) {
+    return "⚠️ 数据缺失：数据源获取失败，以下分析中必须明确声明数据不可用，不得推测或编造数据。置信度应降低。";
+  }
+
+  const issues: string[] = [];
+
+  // Check for partial errors
+  if (result.error) {
+    issues.push(`数据源返回错误: ${result.error}`);
+  }
+
+  // Check data richness
+  const data = result.data;
+  if (data) {
+    const fieldCount = Object.keys(data).length;
+    const hasErrorFields = Object.keys(data).some(k => k.endsWith('_error'));
+
+    if (hasErrorFields) {
+      const errorFields = Object.keys(data).filter(k => k.endsWith('_error'));
+      issues.push(`部分数据缺失: ${errorFields.map(k => k.replace('_error', '')).join(', ')}。请在分析中区分有数据支撑的结论和推测性结论。`);
+    }
+
+    if (fieldCount < 3) {
+      issues.push(`数据字段较少（仅 ${fieldCount} 个字段），置信度应适当降低。`);
+    }
+  }
+
+  if (issues.length > 0) {
+    return `⚠️ 数据部分缺失：${issues.join(' ')}`;
+  }
+
+  return "✅ 数据完整：数据源获取正常，所有字段可用。可以正常进行分析和判断。";
+}
+
+/** Generate analyst consensus summary from all analyst reports */
+function generateAnalystConsensus(reports: AnalystReport[]): string {
+  const validReports = reports.filter(r => !r.content.startsWith("[分析失败"));
+  if (validReports.length === 0) {
+    return "⚠️ 所有分析师报告均失败，无法计算一致性指标。";
+  }
+
+  const directionCounts: Record<string, { count: number; roles: string[] }> = {};
+  for (const report of validReports) {
+    const dir = report.verdict.direction;
+    if (!directionCounts[dir]) {
+      directionCounts[dir] = { count: 0, roles: [] };
+    }
+    directionCounts[dir].count++;
+    directionCounts[dir].roles.push(report.role);
+  }
+
+  const sorted = Object.entries(directionCounts).sort((a, b) => b[1].count - a[1].count);
+  const total = validReports.length;
+
+  const lines: string[] = [
+    `### 分析师一致性指标（共 ${total} 位分析师）\n`,
+  ];
+
+  for (const [dir, info] of sorted) {
+    const pct = Math.round(info.count / total * 100);
+    lines.push(`- **${dir}**: ${info.count}/${total} (${pct}%) — ${info.roles.join(', ')}`);
+  }
+
+  const topDir = sorted[0][0];
+  const topCount = sorted[0][1].count;
+  const topPct = Math.round(topCount / total * 100);
+
+  let divergence: string;
+  if (topPct >= 70) {
+    divergence = "低（高度一致）";
+  } else if (topPct >= 50) {
+    divergence = "中（多数一致）";
+  } else {
+    divergence = "高（分歧较大）";
+  }
+
+  lines.push(`\n**共识方向**: ${topDir} | **一致比例**: ${topPct}% | **分歧度**: ${divergence}`);
+
+  // Decision guidance
+  lines.push("\n**决策指引**:");
+  if (topPct >= 70) {
+    lines.push(`- 分析师高度一致（${topPct}% ${topDir}），可提高决策置信度`);
+  } else if (topPct >= 50) {
+    lines.push(`- 多数分析师一致（${topPct}% ${topDir}），建议适当降低仓位`);
+  } else {
+    lines.push(`- 分析师分歧较大（最高 ${topPct}% ${topDir}），建议降低仓位或持有观望`);
+  }
+
+  return lines.join("\n");
+}
+
 /** Pre-run validation: check environment before starting analysis */
 function validateEnvironment(reportDir: string): void {
   const errors: string[] = [];
@@ -127,7 +220,7 @@ const ANALYST_CONFIGS = [
     prompt: "analysts/market.md",
     systemPrompt: "You are a professional market analyst specializing in Chinese A-share markets.",
     dataKey: "kline",
-    extraArgs: (_ticker: string) => ["--count", "60"],
+    extraArgs: (_ticker: string) => ["--count", "120"],
   },
   {
     role: "fundamentals",
@@ -224,15 +317,21 @@ async function runAnalystPhase(
 
   const dataMap: Record<string, string> = {};
   const vpaMap: Record<string, string> = {};
+  const tiMap: Record<string, string> = {};
+  const dataQualityMap: Record<string, string> = {};
   for (const { role, result } of dataResults) {
     if (result.success && result.data) {
       dataMap[role] = JSON.stringify(result.data, null, 2);
       if (result.vpa) {
         vpaMap[role] = result.vpa;
       }
+      if (result.technical_indicators) {
+        tiMap[role] = result.technical_indicators;
+      }
     } else {
       dataMap[role] = `[数据缺失: ${result.error || "unknown error"}]`;
     }
+    dataQualityMap[role] = generateDataQuality(result);
   }
 
   // ── Phase 2: Run all 7 analysts with concurrency limit ─────────
@@ -249,7 +348,7 @@ async function runAnalystPhase(
         const dataJson = dataMap[cfg.role];
         const userMessage = loadAndRender(
           cfg.prompt,
-          { ticker, date, [cfg.dataKey]: dataJson, vpa: vpaMap[cfg.role] || "" },
+          { ticker, date, [cfg.dataKey]: dataJson, vpa: vpaMap[cfg.role] || "", technical_indicators: tiMap[cfg.role] || "", data_quality: dataQualityMap[cfg.role] },
           promptsBaseDir
         );
 
@@ -332,7 +431,9 @@ export async function runQuickAnalysis(
     .map((r) => `## ${r.role} 分析师报告\n\n${r.content}\n\nVERDICT: ${r.verdict.direction} — ${r.verdict.reason}`)
     .join("\n\n---\n\n");
 
-  const portfolioPrompt = loadAndRender("portfolio_manager.md", { ticker, date, analyst_reports: allReportsText, quality_summary: quality.summary_text }, promptsBaseDir);
+  const analystConsensus = generateAnalystConsensus(analystReports);
+
+  const portfolioPrompt = loadAndRender("portfolio_manager.md", { ticker, date, analyst_reports: allReportsText, quality_summary: quality.summary_text, analyst_consensus: analystConsensus }, promptsBaseDir);
 
   const portfolioResult = await callLLM(openaiClient, {
     model: config.models.decision,
