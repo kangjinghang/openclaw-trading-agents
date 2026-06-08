@@ -9,7 +9,7 @@ import * as http from "http";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { listReports, readReport, readDetail, readTraces, readTracesByTickerDate } from "./dashboard-api";
+import { listReports, readReport, readDetail, readTraces, readTracesByTickerDate, readDataSources } from "./dashboard-api";
 
 const DEFAULT_PORT = 3210;
 
@@ -113,12 +113,20 @@ export function startServer(reportDir: string, port: number): http.Server {
       const date = url.searchParams.get("date");
 
       if (runId) {
-        handleJson(res, readTraces(runId));
+        handleJson(res, readTraces(absReportDir, runId));
       } else if (ticker && date) {
-        handleJson(res, readTracesByTickerDate(ticker, date));
+        handleJson(res, readTracesByTickerDate(absReportDir, ticker, date));
       } else {
         handleJson(res, []);
       }
+      return;
+    }
+
+    // GET /api/data/:ticker/:dateMode  (e.g. /api/data/600519/2026-06-05_quick)
+    const dataMatch = pathname.match(/^\/api\/data\/([^/]+)\/(.+)$/);
+    if (dataMatch) {
+      const [, ticker, dateMode] = dataMatch;
+      handleJson(res, readDataSources(absReportDir, ticker, dateMode));
       return;
     }
 

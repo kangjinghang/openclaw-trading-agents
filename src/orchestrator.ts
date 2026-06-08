@@ -272,6 +272,27 @@ const ANALYST_CONFIGS = [
   },
 ] as const;
 
+/** Save raw data source outputs to the report directory for traceability */
+function saveRawData(
+  detailDir: string,
+  dataResults: Array<{ role: string; result: ScriptResult }>,
+  subDirName: string
+): void {
+  const dataDir = path.join(detailDir, subDirName);
+  fs.mkdirSync(dataDir, { recursive: true });
+  for (const { role, result } of dataResults) {
+    if (!result) continue;
+    const filePath = path.join(dataDir, `${role}_raw.json`);
+    try {
+      const tmpPath = filePath + ".tmp";
+      fs.writeFileSync(tmpPath, JSON.stringify(result, null, 2), "utf-8");
+      fs.renameSync(tmpPath, filePath);
+    } catch (err) {
+      console.error(`[saveRawData] Failed to write ${role}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+}
+
 /**
  * Shared Phase 1-2: fetch data + run 7 analysts in parallel.
  * Used by both runQuickAnalysis() and runFullAnalysis().
@@ -283,7 +304,7 @@ async function runAnalystPhase(
   openaiClient: OpenAI,
   traceLogger: TraceLogger,
   runId: string
-): Promise<{ analystReports: AnalystReport[]; totalTokens: number; totalCostUsd: number }> {
+): Promise<{ analystReports: AnalystReport[]; totalTokens: number; totalCostUsd: number; dataResults: Array<{ role: string; result: ScriptResult }> }> {
   let totalTokens = 0;
   let totalCostUsd = 0;
 
@@ -390,7 +411,7 @@ async function runAnalystPhase(
   const analystEmpty = analystReports.filter(r => r.content.startsWith("[分析失败")).length;
   logProgress(runId, `[2/4] 分析师阶段完成${analystEmpty > 0 ? ` (${analystEmpty} 个失败)` : ""}`);
 
-  return { analystReports, totalTokens, totalCostUsd };
+  return { analystReports, totalTokens, totalCostUsd, dataResults };
 }
 
 /**
@@ -409,14 +430,15 @@ export async function runQuickAnalysis(
 ): Promise<[QuickAnalysisResult, RunMeta]> {
   const startTime = Date.now();
   const runId = generateRunId();
-  const traceDir = path.join(os.homedir(), ".openclaw", "traces", `${ticker}_${date}`);
+  const detailDir = path.join(config.report_dir.replace("~", os.homedir()), ticker, `${date}_quick`);
+  const traceDir = path.join(detailDir, "02_traces");
   const traceLogger = new TraceLogger(traceDir, runId);
   const reportStore = new ReportStore(config.report_dir);
 
   logProgress(runId, `开始 Quick 分析 ${ticker} (${date})`);
   validateEnvironment(config.report_dir);
 
-  const { analystReports, totalTokens, totalCostUsd } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId);
+  const { analystReports, totalTokens, totalCostUsd, dataResults } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId);
 
   if (signal?.aborted) throw new AbortError();
 
@@ -495,6 +517,7 @@ export async function runQuickAnalysis(
 
   logProgress(runId, `[4/4] 保存报告...`);
   reportStore.save(ticker, date, "quick", result, durationMs, allTokens, allCost, runId);
+  saveRawData(detailDir, dataResults, "03_data");
   logProgress(runId, `完成 (${(durationMs / 1000).toFixed(1)}s)`, allTokens, allCost);
 
   // Write run summary for auditing
@@ -525,7 +548,8 @@ export async function runFullAnalysis(
 ): Promise<[FullAnalysisResult, RunMeta]> {
   const startTime = Date.now();
   const runId = generateRunId();
-  const traceDir = path.join(os.homedir(), ".openclaw", "traces", `${ticker}_${date}_full`);
+  const detailDir = path.join(config.report_dir.replace("~", os.homedir()), ticker, `${date}_full`);
+  const traceDir = path.join(detailDir, "06_traces");
   const traceLogger = new TraceLogger(traceDir, runId);
   const reportStore = new ReportStore(config.report_dir);
 
@@ -533,7 +557,7 @@ export async function runFullAnalysis(
   validateEnvironment(config.report_dir);
 
   // Phase 1-2: Analysts
-  const { analystReports } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId);
+  const { analystReports, dataResults } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId);
 
   if (signal?.aborted) throw new AbortError();
 
@@ -629,6 +653,7 @@ export async function runFullAnalysis(
 
   const durationMs = Date.now() - startTime;
   reportStore.saveFull(ticker, date, result, durationMs, runId);
+  saveRawData(detailDir, dataResults, "07_data");
   logProgress(runId, `完成 (${(durationMs / 1000).toFixed(1)}s, ${traceLogger.count} LLM calls)`, traceLogger.totalTokens, traceLogger.totalCostUsd);
 
   // Write run summary for auditing

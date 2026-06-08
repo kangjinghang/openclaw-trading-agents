@@ -2,7 +2,6 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import * as os from "os";
 
 /** Summary of a report for the list view */
 export interface ReportSummary {
@@ -25,14 +24,13 @@ export interface ReportSummary {
 
 /** Scan report directory and return all report summaries */
 export function listReports(reportDir: string): ReportSummary[] {
-  const absDir = reportDir.replace("~", os.homedir());
-  if (!fs.existsSync(absDir)) return [];
+  if (!fs.existsSync(reportDir)) return [];
 
   const reports: ReportSummary[] = [];
 
-  const tickerDirs = safeReaddir(absDir);
+  const tickerDirs = safeReaddir(reportDir);
   for (const ticker of tickerDirs) {
-    const tickerPath = path.join(absDir, ticker);
+    const tickerPath = path.join(reportDir, ticker);
     if (!fs.statSync(tickerPath).isDirectory()) continue;
 
     const files = safeReaddir(tickerPath);
@@ -56,7 +54,7 @@ export function listReports(reportDir: string): ReportSummary[] {
 
 /** Read a specific report JSON */
 export function readReport(reportDir: string, ticker: string, dateMode: string): any | null {
-  const filePath = path.join(reportDir.replace("~", os.homedir()), ticker, `${dateMode}.json`);
+  const filePath = path.join(reportDir, ticker, `${dateMode}.json`);
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf-8"));
   } catch {
@@ -66,9 +64,9 @@ export function readReport(reportDir: string, ticker: string, dateMode: string):
 
 /** Read a detail file from the report's detail directory */
 export function readDetail(reportDir: string, ticker: string, dateMode: string, subPath: string): any | null {
-  const filePath = path.join(reportDir.replace("~", os.homedir()), ticker, dateMode, subPath);
+  const filePath = path.join(reportDir, ticker, dateMode, subPath);
   // Prevent path traversal
-  const absBase = path.resolve(reportDir.replace("~", os.homedir()));
+  const absBase = path.resolve(reportDir);
   const absFile = path.resolve(filePath);
   if (!absFile.startsWith(absBase)) return null;
 
@@ -79,28 +77,39 @@ export function readDetail(reportDir: string, ticker: string, dateMode: string, 
   }
 }
 
-/** Read all traces for a run_id from the trace directory */
-export function readTraces(runId: string): any[] {
-  const tracesBase = path.join(os.homedir(), ".openclaw", "traces");
-  if (!fs.existsSync(tracesBase)) return [];
+/** Read all traces for a run_id from trace directories inside the report tree */
+export function readTraces(reportDir: string, runId: string): any[] {
+  if (!fs.existsSync(reportDir)) return [];
 
   const traces: any[] = [];
-  const dirs = safeReaddir(tracesBase);
+  const traceSubDirs = ["02_traces", "06_traces"];
 
-  for (const dir of dirs) {
-    const dirPath = path.join(tracesBase, dir);
-    if (!fs.statSync(dirPath).isDirectory()) continue;
+  const tickerDirs = safeReaddir(reportDir);
+  for (const ticker of tickerDirs) {
+    const tickerPath = path.join(reportDir, ticker);
+    if (!fs.statSync(tickerPath).isDirectory()) continue;
 
-    const files = safeReaddir(dirPath);
-    for (const file of files) {
-      if (!file.endsWith(".json") || file === "run_summary.json") continue;
-      try {
-        const raw = JSON.parse(fs.readFileSync(path.join(dirPath, file), "utf-8"));
-        if (raw.run_id === runId) {
-          traces.push(raw);
+    const dateModeDirs = safeReaddir(tickerPath);
+    for (const dm of dateModeDirs) {
+      const dmPath = path.join(tickerPath, dm);
+      if (!fs.statSync(dmPath).isDirectory()) continue;
+
+      for (const traceSub of traceSubDirs) {
+        const tracesDir = path.join(dmPath, traceSub);
+        if (!fs.existsSync(tracesDir)) continue;
+
+        const files = safeReaddir(tracesDir);
+        for (const file of files) {
+          if (!file.endsWith(".json") || file === "run_summary.json") continue;
+          try {
+            const raw = JSON.parse(fs.readFileSync(path.join(tracesDir, file), "utf-8"));
+            if (raw.run_id === runId) {
+              traces.push(raw);
+            }
+          } catch {
+            // skip malformed traces
+          }
         }
-      } catch {
-        // skip malformed traces
       }
     }
   }
@@ -109,30 +118,58 @@ export function readTraces(runId: string): any[] {
   return traces;
 }
 
-/** Read traces by ticker and date (from trace directory name) */
-export function readTracesByTickerDate(ticker: string, date: string): any[] {
-  const tracesBase = path.join(os.homedir(), ".openclaw", "traces");
-  // Try both quick and full trace dirs
-  const dirs = [`${ticker}_${date}`, `${ticker}_${date}_full`];
+/** Read traces by ticker and date from trace directories inside the report tree */
+export function readTracesByTickerDate(reportDir: string, ticker: string, date: string): any[] {
+  if (!fs.existsSync(reportDir)) return [];
+
   const traces: any[] = [];
+  const dateModes = [`${date}_quick`, `${date}_full`];
+  const traceSubDirs = ["02_traces", "06_traces"];
 
-  for (const dir of dirs) {
-    const dirPath = path.join(tracesBase, dir);
-    if (!fs.existsSync(dirPath)) continue;
+  for (const dm of dateModes) {
+    for (const traceSub of traceSubDirs) {
+      const tracesDir = path.join(reportDir, ticker, dm, traceSub);
+      if (!fs.existsSync(tracesDir)) continue;
 
-    const files = safeReaddir(dirPath);
-    for (const file of files) {
-      if (!file.endsWith(".json") || file === "run_summary.json") continue;
-      try {
-        traces.push(JSON.parse(fs.readFileSync(path.join(dirPath, file), "utf-8")));
-      } catch {
-        // skip
+      const files = safeReaddir(tracesDir);
+      for (const file of files) {
+        if (!file.endsWith(".json") || file === "run_summary.json") continue;
+        try {
+          traces.push(JSON.parse(fs.readFileSync(path.join(tracesDir, file), "utf-8")));
+        } catch {
+          // skip
+        }
       }
     }
   }
 
   traces.sort((a, b) => (a.call_index ?? 0) - (b.call_index ?? 0));
   return traces;
+}
+
+/** Read raw data source outputs from the report detail directory */
+export function readDataSources(reportDir: string, ticker: string, dateMode: string): any[] {
+  const detailDir = path.join(reportDir, ticker, dateMode);
+  const dataSubDirs = ["03_data", "07_data"];
+
+  for (const dataSub of dataSubDirs) {
+    const dataDir = path.join(detailDir, dataSub);
+    if (!fs.existsSync(dataDir)) continue;
+
+    const results: any[] = [];
+    const files = safeReaddir(dataDir);
+    for (const file of files) {
+      if (!file.endsWith("_raw.json")) continue;
+      try {
+        const raw = JSON.parse(fs.readFileSync(path.join(dataDir, file), "utf-8"));
+        results.push({ role: file.replace("_raw.json", ""), ...raw });
+      } catch {
+        // skip
+      }
+    }
+    return results;
+  }
+  return [];
 }
 
 // ── Helpers ──────────────────────────────────────────────────

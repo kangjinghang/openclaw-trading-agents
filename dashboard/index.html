@@ -111,7 +111,7 @@ tbody td{padding:8px 12px;font-size:13px;white-space:nowrap}
 .debate-bear{background:#f8717110;border:1px solid #f8717130}
 .debate-side .side-label{font-weight:600;font-size:11px;margin-bottom:6px}
 /* Trace table */
-.trace-detail{background:var(--surface2);border-radius:8px;padding:12px;margin-top:8px;font-family:var(--mono);font-size:12px;max-height:200px;overflow-y:auto;line-height:1.6;white-space:pre-wrap;word-break:break-all;color:var(--text2)}
+.trace-detail{background:var(--surface2);border-radius:8px;padding:12px;margin-top:8px;font-family:var(--mono);font-size:12px;max-height:500px;overflow-y:auto;line-height:1.6;white-space:pre-wrap;word-break:break-all;color:var(--text2)}
 .trace-detail .prompt-label{color:var(--blue)}
 .trace-detail .resp-label{color:var(--green)}
 /* Responsive */
@@ -164,11 +164,13 @@ tbody td{padding:8px 12px;font-size:13px;white-space:nowrap}
     <div class="tabs" id="tabs">
       <div class="tab active" data-tab="analysts" data-i18n="tabAnalysts"></div>
       <div class="tab" data-tab="detail" data-i18n="tabDetail"></div>
+      <div class="tab" data-tab="data" data-i18n="tabData"></div>
       <div class="tab" data-tab="traces" data-i18n="tabTraces"></div>
     </div>
     <div class="tab-content">
       <div class="tab-panel active" id="panel-analysts"></div>
       <div class="tab-panel" id="panel-detail"></div>
+      <div class="tab-panel" id="panel-data"></div>
       <div class="tab-panel" id="panel-traces"></div>
     </div>
   </div>
@@ -183,12 +185,13 @@ const I18N = {
     allModes: '全部模式',
     thTicker: '股票代码', thDate: '日期', thMode: '模式', thDirection: '方向',
     thConfidence: '信心度', thAnalysts: '分析师', thCost: '费用', thDuration: '耗时', thRisk: '风控',
-    tabAnalysts: '分析师', tabDetail: '详情', tabTraces: '调用追踪',
+    tabAnalysts: '分析师', tabDetail: '详情', tabData: '数据源', tabTraces: '调用追踪',
     labelDate: '日期', labelDirection: '方向', labelConfidence: '信心度',
     labelTokens: 'Token', labelCost: '费用', labelDuration: '耗时', labelMode: '模式',
     loading: '加载中...', empty: '暂无报告，请先运行分析。',
     loadFailed: '加载失败：',
     noDetail: '暂无详情数据。',
+    noData: '暂无原始数据。',
     noTraces: '暂无调用追踪数据。',
     researchDecision: '研究决策', bull: '多头', bear: '空头',
     tradingPlan: '交易计划', riskAssessment: '风控评估',
@@ -206,12 +209,13 @@ const I18N = {
     allModes: 'All modes',
     thTicker: 'Ticker', thDate: 'Date', thMode: 'Mode', thDirection: 'Direction',
     thConfidence: 'Confidence', thAnalysts: 'Analysts', thCost: 'Cost', thDuration: 'Duration', thRisk: 'Risk',
-    tabAnalysts: 'Analysts', tabDetail: 'Detail', tabTraces: 'Traces',
+    tabAnalysts: 'Analysts', tabDetail: 'Detail', tabData: 'Raw Data', tabTraces: 'Traces',
     labelDate: 'Date', labelDirection: 'Direction', labelConfidence: 'Confidence',
     labelTokens: 'Tokens', labelCost: 'Cost', labelDuration: 'Duration', labelMode: 'Mode',
     loading: 'Loading...', empty: 'No reports found. Run an analysis first.',
     loadFailed: 'Failed to load reports: ',
     noDetail: 'No detail data available.',
+    noData: 'No raw data available.',
     noTraces: 'No traces available.',
     researchDecision: 'Research Decision', bull: 'Bull', bear: 'Bear',
     tradingPlan: 'Trading Plan', riskAssessment: 'Risk Assessment',
@@ -391,6 +395,7 @@ async function openModal(id) {
 
   loadAnalysts(report);
   if (report.mode === 'full') loadFullDetail(report);
+  loadDataSources(report);
   loadTraces(report);
 }
 
@@ -636,9 +641,16 @@ async function loadTraces(report) {
         if (!detail) return;
         if (detail.style.display === 'none') {
           const tc = currentTraces[idx];
-          const sys = (tc.request?.system_prompt || '').slice(0, 200);
-          const resp = (tc.response?.raw_content || '').slice(0, 500);
-          detail.innerHTML = `<span class="prompt-label">${t('systemPrompt')}:</span> ${sys}...\n\n<span class="resp-label">${t('response')}:</span> ${resp}...`;
+          const sys = escapeHtml(tc.request?.system_prompt || '');
+          const userMsg = escapeHtml(tc.request?.user_message || '');
+          const resp = escapeHtml(tc.response?.raw_content || '');
+          const verdict = tc.response?.parsed_verdict;
+          const userTruncated = userMsg.length > 3000 ? userMsg.slice(0, 3000) + '...' : userMsg;
+          detail.innerHTML = `
+            <div style="margin-bottom:12px"><span class="prompt-label">${t('systemPrompt')}:</span>\n${sys}</div>
+            <div style="margin-bottom:12px"><span class="prompt-label" style="color:var(--yellow)">User Message:</span>\n${userTruncated}</div>
+            <div style="margin-bottom:12px"><span class="resp-label">${t('response')}:</span>\n${resp}</div>
+            ${verdict ? `<div><span style="color:var(--green);font-weight:600">VERDICT:</span> ${escapeHtml(JSON.stringify(verdict))}</div>` : ''}`;
           detail.style.display = 'block';
         } else {
           detail.style.display = 'none';
@@ -646,6 +658,64 @@ async function loadTraces(report) {
       });
     });
 
+  } catch (e) {
+    panel.innerHTML = `<div style="color:var(--red)">${t('errorPrefix')}${e.message}</div>`;
+  }
+}
+
+// ── Raw Data panel ──
+async function loadDataSources(report) {
+  const panel = document.getElementById('panel-data');
+  panel.innerHTML = `<div style="color:var(--text3)">${t('loading')}</div>`;
+
+  const dateMode = report.id;
+  const [ticker, ...rest] = dateMode.split('_');
+  const mode = rest.pop();
+  const date = rest.join('_');
+  const detailPath = `${date}_${mode}`;
+
+  try {
+    const res = await fetch(`/api/data/${ticker}/${detailPath}`);
+    const dataSources = await res.json();
+
+    if (!dataSources || dataSources.length === 0) {
+      panel.innerHTML = `<div style="color:var(--text3)">${t('noData')}</div>`;
+      return;
+    }
+
+    panel.innerHTML = `
+      <div class="analyst-grid">
+        ${dataSources.map(ds => {
+          const statusIcon = ds.success ? '✅' : '❌';
+          const fieldCount = ds.data ? Object.keys(ds.data).length : 0;
+          const source = ds._source ? ` (${ds._source})` : '';
+          return `<div class="analyst-card" data-role="${ds.role}" style="cursor:pointer">
+            <div class="card-head">
+              <span class="role">${statusIcon} ${roleName(ds.role)}</span>
+              <span class="badge" style="background:var(--surface2);color:var(--text2)">${fieldCount} fields${source}</span>
+            </div>
+            <div class="reason" style="font-size:11px;color:${ds.success ? 'var(--text3)' : 'var(--red)'}">${ds.error || 'OK'}</div>
+          </div>`;
+        }).join('')}
+      </div>
+      <div class="analyst-expanded" id="data-expanded">
+        <h4 id="data-expanded-title"></h4>
+        <div class="trace-detail" id="data-expanded-content" style="display:block;max-height:500px"></div>
+      </div>
+    `;
+
+    panel.querySelectorAll('.analyst-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const role = card.dataset.role;
+        const ds = dataSources.find(d => d.role === role);
+        if (!ds) return;
+        const expanded = document.getElementById('data-expanded');
+        document.getElementById('data-expanded-title').textContent = roleName(role);
+        document.getElementById('data-expanded-content').textContent =
+          JSON.stringify(ds, null, 2);
+        expanded.classList.toggle('show');
+      });
+    });
   } catch (e) {
     panel.innerHTML = `<div style="color:var(--red)">${t('errorPrefix')}${e.message}</div>`;
   }

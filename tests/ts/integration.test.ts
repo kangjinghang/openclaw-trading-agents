@@ -68,7 +68,8 @@ const ANALYST_ROLES = ['market', 'fundamentals', 'news', 'sentiment', 'policy', 
 
 describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
   const tmpReportDir = join(process.cwd(), 'test-tmp-reports');
-  const actualTraceDir = join(os.homedir(), '.openclaw', 'traces', '600519_2026-06-05');
+  const actualTraceDir = join(tmpReportDir, '600519', '2026-06-05_quick', '02_traces');
+  const actualDataDir = join(tmpReportDir, '600519', '2026-06-05_quick', '03_data');
 
   let config: TradingAgentsConfig;
   let mockClient: OpenAI;
@@ -101,7 +102,6 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
 
   afterEach(async () => {
     await rm(tmpReportDir, { recursive: true, force: true });
-    await rm(actualTraceDir, { recursive: true, force: true });
     vi.clearAllMocks();
   });
 
@@ -186,6 +186,14 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
     expect(existsSync(actualTraceDir)).toBe(true);
     const traceFiles = await readdir(actualTraceDir);
     expect(traceFiles.length).toBeGreaterThan(0);
+
+    // Verify raw data files
+    expect(existsSync(actualDataDir)).toBe(true);
+    const dataFiles = await readdir(actualDataDir);
+    expect(dataFiles.length).toBe(7);
+    for (const role of ANALYST_ROLES) {
+      expect(dataFiles).toContain(`${role}_raw.json`);
+    }
   });
 
   it('should handle Chinese direction parsing correctly with 7 analysts', async () => {
@@ -315,6 +323,18 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
     expect(existsSync(join(detailDir, '03_research.json'))).toBe(true);
     expect(existsSync(join(detailDir, '04_trading_plan.json'))).toBe(true);
     expect(existsSync(join(detailDir, '05_risk', 'risk_manager.json'))).toBe(true);
+
+    // Verify traces in report directory
+    const fullTraceDir = join(detailDir, '06_traces');
+    expect(existsSync(fullTraceDir)).toBe(true);
+    const fullTraceFiles = await readdir(fullTraceDir);
+    expect(fullTraceFiles.length).toBeGreaterThan(0);
+
+    // Verify raw data in report directory
+    const fullDataDir = join(detailDir, '07_data');
+    expect(existsSync(fullDataDir)).toBe(true);
+    const fullDataFiles = await readdir(fullDataDir);
+    expect(fullDataFiles.length).toBe(7);
   });
 
   it('should handle pipe-separated VERDICT direction by taking first option', async () => {

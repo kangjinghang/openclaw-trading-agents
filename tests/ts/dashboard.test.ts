@@ -2,7 +2,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as http from 'http';
-import { listReports, readReport, readDetail, readTracesByTickerDate } from '../../src/dashboard-api';
+import { listReports, readReport, readDetail, readTracesByTickerDate, readDataSources } from '../../src/dashboard-api';
 import { startServer, parseDashboardArgs } from '../../src/dashboard';
 import { mkdir, writeFile, rm } from 'fs/promises';
 import { join } from 'path';
@@ -109,6 +109,44 @@ describe('dashboard-api', () => {
     const result = readDetail(tmpReportDir, '../../etc', '2026-06-05_full', 'passwd');
     expect(result).toBeNull();
   });
+
+  it('readTracesByTickerDate returns traces from report dir', async () => {
+    const tracesDir = join(tmpReportDir, '600519', '2026-06-05_quick', '02_traces');
+    await mkdir(tracesDir, { recursive: true });
+    const trace = {
+      trace_id: 'trace-test-1',
+      run_id: 'run-1',
+      call_index: 1,
+      phase: 'analyst',
+      role: 'market',
+      request: { model: 'gpt-4o' },
+      response: { raw_content: 'test' },
+      meta: { duration_ms: 1000, usage: { total_tokens: 500 }, cost_usd: 0.01 },
+    };
+    await writeFile(join(tracesDir, 'trace-test-1.json'), JSON.stringify(trace), 'utf-8');
+
+    const result = readTracesByTickerDate(tmpReportDir, '600519', '2026-06-05');
+    expect(result).toHaveLength(1);
+    expect(result[0].trace_id).toBe('trace-test-1');
+  });
+
+  it('readDataSources returns raw data from report dir', async () => {
+    const dataDir = join(tmpReportDir, '600519', '2026-06-05_quick', '03_data');
+    await mkdir(dataDir, { recursive: true });
+    const rawData = { success: true, data: { ticker: '600519', count: 120 }, _source: 'mootdx' };
+    await writeFile(join(dataDir, 'market_raw.json'), JSON.stringify(rawData), 'utf-8');
+
+    const result = readDataSources(tmpReportDir, '600519', '2026-06-05_quick');
+    expect(result).toHaveLength(1);
+    expect(result[0].role).toBe('market');
+    expect(result[0].success).toBe(true);
+    expect(result[0]._source).toBe('mootdx');
+  });
+
+  it('readDataSources returns empty for non-existent dir', () => {
+    const result = readDataSources(tmpReportDir, '999999', '2026-01-01_quick');
+    expect(result).toEqual([]);
+  });
 });
 
 describe('parseDashboardArgs', () => {
@@ -210,6 +248,18 @@ describe('dashboard HTTP server', () => {
     const { status, body } = await fetch('/api/traces');
     expect(status).toBe(200);
     expect(body).toEqual([]);
+  });
+
+  it('GET /api/data returns data sources', async () => {
+    const dataDir = join(tmpReportDir, '600519', '2026-06-05_quick', '03_data');
+    await mkdir(dataDir, { recursive: true });
+    const rawData = { success: true, data: { ticker: '600519' }, _source: 'mootdx' };
+    await writeFile(join(dataDir, 'market_raw.json'), JSON.stringify(rawData), 'utf-8');
+
+    const { status, body } = await fetch('/api/data/600519/2026-06-05_quick');
+    expect(status).toBe(200);
+    expect(body).toHaveLength(1);
+    expect(body[0].role).toBe('market');
   });
 
   it('GET unknown path returns 404', async () => {
