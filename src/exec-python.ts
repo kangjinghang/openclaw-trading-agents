@@ -137,7 +137,8 @@ function execPythonRaw(
       }
     }, timeoutMs);
 
-    // Handle stdin input
+    // Handle stdin input — always close stdin to send EOF so Python's
+    // sys.stdin.read() doesn't block indefinitely in non-tty (spawn) mode
     if (stdinData !== null) {
       try {
         python.stdin.write(JSON.stringify(stdinData));
@@ -150,6 +151,8 @@ function execPythonRaw(
         python.kill();
         return;
       }
+    } else {
+      python.stdin.end();
     }
 
     python.stdout.on('data', (data) => {
