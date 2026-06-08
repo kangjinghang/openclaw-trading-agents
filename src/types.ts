@@ -185,8 +185,9 @@ export interface TradingPlan {
   stop_loss: number;
   position_pct: number;
   execution_plan: string;
-  entry_signals: string[];
+  entry_signals: string[];        // 进场触发条件 (triggers — 等什么信号才动手)
   exit_signals: string[];
+  invalidations: string[];        // 失效条件 (invalidations — 出现即推翻整个交易判断)
   key_risks: string[];
   t_plus_1_note: string;
 }

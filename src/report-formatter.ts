@@ -184,13 +184,18 @@ export function toMarkdown(result: AnyResult): string {
     lines.push(``);
 
     if (tp.entry_signals?.length) {
-      lines.push(`**入场信号**:`);
+      lines.push(`**入场信号（triggers）**:`);
       for (const s of tp.entry_signals) lines.push(`- ${s}`);
       lines.push(``);
     }
     if (tp.exit_signals?.length) {
       lines.push(`**退出信号**:`);
       for (const s of tp.exit_signals) lines.push(`- ${s}`);
+      lines.push(``);
+    }
+    if (tp.invalidations?.length) {
+      lines.push(`**失效条件（invalidations — 出现即推翻判断）**:`);
+      for (const s of tp.invalidations) lines.push(`- ${s}`);
       lines.push(``);
     }
   }

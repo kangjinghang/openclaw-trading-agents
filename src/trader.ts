@@ -156,6 +156,7 @@ export async function runTrader(
     execution_plan: result.content.slice(0, 3000),
     entry_signals: parseListSection(result.content, "入场信号"),
     exit_signals: parseListSection(result.content, "退出信号"),
+    invalidations: parseListSection(result.content, "失效条件"),
     key_risks: parseListSection(result.content, "关键风险提示"),
     t_plus_1_note: (() => {
       const match = result.content.match(

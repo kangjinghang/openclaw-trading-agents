@@ -491,4 +491,100 @@ T+1.
     const vars = renderArgs[1] as Record<string, string>;
     expect(vars.risk_judge).toBe("");
   });
+
+  it("should parse 失效条件 section into invalidations", async () => {
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+    mockCreate.mockResolvedValueOnce({
+      choices: [
+        {
+          message: {
+            content: `### 交易方向与仓位
+- **建议仓位**：20%
+
+### 价格区间
+- **目标价格**：1300 元
+- **止损价格**：1200 元
+
+### 入场信号
+1. 价格回调到 1280
+2. 北向资金净流入
+
+### 退出信号
+1. 跌破 1200
+
+### 失效条件
+1. 重新放量突破压力位
+2. 基本面逻辑被证伪
+
+### T+1 操作约束说明
+分两日建仓。
+
+### 关键风险提示
+1. 政策变化风险
+
+<!-- VERDICT: {"direction": "Buy", "reason": "分批建仓"} -->`,
+          },
+        },
+      ],
+      usage: { prompt_tokens: 800, completion_tokens: 250, total_tokens: 1050 },
+    } as any);
+
+    const result = await runTrader(
+      mockResearchDecision(),
+      [],
+      "",
+      mockConfig,
+      mockClient,
+      mockTraceLogger
+    );
+
+    expect(result.invalidations).toEqual([
+      "重新放量突破压力位",
+      "基本面逻辑被证伪",
+    ]);
+  });
+
+  it("should default invalidations to empty array when section is absent", async () => {
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+    mockCreate.mockResolvedValueOnce({
+      choices: [
+        {
+          message: {
+            content: `### 交易方向与仓位
+- **建议仓位**：10%
+
+### 价格区间
+- **目标价格**：1300 元
+- **止损价格**：1200 元
+
+### 入场信号
+1. 信号 A
+
+### 退出信号
+1. 信号 B
+
+### T+1 操作约束说明
+T+1.
+
+### 关键风险提示
+1. 风险 A
+
+<!-- VERDICT: {"direction": "Buy", "reason": "test"} -->`,
+          },
+        },
+      ],
+      usage: { prompt_tokens: 800, completion_tokens: 200, total_tokens: 1000 },
+    } as any);
+
+    const result = await runTrader(
+      mockResearchDecision(),
+      [],
+      "",
+      mockConfig,
+      mockClient,
+      mockTraceLogger
+    );
+
+    expect(result.invalidations).toEqual([]);
+  });
 });
