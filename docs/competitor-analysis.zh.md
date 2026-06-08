@@ -126,20 +126,24 @@
 
 ### ⭐⭐⭐ 高价值（填补本项目明显空白）
 
-#### 3.1 龙虎榜明细（带营业部席位） —— ASHare / astock
+#### 3.1 龙虎榜数据字段补齐 —— 已完成 ✅（commit `fa389a0`）
 
-**现状**：检查本项目 `skills/trading-hot-money/scripts/hot_money.py`：有 hexin 北向、eastmoney 资金流、10jqka 涨停，**但没有龙虎榜**。
+**调研纠错**：初稿误判本项目"缺龙虎榜"。实际情况——`hot_money.py` 的 `_fetch_dragon_tiger` 早已通过 Eastmoney datacenter `RPT_DAILYBILLBOARD_DETAILSNEW` 拉取龙虎榜，但**只提取 4 个字段**（date / reason / net_buy / turnover）。
 
-**借鉴点**：`akshare` 的 `stock_lhb_detail_em` 直接给买卖席位 + 机构参与，是 A 股游资追踪的**核心数据**。
+**借鉴点（已修正理解）**：ASHare 的 `get_lhb_detail` 调 `ak.stock_lhb_detail_em`，返回全 DataFrame（约 15 列），**同样是汇总级——并非席位明细**。akshare 的席位级接口是 `stock_lhb_stock_detail_em`，但 ASHare 也未使用。
 
 ```python
-# 出处：TradingAgents-AShare/tradingagents/dataflows/cn_akshare_provider.py
+# 出处：TradingAgents-AShare/tradingagents/dataflows/providers/cn_akshare_provider.py:900
 def get_lhb_detail(self, symbol: str, date: str) -> str:
-    # stock_lhb_detail_em → 机构 vs 散户活跃度
+    df = ak.stock_lhb_detail_em(symbol=code, start_date=date, end_date=date)
+    return f"{symbol} 龙虎榜明细（{date}）：\n{df.head(20).to_string(index=False)}"
 ```
 
-**收益**：hot_money 分析师硬缺口补齐，分析质量明显提升。
-**改动范围**：`hot_money.py` 增加一个数据段（akshare 单接口）。
+**已做改动**：
+- `_fetch_dragon_tiger` 字段 4 → 8 个/条（新增 buy_amt / sell_amt / close_price / change_rate），与 ASHare 持平
+- `hot_money.md` prompt #4 同步更新，去掉汇总级数据无法支撑的"买卖席位分析"
+
+**真实剩余差距**（席位明细，优先级 P3）：营业部买卖席位 + 机构参与需要 Eastmoney `RPT_BILLBOARD_TRADEDETAILS` 或 akshare `stock_lhb_stock_detail_em`，ASHare / astock 均未实现，属共同空白。
 
 ---
 
@@ -252,8 +256,8 @@ Eastmoney 对激进调用会封 IP。astock 用 `1.0s + 0.1~0.5s 抖动` + Keep-
 
 | 优先级 | 改动 | 类型 | 工作量 | 出处 |
 |--------|------|------|--------|------|
-| **P0** | 龙虎榜明细加入 `hot_money.py` | 数据 | 小（akshare 一接口） | §3.1 |
-| **P0** | 威科夫/量价理论框架塞入 `market.md` | 提示词 | 小（纯文本） | §2.3 |
+| ~~P0~~ ✅ | 龙虎榜字段补齐 `hot_money.py`（4→8 字段，已与 ASHare 持平） | 数据 | 小 | §3.1 |
+| ~~P0~~ ✅ | 威科夫/量价理论框架塞入 `market.md` | 提示词 | 小（纯文本） | §2.3 |
 | **P1** | 风控结构化约束（hard/soft/precondition/trigger） | 提示词+解析 | 中 | §2.2 |
 | **P1** | DEBATE_STATE 辩论状态追踪 | 提示词+解析 | 中（辩论收敛质变） | §2.1 |
 | **P2** | trader 加 triggers/invalidations | 提示词 | 小 | §2.4 |
@@ -263,7 +267,7 @@ Eastmoney 对激进调用会封 IP。astock 用 `1.0s + 0.1~0.5s 抖动` + Keep-
 | 路线图 | 自我反思闭环 | 提示词+存储 | 大 | §2.5 |
 | 实验 | 辩论层英文推理 A/B | 提示词 | 小 | §2.6 |
 
-**P0 两条性价比最高**（数据加一个接口、prompt 改一段），建议从这里开始。
+**P0 两条已完成**（commit `fa389a0`）。下一步进入 P1（DEBATE_STATE 辩论状态追踪 + 风控结构化约束）。
 
 ---
 
