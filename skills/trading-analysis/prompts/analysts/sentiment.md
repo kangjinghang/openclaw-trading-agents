@@ -17,6 +17,12 @@
 
 ## 情绪数据
 
+数据 JSON 中包含以下字段，请直接引用：
+- `hot_rank`：热门股 top20（东方财富）
+- `zt_pool`：涨停板情绪池（A 股独有短线温度计），含 `limit_up_count`（涨停家数）、`max_streak`（最高连板 = 龙头高度）、`streak_distribution` / `streak_distribution_text`（连板梯队分布，如 "6板1家/2板11家/1板43家"）、`top_industries`（涨停行业 top5）、`actual_date`（实际数据日期；非交易日回溯到最近交易日）、`previous_day_count`（上一交易日涨停家数，用于判断情绪升降）、`target_in_pool`（若标的本身涨停，给出 `streak`/`name`/`industry`）
+- `stock_news` / `news_sentiment`：个股新闻列表与情绪评分（`score` ∈ [-1,+1]，`label` 从悲观到乐观）
+- `stock_hot_position`：标的在热度榜的位置（如有）
+
 {{sentiment_data}}
 
 ## 数据质量
@@ -39,7 +45,13 @@
 - 热门板块和个股排行
 - 是否处于市场关注焦点
 
-### 4. 情绪综合评估
+### 4. 涨停情绪池（短线温度计 — A 股独有）
+- 涨停家数与昨日对比（`limit_up_count` vs `previous_day_count`）：升温 / 持平 / 降温
+- 连板梯队高度：`max_streak` 为龙头高度；`streak_distribution_text` 中 2 板及以上家数 = 打板强度
+- 涨停行业集中度：`top_industries` 反映当前热点主线
+- 标的命中：若 `target_in_pool` 存在，标的当日涨停，需评估连板高度与后续走势风险
+
+### 5. 情绪综合评估
 - 情绪评分：极度悲观 / 悲观 / 中性 / 乐观 / 极度乐观
 - 情绪趋势方向：升温 / 持平 / 降温
 - 是否存在情绪反转信号

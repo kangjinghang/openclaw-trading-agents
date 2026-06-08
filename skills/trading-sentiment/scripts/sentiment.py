@@ -115,6 +115,103 @@ def _fetch_hot_rank(date):
         return None
 
 
+def _fetch_zt_pool(date, code=None):
+    """Fetch limit-up pool (涨停板池) as a short-term sentiment thermometer.
+
+    Returns limit-up count, streak (连板) distribution, max streak, top
+    industries, and whether the target stock is itself in the pool. Source:
+    akshare stock_zt_pool_em (Eastmoney push2ex underneath).
+
+    Non-trading days return an empty pool from akshare; we roll back up to 4
+    days to find the most recent trading day. `actual_date` records which
+    day's data was used so the LLM knows the data may be stale. Returns None
+    on fetch failure or when no trading day is found in the window.
+    """
+    import datetime as _dt
+    from collections import Counter
+
+    try:
+        base = _dt.datetime.strptime(date.replace("-", ""), "%Y%m%d")
+    except ValueError:
+        return None
+
+    df = None
+    actual = None
+    for offset in range(5):
+        candidate = (base - _dt.timedelta(days=offset)).strftime("%Y%m%d")
+        try:
+            import akshare as ak
+            cand_df = ak.stock_zt_pool_em(date=candidate)
+        except Exception:
+            continue
+        if cand_df is not None and len(cand_df) > 0:
+            df = cand_df
+            actual = candidate
+            break
+
+    if df is None:
+        return None
+
+    # Column lookup by keyword — naming/order varies across akshare versions.
+    def _col(keyword):
+        for c in df.columns:
+            if keyword in str(c):
+                return c
+        return None
+
+    streak_col = _col("连板数")
+    industry_col = _col("行业")
+    code_col = _col("代码")
+    name_col = _col("名称")
+
+    # Filter NaN/None streaks (NaN != NaN trick)
+    raw_streaks = df[streak_col].tolist() if streak_col else []
+    streaks = [int(s) for s in raw_streaks if s is not None and s == s]
+    dist = Counter(streaks)
+    dist_sorted = dict(sorted(dist.items(), reverse=True))
+    # Pre-formatted text — project convention: pre-compute to avoid LLM arithmetic errors
+    # (see competitor-analysis §4 "预计算技术指标…避免 LLM 自己算错")
+    dist_text = "/".join(f"{k}板{v}家" for k, v in dist_sorted.items())
+
+    top_industries = []
+    if industry_col:
+        ind_dist = Counter(df[industry_col].tolist())
+        top_industries = [{"industry": str(k), "count": int(v)}
+                          for k, v in ind_dist.most_common(5)]
+
+    result = {
+        "actual_date": f"{actual[:4]}-{actual[4:6]}-{actual[6:]}" if actual else None,
+        "limit_up_count": int(len(df)),
+        "max_streak": int(max(streaks)) if streaks else 0,
+        "streak_distribution": {int(k): int(v) for k, v in dist_sorted.items()},
+        "streak_distribution_text": dist_text,
+        "top_industries": top_industries,
+    }
+
+    # Is the target stock itself in the limit-up pool?
+    if code_col and code:
+        match = df[df[code_col].astype(str) == str(code)]
+        if len(match):
+            row = match.iloc[0]
+            target = {"streak": int(row[streak_col]) if streak_col else None}
+            if name_col:
+                target["name"] = str(row[name_col])
+            if industry_col:
+                target["industry"] = str(row[industry_col])
+            result["target_in_pool"] = target
+
+    # Previous trading day's count for continuity context (best-effort)
+    try:
+        prev = (base - _dt.timedelta(days=1)).strftime("%Y%m%d")
+        dfp = ak.stock_zt_pool_em(date=prev)
+        if dfp is not None:
+            result["previous_day_count"] = int(len(dfp))
+    except Exception:
+        pass
+
+    return result
+
+
 def _fetch_stock_news_eastmoney(code, page_size=15):
     """Fetch stock news for sentiment analysis."""
     url = "https://search-api-web.eastmoney.com/search/jsonp"
@@ -163,6 +260,7 @@ def fetch_sentiment(ticker, date):
     data = {"ticker": code, "date": date}
 
     data["hot_rank"] = _fetch_hot_rank(date)
+    data["zt_pool"] = _fetch_zt_pool(date, code)
     articles = _fetch_stock_news_eastmoney(code)
     data["stock_news"] = articles
     data["news_count"] = len(articles)

@@ -173,7 +173,7 @@ def get_lhb_detail(self, symbol: str, date: str) -> str:
 
 ---
 
-#### 3.3 涨停板情绪池 / 连板梯队 —— ASHare
+#### 3.3 涨停板情绪池 / 连板梯队 —— ASHare —— 已完成 ✅
 
 **现状**：本项目 `skills/trading-sentiment/scripts/sentiment.py` 拿的是市场宽度（eastmoney push2 clist）。
 
@@ -186,7 +186,12 @@ def get_zt_pool(self, date: str) -> str:
 ```
 
 **收益**：补一个 A 股特色、短线交易者真正看的情绪代理。
-**改动范围**：`sentiment.py` 增加数据段。
+
+**已做改动**：
+- `sentiment.py` 新增 `_fetch_zt_pool(date, code)`，调 akshare `stock_zt_pool_em`（底层 Eastmoney push2ex），返回 `limit_up_count`（涨停家数）、`max_streak`（最高连板 = 龙头）、`streak_distribution` + `streak_distribution_text`（连板梯队，预格式化如 "6板1家/2板11家/1板43家"）、`top_industries`（涨停行业 top5）、`target_in_pool`（标的命中检测，含连板数 / 行业）、`previous_day_count`（昨日对比，判断情绪升降）、`actual_date`。
+- 非交易日回溯最多 4 天找最近交易日；akshare lazy import + try/except graceful degrade（与 `fundamentals.py` mootdx 模式一致）。
+- `sentiment.md` 字段说明 + 必采清单新增 §4"涨停情绪池（短线温度计）"，引导 LLM 解读连板梯队高度 / 打板强度 / 行业集中度 / 标的命中；原 §4 综合评估 → §5。
+- 实测（2026-06-09）：涨停 57 家，龙头 6 板，2 板以上 13 家；603500 命中 `target_in_pool`（3 板），600519 未命中。
 
 ---
 
@@ -271,12 +276,13 @@ Eastmoney 对激进调用会封 IP。astock 用 `1.0s + 0.1~0.5s 抖动` + Keep-
 | ~~P1~~ ✅ | DEBATE_STATE 辩论状态追踪 | 提示词+解析 | 中（辩论收敛质变） | §2.1 |
 | ~~P2~~ ✅ | trader 加 triggers/invalidations | 提示词 | 小 | §2.4 |
 | ~~P2~~ ✅ | 一致预期 EPS/PEG 数据 | 数据 | 中（接口选型） | §3.2 |
-| **P3** | 涨停情绪池 + 板块资金流 | 数据 | 中 | §3.3 / §3.6 |
+| ~~P3~~ ✅ | 涨停情绪池（连板梯队） | 数据 | 中 | §3.3 |
+| **P3** | 板块资金流排名 | 数据 | 中 | §3.6 |
 | **P3** | 双层数据质量门 | 工程 | 中 | §4 |
 | 路线图 | 自我反思闭环 | 提示词+存储 | 大 | §2.5 |
 | 实验 | 辩论层英文推理 A/B | 提示词 | 小 | §2.6 |
 
-**P0 + P1 + P2 均已完成**。P0 见 commit `fa389a0`；P1 含 §2.1 DEBATE_STATE + §2.2 RISK_JUDGE；P2 含 §2.4 trader triggers/invalidations（`TradingPlan.invalidations`）与 §3.2 一致预期 EPS/PEG（修复 `fundamentals.py` 的 3 个 consensus 拉取 bug + Python 侧预计算 `forward_pe`/`peg`）。**剩余 P3 及实验/路线图层**（涨停情绪池、板块资金流、双层数据质量门、自我反思闭环、辩论英文推理 A/B）。
+**P0 + P1 + P2 + P3(§3.3) 均已完成**。P0 见 commit `fa389a0`；P1 含 §2.1 DEBATE_STATE + §2.2 RISK_JUDGE；P2 含 §2.4 trader triggers/invalidations 与 §3.2 一致预期 EPS/PEG；P3 已完成 §3.3 涨停情绪池（`sentiment.py` 增 `zt_pool` + `sentiment.md` 必采项）。另修 `_fetch_quarterly_financials`（§3.2 sibling）。**剩余 P3（板块资金流 §3.6、双层质量门 §4）及实验/路线图层**（自我反思闭环、辩论英文推理 A/B）。
 
 ---
 
