@@ -213,8 +213,95 @@ tbody td{padding:8px 12px;font-size:13px;white-space:nowrap}
 .news-source{font-size:10px;color:var(--text3);margin-top:4px}
 .news-stats{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
 .news-stat{background:var(--surface2);padding:4px 10px;border-radius:4px;font-size:11px;color:var(--text2)}
+/* Enhanced debate */
+.debate-round{background:var(--surface2);border-radius:8px;padding:14px;margin-bottom:12px}
+.debate-round h4{font-size:13px;font-weight:600;margin-bottom:10px;color:var(--text);display:flex;align-items:center;gap:8px}
+.debate-round h4 .round-num{background:var(--border);padding:2px 8px;border-radius:4px;font-size:11px;color:var(--text2)}
+.debate-row{display:flex;gap:10px}
+.debate-side{flex:1;border-radius:8px;padding:12px;font-size:12px;line-height:1.6}
+.debate-bull{background:#4ade8010;border:1px solid #4ade8030}
+.debate-bear{background:#f8717110;border:1px solid #f8717130}
+.debate-side .side-label{font-weight:700;font-size:12px;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid rgba(255,255,255,.1)}
+.debate-claim{margin-bottom:8px;padding:6px 8px;border-radius:4px;background:rgba(0,0,0,.15)}
+.debate-claim .claim-topic{font-weight:600;color:var(--text);font-size:12px;margin-bottom:2px}
+.debate-claim .claim-evidence{color:var(--text2);font-size:11px;line-height:1.5}
+.debate-verdict{margin-top:8px;padding:4px 8px;border-radius:4px;font-size:11px;font-family:var(--mono)}
+/* Price level chart */
+.price-level{background:var(--surface2);border-radius:8px;padding:14px;margin-bottom:12px}
+.price-level h5{font-size:12px;font-weight:600;color:var(--text);margin-bottom:10px}
+.price-level-chart{position:relative;height:180px;display:flex;flex-direction:column;justify-content:center;gap:0}
+.price-axis{position:absolute;right:0;top:0;bottom:0;width:60px;display:flex;flex-direction:column;justify-content:space-between;font-size:10px;color:var(--text3);font-family:var(--mono);text-align:right;padding-right:4px}
+.pl-line{position:relative;height:36px;border-radius:6px;display:flex;align-items:center;padding:0 12px;font-size:12px;font-weight:600;transition:transform .15s}
+.pl-line:hover{transform:scale(1.02)}
+.pl-line .pl-label{flex:1}
+.pl-line .pl-val{font-family:var(--mono);font-size:13px}
+.pl-line.pl-stop{background:var(--red20);color:var(--red);border:1px solid var(--red)}
+.pl-line.pl-entry{background:var(--blue20);color:var(--blue);border:1px solid var(--blue)}
+.pl-line.pl-target{background:var(--green20);color:var(--green);border:1px solid var(--green)}
+.pl-line.pl-current{background:var(--surface);color:var(--text);border:2px solid var(--border2)}
+.pl-range{position:relative;margin:4px 0;height:120px;border-left:3px solid var(--border);margin-left:30px}
+.pl-range-label{position:absolute;left:-34px;font-size:9px;color:var(--text3);font-family:var(--mono);transform:translateY(-50%)}
+.pl-range-bar{position:absolute;left:0;right:0;border-radius:2px;min-height:3px}
+/* Risk radar */
+.risk-radar{background:var(--surface2);border-radius:8px;padding:14px}
+.risk-radar h5{font-size:12px;font-weight:600;color:var(--text);margin-bottom:10px}
+.risk-gauge{position:relative;width:200px;height:100px;margin:0 auto 12px}
+.risk-gauge-bg{fill:none;stroke:var(--border);stroke-width:12}
+.risk-gauge-fill{fill:none;stroke-width:12;stroke-linecap:round;transition:stroke-dashoffset .8s ease}
+.risk-gauge-label{text-anchor:middle;font-size:24px;font-weight:700}
+.risk-gauge-sub{text-anchor:middle;font-size:11px;fill:var(--text3)}
+.risk-items{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.risk-item{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2)}
+.risk-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+/* Fundamentals table */
+.fund-table{width:100%;border-collapse:collapse;font-size:12px;margin:8px 0}
+.fund-table th{text-align:left;padding:6px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;letter-spacing:.3px;border-bottom:1px solid var(--border);font-weight:600}
+.fund-table td{padding:6px 10px;border-bottom:1px solid var(--border);color:var(--text2)}
+.fund-table tr:hover td{background:var(--surface)}
+.fund-table .metric-name{color:var(--text);font-weight:500}
+.fund-table .metric-val{font-family:var(--mono);text-align:right;color:var(--text)}
+.fund-table .metric-change{text-align:right;font-size:11px}
+.fund-section{margin-bottom:12px}
+.fund-section h5{font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;padding:4px 0;border-bottom:1px solid var(--border)}
+/* Fund flow bars */
+.fund-flow{background:var(--surface2);border-radius:8px;padding:14px;margin-bottom:12px}
+.fund-flow h5{font-size:12px;font-weight:600;color:var(--text);margin-bottom:10px}
+.ff-row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.ff-label{width:80px;font-size:11px;color:var(--text2);text-align:right;flex-shrink:0}
+.ff-track{flex:1;height:16px;background:var(--border);border-radius:4px;overflow:hidden;position:relative}
+.ff-bar{height:100%;border-radius:4px;transition:width .5s ease;min-width:2px}
+.ff-bar.ff-in{background:var(--green)}
+.ff-bar.ff-out{background:var(--red);float:right}
+.ff-val{width:70px;font-size:11px;color:var(--text2);font-family:var(--mono);flex-shrink:0}
+.ff-legend{display:flex;gap:16px;margin-top:8px;font-size:11px;color:var(--text3)}
+.ff-legend span{display:flex;align-items:center;gap:4px}
+.ff-legend-dot{width:8px;height:8px;border-radius:2px}
+/* Sentiment gauge */
+.sentiment-gauge{background:var(--surface2);border-radius:8px;padding:14px;margin-bottom:12px}
+.sentiment-gauge h5{font-size:12px;font-weight:600;color:var(--text);margin-bottom:10px}
+.sg-row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.sg-label{width:80px;font-size:11px;color:var(--text2);text-align:right;flex-shrink:0}
+.sg-track{flex:1;height:12px;background:var(--border);border-radius:6px;overflow:hidden}
+.sg-fill{height:100%;border-radius:6px;transition:width .5s}
+.sg-val{width:40px;font-size:11px;font-family:var(--mono);color:var(--text2);flex-shrink:0;text-align:right}
+.sg-summary{display:flex;align-items:center;gap:12px;margin-top:10px;padding-top:8px;border-top:1px solid var(--border)}
+.sg-score{font-size:28px;font-weight:700;min-width:50px;text-align:center}
+.sg-desc{font-size:12px;color:var(--text2);line-height:1.5}
+/* Cost breakdown */
+.cost-overview{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px}
+.cost-card{background:var(--surface2);border-radius:8px;padding:12px;text-align:center}
+.cost-card .cc-val{font-size:18px;font-weight:700;color:var(--text)}
+.cost-card .cc-label{font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.3px;margin-top:2px}
+/* Phase bars */
+.phase-bars{background:var(--surface2);border-radius:8px;padding:14px;margin-bottom:16px}
+.phase-bars h5{font-size:12px;font-weight:600;color:var(--text);margin-bottom:10px}
+.pb-row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.pb-label{width:80px;font-size:11px;color:var(--text2);text-align:right;flex-shrink:0}
+.pb-track{flex:1;height:20px;background:var(--border);border-radius:4px;overflow:hidden;display:flex}
+.pb-seg{height:100%;transition:width .3s;min-width:2px;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;color:rgba(255,255,255,.8);overflow:hidden;white-space:nowrap}
+.pb-val{width:60px;font-size:11px;font-family:var(--mono);color:var(--text2);flex-shrink:0;text-align:right}
 /* Responsive */
-@media(max-width:768px){.header{flex-direction:column;gap:12px}.plan-grid{grid-template-columns:1fr}.analyst-grid{grid-template-columns:1fr}.debate-row{flex-direction:column}}
+@media(max-width:768px){.header{flex-direction:column;gap:12px}.plan-grid{grid-template-columns:1fr}.analyst-grid{grid-template-columns:1fr}.debate-row{flex-direction:column}.cost-overview{grid-template-columns:1fr}.risk-items{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -713,6 +800,7 @@ async function loadFullDetail(report) {
           ${(trading.entry_signals || []).length ? `<div style="margin-top:8px;font-size:12px"><span class="k">${t('entry')}:</span> ${trading.entry_signals.join('; ')}</div>` : ''}
           ${(trading.exit_signals || []).length ? `<div style="font-size:12px"><span class="k">${t('exit')}:</span> ${trading.exit_signals.join('; ')}</div>` : ''}
           ${(trading.key_risks || []).length ? `<div style="font-size:12px;color:var(--red)"><span class="k">${t('risks')}:</span> ${trading.key_risks.join('; ')}</div>` : ''}
+          ${renderPriceLevels(trading)}
         </div>
       `;
     }
@@ -721,7 +809,8 @@ async function loadFullDetail(report) {
       html += `
         <div class="plan-box">
           <h4 style="color:var(--yellow)">${t('riskAssessment')}</h4>
-          <div class="plan-items">
+          ${renderRiskGauge(riskMgr)}
+          <div class="plan-items" style="margin-top:8px">
             <div><span class="k">${t('score')}:</span> <span>${riskMgr.risk_score}/100</span></div>
             <div><span class="k">${t('status')}:</span> ${badgeHtml(riskMgr.status || '', riskCls)}</div>
           </div>
@@ -734,17 +823,29 @@ async function loadFullDetail(report) {
     if (debateFiles.length > 0) {
       html += `<h4 style="margin-bottom:8px">${t('debate')}</h4>`;
       for (const round of debateFiles) {
+        const bullClaims = round.bull_claims || [];
+        const bearClaims = round.bear_claims || [];
+        const bullDir = round.bull_verdict?.direction || '';
+        const bearDir = round.bear_verdict?.direction || '';
         html += `
           <div class="debate-round">
-            <h4>${t('round').replace('{n}', round.round)}</h4>
+            <h4><span class="round-num">${t('round').replace('{n}', round.round)}</span></h4>
             <div class="debate-row">
               <div class="debate-side debate-bull">
-                <div class="side-label" style="color:var(--green)">${t('bull')}</div>
-                ${(round.bull_claims || []).map(c => `<div style="margin-bottom:6px">${c.evidence || c.topic || ''}</div>`).join('')}
+                <div class="side-label" style="color:var(--green)">🐂 ${t('bull')}</div>
+                ${bullClaims.map(c => `<div class="debate-claim">
+                  ${c.topic ? `<div class="claim-topic">${escapeHtml(c.topic)}</div>` : ''}
+                  <div class="claim-evidence">${escapeHtml(c.evidence || c.reasoning || c.evidence_detail || '')}</div>
+                </div>`).join('')}
+                ${bullDir ? `<div class="debate-verdict" style="background:var(--green20);color:var(--green)">${lang === 'zh' ? '结论' : 'Verdict'}: ${bullDir}</div>` : ''}
               </div>
               <div class="debate-side debate-bear">
-                <div class="side-label" style="color:var(--red)">${t('bear')}</div>
-                ${(round.bear_claims || []).map(c => `<div style="margin-bottom:6px">${c.evidence || c.topic || ''}</div>`).join('')}
+                <div class="side-label" style="color:var(--red)">🐻 ${t('bear')}</div>
+                ${bearClaims.map(c => `<div class="debate-claim">
+                  ${c.topic ? `<div class="claim-topic">${escapeHtml(c.topic)}</div>` : ''}
+                  <div class="claim-evidence">${escapeHtml(c.evidence || c.reasoning || c.evidence_detail || '')}</div>
+                </div>`).join('')}
+                ${bearDir ? `<div class="debate-verdict" style="background:var(--red20);color:var(--red)">${lang === 'zh' ? '结论' : 'Verdict'}: ${bearDir}</div>` : ''}
               </div>
             </div>
           </div>
@@ -839,7 +940,9 @@ async function loadTraces(report) {
     }
 
     panel.innerHTML = `
+      ${renderCostOverview(traces)}
       ${renderGanttChart(traces)}
+      ${renderPhaseBreakdown(traces)}
       <table>
         <thead>
           <tr>
@@ -994,6 +1097,9 @@ async function loadDataSources(report) {
         let vizHtml = '';
         if (role === 'market') vizHtml = renderKlineSection(ds);
         else if (role === 'news') vizHtml = renderNewsTimeline(ds);
+        else if (role === 'fundamentals') vizHtml = renderFundamentalsTable(ds);
+        else if (role === 'hot_money') vizHtml = renderFundFlow(ds);
+        else if (role === 'sentiment') vizHtml = renderSentimentGauge(ds);
         vizEl.innerHTML = vizHtml;
         document.getElementById('data-tree').innerHTML = renderJsonTree(ds);
         expanded.classList.toggle('show');
@@ -1035,6 +1141,322 @@ function capitalize(s) {
 function formatNum(n) {
   if (n == null) return '—';
   return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+}
+
+// ── Price level visualization ──
+function renderPriceLevels(trading) {
+  const target = trading.target_price;
+  const stop = trading.stop_loss;
+  const entry = trading.entry_price || (target && stop ? Math.round((target + stop) / 2) : null);
+  if (!target && !stop) return '';
+
+  const prices = [
+    { label: lang === 'zh' ? '止损价' : 'Stop Loss', val: stop, cls: 'pl-stop' },
+    { label: lang === 'zh' ? '入场价' : 'Entry', val: entry, cls: 'pl-entry' },
+    { label: lang === 'zh' ? '目标价' : 'Target', val: target, cls: 'pl-target' },
+  ].filter(p => p.val);
+
+  if (prices.length < 2) return '';
+
+  const allVals = prices.map(p => p.val);
+  const minP = Math.min(...allVals);
+  const maxP = Math.max(...allVals);
+  const range = maxP - minP || 1;
+
+  return `
+    <div class="price-level" style="margin-top:12px">
+      <h5>${lang === 'zh' ? '价格区间' : 'Price Levels'}</h5>
+      <div class="price-level-chart">
+        ${prices.map(p => {
+          const pct = ((p.val - minP) / range * 100).toFixed(0);
+          return `<div class="pl-line ${p.cls}" style="margin-left:${Math.max(pct - 10, 0)}%;width:${Math.min(pct + 20, 100)}%">
+            <span class="pl-label">${p.label}</span>
+            <span class="pl-val">¥${formatNum(p.val)}</span>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+}
+
+// ── Risk gauge (SVG semicircle) ──
+function renderRiskGauge(riskMgr) {
+  const score = riskMgr.risk_score || 0;
+  const status = riskMgr.status || '';
+  // Color by score: 0-30 green, 31-60 yellow, 61-100 red
+  let color = 'var(--green)';
+  if (score > 60) color = 'var(--red)';
+  else if (score > 30) color = 'var(--yellow)';
+
+  const statusLabel = status === 'pass' ? (lang === 'zh' ? '通过' : 'PASS') :
+    status === 'reject' ? (lang === 'zh' ? '拒绝' : 'REJECT') :
+    status === 'revise' ? (lang === 'zh' ? '需修改' : 'REVISE') : '';
+
+  // Semicircle gauge: radius 80, stroke 12
+  const r = 80, sw = 12;
+  const circumference = Math.PI * r; // half circle
+  const filled = (score / 100) * circumference;
+
+  return `
+    <div class="risk-radar" style="padding:0;background:none">
+      <svg width="200" height="110" viewBox="0 0 200 110" style="display:block;margin:0 auto">
+        <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="var(--border)" stroke-width="${sw}" stroke-linecap="round"/>
+        <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round"
+          stroke-dasharray="${circumference}" stroke-dashoffset="${circumference - filled}"
+          style="transition:stroke-dashoffset .8s ease"/>
+        <text x="100" y="80" class="risk-gauge-label" fill="${color}">${score}</text>
+        <text x="100" y="100" class="risk-gauge-sub">${statusLabel}</text>
+      </svg>
+    </div>`;
+}
+
+// ── Fundamentals table ──
+function renderFundamentalsTable(ds) {
+  if (!ds.success || !ds.data || typeof ds.data !== 'object') return '';
+  const data = ds.data;
+
+  // Extract key-value metrics from fundamentals data
+  const sections = [];
+  // Common fundamental data structures
+  const metricGroups = {
+    [lang === 'zh' ? '基本信息' : 'Basic']: ['ticker','name','industry','sector','total_shares','float_shares','market_cap','pe_ratio','pb_ratio','roe','eps'],
+    [lang === 'zh' ? '财务指标' : 'Financials']: ['revenue','net_profit','gross_margin','net_margin','debt_ratio','current_ratio','quick_ratio','asset_turnover'],
+    [lang === 'zh' ? '成长性' : 'Growth']: ['revenue_growth','profit_growth','eps_growth','roe_trend'],
+  };
+
+  let html = '<div class="fund-table-container">';
+  for (const [sectionName, keys] of Object.entries(metricGroups)) {
+    const found = {};
+    for (const k of keys) {
+      if (data[k] !== undefined) found[k] = data[k];
+    }
+    // Also check nested objects
+    if (data.valuation) {
+      for (const k of keys) { if (data.valuation[k] !== undefined) found[k] = data.valuation[k]; }
+    }
+    if (data.financial) {
+      for (const k of keys) { if (data.financial[k] !== undefined) found[k] = data.financial[k]; }
+    }
+    const foundKeys = Object.keys(found);
+    if (foundKeys.length === 0) continue;
+
+    html += `<div class="fund-section"><h5>${sectionName}</h5><table class="fund-table">`;
+    for (const k of foundKeys) {
+      const v = found[k];
+      const displayVal = typeof v === 'number' ? v.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) : escapeHtml(String(v));
+      html += `<tr><td class="metric-name">${escapeHtml(k)}</td><td class="metric-val">${displayVal}</td></tr>`;
+    }
+    html += '</table></div>';
+  }
+
+  // If no structured groups found, just show all key-value pairs
+  if (html === '<div class="fund-table-container">') {
+    const allKeys = Object.keys(data).filter(k => typeof data[k] !== 'object');
+    if (allKeys.length > 0) {
+      html += `<div class="fund-section"><h5>${lang === 'zh' ? '数据概览' : 'Overview'}</h5><table class="fund-table">`;
+      for (const k of allKeys) {
+        const v = data[k];
+        const displayVal = typeof v === 'number' ? v.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) : escapeHtml(String(v));
+        html += `<tr><td class="metric-name">${escapeHtml(k)}</td><td class="metric-val">${displayVal}</td></tr>`;
+      }
+      html += '</table></div>';
+    }
+  }
+
+  html += '</div>';
+  return html === '<div class="fund-table-container"></div>' ? '' : html;
+}
+
+// ── Fund flow visualization ──
+function renderFundFlow(ds) {
+  if (!ds.success || !ds.data || typeof ds.data !== 'object') return '';
+  const data = ds.data;
+
+  // Look for flow data in common structures
+  const flowItems = [];
+  const flowKeys = ['main_net_inflow','super_large_net','large_net','medium_net','small_net',
+    'north_flow','main_inflow','main_outflow','net_inflow','net_outflow'];
+  for (const k of flowKeys) {
+    if (data[k] !== undefined && typeof data[k] === 'number') {
+      flowItems.push({ key: k, value: data[k] });
+    }
+  }
+  // Check nested flow data
+  if (data.flows && typeof data.flows === 'object') {
+    for (const [k, v] of Object.entries(data.flows)) {
+      if (typeof v === 'number') flowItems.push({ key: k, value: v });
+    }
+  }
+  if (data.flow_data && typeof data.flow_data === 'object') {
+    for (const [k, v] of Object.entries(data.flow_data)) {
+      if (typeof v === 'number') flowItems.push({ key: k, value: v });
+    }
+  }
+
+  if (flowItems.length === 0) return '';
+
+  const maxAbs = Math.max(...flowItems.map(f => Math.abs(f.value)), 1);
+
+  let html = `<div class="fund-flow"><h5>${lang === 'zh' ? '资金流向' : 'Fund Flow'}</h5>`;
+  for (const item of flowItems) {
+    const isPositive = item.value >= 0;
+    const pct = (Math.abs(item.value) / maxAbs * 100).toFixed(1);
+    const label = lang === 'zh' ? flowLabelZh(item.key) : item.key;
+    const valStr = (isPositive ? '+' : '') + (item.value >= 100000000 ? (item.value / 100000000).toFixed(2) + '亿' : item.value >= 10000 ? (item.value / 10000).toFixed(0) + '万' : item.value.toLocaleString());
+    html += `<div class="ff-row">
+      <div class="ff-label">${label}</div>
+      <div class="ff-track">
+        <div class="ff-bar ${isPositive ? 'ff-in' : 'ff-out'}" style="width:${pct}%"></div>
+      </div>
+      <div class="ff-val" style="color:${isPositive ? 'var(--green)' : 'var(--red)'}">${valStr}</div>
+    </div>`;
+  }
+  html += `<div class="ff-legend">
+    <span><span class="ff-legend-dot" style="background:var(--green)"></span>${lang === 'zh' ? '流入' : 'Inflow'}</span>
+    <span><span class="ff-legend-dot" style="background:var(--red)"></span>${lang === 'zh' ? '流出' : 'Outflow'}</span>
+  </div></div>`;
+  return html;
+}
+
+function flowLabelZh(key) {
+  const map = {
+    main_net_inflow: '主力净流入', super_large_net: '超大单净流入', large_net: '大单净流入',
+    medium_net: '中单净流入', small_net: '小单净流入', north_flow: '北向资金',
+    main_inflow: '主力流入', main_outflow: '主力流出', net_inflow: '净流入', net_outflow: '净流出'
+  };
+  return map[key] || key;
+}
+
+// ── Sentiment gauge ──
+function renderSentimentGauge(ds) {
+  if (!ds.success || !ds.data || typeof ds.data !== 'object') return '';
+  const data = ds.data;
+
+  // Look for sentiment indicators
+  const indicators = [];
+  const sentiKeys = ['fear_greed_index','bull_ratio','bear_ratio','neutral_ratio',
+    'sentiment_score','market_breadth','advance_count','decline_count',
+    'turnover_rate','volume_ratio','pe_ratio','pb_ratio'];
+  for (const k of sentiKeys) {
+    if (data[k] !== undefined && typeof data[k] === 'number') {
+      indicators.push({ key: k, value: data[k] });
+    }
+  }
+  // Check nested
+  if (data.indicators && typeof data.indicators === 'object') {
+    for (const [k, v] of Object.entries(data.indicators)) {
+      if (typeof v === 'number') indicators.push({ key: k, value: v });
+    }
+  }
+  if (data.sentiment && typeof data.sentiment === 'object') {
+    for (const [k, v] of Object.entries(data.sentiment)) {
+      if (typeof v === 'number') indicators.push({ key: k, value: v });
+    }
+  }
+
+  if (indicators.length === 0) return '';
+
+  // Determine overall sentiment score
+  let score = data.sentiment_score || data.fear_greed_index || 50;
+  score = Math.max(0, Math.min(100, score));
+  const scoreLabel = score >= 70 ? (lang === 'zh' ? '贪婪' : 'Greed') :
+    score >= 40 ? (lang === 'zh' ? '中性' : 'Neutral') :
+    (lang === 'zh' ? '恐惧' : 'Fear');
+  const scoreColor = score >= 70 ? 'var(--green)' : score >= 40 ? 'var(--yellow)' : 'var(--red)';
+
+  let html = `<div class="sentiment-gauge"><h5>${lang === 'zh' ? '市场情绪' : 'Market Sentiment'}</h5>`;
+  for (const ind of indicators) {
+    // Normalize to 0-100 for bar width
+    let pct = ind.value;
+    if (ind.key.includes('ratio') || ind.key.includes('Ratio')) pct = ind.value * 100;
+    if (ind.key.includes('pe_') || ind.key.includes('pb_')) pct = Math.min(ind.value / 50 * 100, 100);
+    pct = Math.max(0, Math.min(100, pct));
+    const label = lang === 'zh' ? sentimentLabelZh(ind.key) : ind.key;
+    const valStr = typeof ind.value === 'number' ? (ind.value >= 100 ? Math.round(ind.value).toLocaleString() : ind.value.toFixed(ind.value < 1 ? 2 : 1)) : ind.value;
+    // Color by value range
+    let barColor = 'var(--blue)';
+    if (ind.key.includes('bull') || ind.key.includes('Bull') || ind.key.includes('advance')) barColor = 'var(--green)';
+    if (ind.key.includes('bear') || ind.key.includes('Bear') || ind.key.includes('decline')) barColor = 'var(--red)';
+    if (ind.key.includes('fear') || ind.key.includes('greed')) barColor = scoreColor;
+    html += `<div class="sg-row">
+      <div class="sg-label">${label}</div>
+      <div class="sg-track"><div class="sg-fill" style="width:${pct}%;background:${barColor}"></div></div>
+      <div class="sg-val">${valStr}</div>
+    </div>`;
+  }
+  html += `<div class="sg-summary">
+    <div class="sg-score" style="color:${scoreColor}">${Math.round(score)}</div>
+    <div class="sg-desc">${scoreLabel}${indicators.length > 0 ? ` · ${indicators.length} ${lang === 'zh' ? '项指标' : 'indicators'}` : ''}</div>
+  </div></div>`;
+  return html;
+}
+
+function sentimentLabelZh(key) {
+  const map = {
+    fear_greed_index: '恐贪指数', bull_ratio: '看多比例', bear_ratio: '看空比例',
+    neutral_ratio: '中性比例', sentiment_score: '情绪评分', market_breadth: '市场广度',
+    advance_count: '上涨家数', decline_count: '下跌家数', turnover_rate: '换手率',
+    volume_ratio: '量比', pe_ratio: '市盈率', pb_ratio: '市净率'
+  };
+  return map[key] || key;
+}
+
+// ── Cost & Token breakdown for traces ──
+function renderCostOverview(traces) {
+  if (!traces || traces.length === 0) return '';
+  const totalCost = traces.reduce((s, t) => s + (t.meta?.cost_usd || 0), 0);
+  const totalTokens = traces.reduce((s, t) => s + (t.meta?.usage?.total_tokens || 0), 0);
+  const totalDuration = traces.reduce((s, t) => s + (t.meta?.duration_ms || 0), 0);
+  const durStr = totalDuration >= 60000 ? (totalDuration / 60000).toFixed(1) + 'min' :
+    totalDuration >= 1000 ? (totalDuration / 1000).toFixed(1) + 's' : totalDuration + 'ms';
+
+  return `
+    <div class="cost-overview">
+      <div class="cost-card">
+        <div class="cc-val">$${totalCost.toFixed(4)}</div>
+        <div class="cc-label">${lang === 'zh' ? '总费用' : 'Total Cost'}</div>
+      </div>
+      <div class="cost-card">
+        <div class="cc-val">${totalTokens.toLocaleString()}</div>
+        <div class="cc-label">${lang === 'zh' ? '总 Token' : 'Total Tokens'}</div>
+      </div>
+      <div class="cost-card">
+        <div class="cc-val">${durStr}</div>
+        <div class="cc-label">${lang === 'zh' ? '总耗时' : 'Duration'}</div>
+      </div>
+    </div>`;
+}
+
+function renderPhaseBreakdown(traces) {
+  if (!traces || traces.length < 2) return '';
+  // Group by phase
+  const phases = {};
+  for (const tr of traces) {
+    const phase = tr.phase || 'unknown';
+    if (!phases[phase]) phases[phase] = { cost: 0, tokens: 0, duration: 0, count: 0 };
+    phases[phase].cost += tr.meta?.cost_usd || 0;
+    phases[phase].tokens += tr.meta?.usage?.total_tokens || 0;
+    phases[phase].duration += tr.meta?.duration_ms || 0;
+    phases[phase].count++;
+  }
+
+  const maxDuration = Math.max(...Object.values(phases).map(p => p.duration), 1);
+
+  let html = `<div class="phase-bars"><h5>${lang === 'zh' ? '阶段耗时分布' : 'Phase Duration Breakdown'}</h5>`;
+  for (const [phase, info] of Object.entries(phases)) {
+    const pct = (info.duration / maxDuration * 100).toFixed(1);
+    const c = phaseColors[phase] || ['var(--border2)','var(--text2)'];
+    const durStr = info.duration >= 1000 ? (info.duration / 1000).toFixed(1) + 's' : info.duration + 'ms';
+    const label = phaseName(phase);
+    html += `<div class="pb-row">
+      <div class="pb-label">${label}</div>
+      <div class="pb-track">
+        <div class="pb-seg" style="width:${pct}%;background:${c[1]}">${info.count > 1 ? info.count + 'x' : ''}</div>
+      </div>
+      <div class="pb-val">${durStr}</div>
+    </div>`;
+  }
+  html += '</div>';
+  return html;
 }
 
 // ── K-line candlestick chart ──
