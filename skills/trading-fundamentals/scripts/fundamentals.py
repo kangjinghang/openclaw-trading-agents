@@ -134,10 +134,15 @@ def fetch_fundamentals(ticker, date):
 
 
 def _fetch_quarterly_financials(code):
-    """Fetch last 4 quarters of revenue/net profit/EPS/YoY from Eastmoney Datacenter."""
-    market_code = "1" if code.startswith("6") else "0"
-    secid = f"{market_code}.{code}"
+    """Fetch last 4 quarters of revenue/net profit/EPS/YoY from Eastmoney Datacenter.
 
+    Source: Eastmoney Datacenter report RPT_LICO_FN_CPD.
+
+    Note: the report's date column is REPORTDATE (no underscore); an earlier
+    sortColumns=REPORT_DATE silently failed every request with success=False
+    (same bug class as _fetch_consensus_eps). Result may be null when the
+    stock has no quarterly coverage.
+    """
     url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
     params = {
         "reportName": "RPT_LICO_FN_CPD",
@@ -145,7 +150,7 @@ def _fetch_quarterly_financials(code):
         "filter": f'(SECURITY_CODE="{code}")',
         "pageNumber": "1",
         "pageSize": "5",
-        "sortColumns": "REPORT_DATE",
+        "sortColumns": "REPORTDATE",
         "sortTypes": "-1",
         "source": "WEB",
         "client": "WEB",
@@ -154,11 +159,13 @@ def _fetch_quarterly_financials(code):
     d = r.json()
 
     results = []
-    items = d.get("result", {}).get("data", [])
+    # Defensive: Eastmoney returns "result": null both on failure and when the
+    # stock has no quarterly data. Treat both as "no data".
+    items = (d.get("result") or {}).get("data", [])
     for item in (items or [])[:4]:
         quarter = {}
-        if item.get("REPORT_DATE"):
-            quarter["report_date"] = item["REPORT_DATE"][:10]
+        if item.get("REPORTDATE"):
+            quarter["report_date"] = item["REPORTDATE"][:10]
         if item.get("TOTAL_OPERATE_INCOME"):
             quarter["revenue_yi"] = round(float(item["TOTAL_OPERATE_INCOME"]) / 1e8, 2)
         if item.get("PARENT_NETPROFIT"):
