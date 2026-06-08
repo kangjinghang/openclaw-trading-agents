@@ -2,6 +2,7 @@
 
 import OpenAI from "openai";
 import { execPython } from "./exec-python";
+import { PYTHON_SCRIPT_TIMEOUT_MS } from "./constants";
 import { loadAndRender } from "./prompt-loader";
 import { callLLM, parseVerdict } from "./llm-client";
 import { TraceLogger } from "./trace-logger";
@@ -221,6 +222,7 @@ const ANALYST_CONFIGS = [
     systemPrompt: "You are a professional market analyst specializing in Chinese A-share markets.",
     dataKey: "kline",
     extraArgs: (_ticker: string) => ["--count", "120"],
+    timeoutMs: 60_000, // K-line fetch + VPA + technical indicators can be slow
   },
   {
     role: "fundamentals",
@@ -272,6 +274,11 @@ const ANALYST_CONFIGS = [
   },
 ] as const;
 
+/** Get timeout for an analyst config, defaulting to PYTHON_SCRIPT_TIMEOUT_MS */
+function scriptTimeout(cfg: typeof ANALYST_CONFIGS[number]): number {
+  return (cfg as any).timeoutMs ?? PYTHON_SCRIPT_TIMEOUT_MS;
+}
+
 /** Save raw data source outputs to the report directory for traceability */
 function saveRawData(
   detailDir: string,
@@ -319,7 +326,7 @@ async function runAnalystPhase(
       const scriptPath = path.join(SKILLS_DIR, cfg.script);
       const args = ["--ticker", ticker, "--date", date, ...cfg.extraArgs(ticker)];
       try {
-        const result: ScriptResult = await execPython(scriptPath, args);
+        const result: ScriptResult = await execPython(scriptPath, args, null, 'python3', scriptTimeout(cfg));
         dataResults[idx] = { role: cfg.role, result };
         if (!result.success) {
           logProgress(runId, `  数据采集 ${cfg.role} 失败: ${result.error?.slice(0, 80)}`);
