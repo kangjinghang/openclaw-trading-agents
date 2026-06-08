@@ -114,6 +114,22 @@ def fetch_fundamentals(ticker, date):
     except Exception as e:
         data["consensus_eps_error"] = str(e)
 
+    # 6. Derived forward-valuation metrics (need both valuation + consensus).
+    #    Pre-computed to avoid LLM arithmetic errors (project convention;
+    #    see competitor-analysis §4 "预计算技术指标…避免 LLM 自己算错").
+    consensus = data.get("consensus_eps")
+    valuation = data.get("valuation") or {}
+    if consensus:
+        price = valuation.get("price")
+        eps_next = consensus.get("consensus_eps_next")
+        if price and eps_next and eps_next > 0:
+            consensus["forward_pe"] = round(price / eps_next, 2)
+        pe_ttm = valuation.get("pe_ttm")
+        growth = consensus.get("eps_growth_pct")
+        # PEG is only meaningful for positive earnings growth.
+        if pe_ttm and growth and growth > 0:
+            consensus["peg"] = round(pe_ttm / growth, 2)
+
     return data
 
 
@@ -163,9 +179,25 @@ def _fetch_quarterly_financials(code):
 
 
 def _fetch_consensus_eps(code):
-    """Fetch analyst consensus EPS / target price / rating from Eastmoney."""
-    market_code = "1" if code.startswith("6") else "0"
-    secid = f"{market_code}.{code}"
+    """Fetch analyst consensus: 4-year EPS forecast, ratings, target price range.
+
+    Source: Eastmoney Datacenter report RPT_WEB_RESPREDICT.
+
+    Note: this report has no REPORTDATE column, so we omit sortColumns
+    (a previous sortColumns=REPORTDATE silently failed every request with
+    success=False). Result may be null when the stock has no analyst coverage.
+    """
+    def _f(v):
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _int(v):
+        try:
+            return int(v) if v is not None else 0
+        except (TypeError, ValueError):
+            return 0
 
     url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
     params = {
@@ -174,30 +206,66 @@ def _fetch_consensus_eps(code):
         "filter": f'(SECURITY_CODE="{code}")',
         "pageNumber": "1",
         "pageSize": "5",
-        "sortColumns": "REPORTDATE",
-        "sortTypes": "-1",
         "source": "WEB",
         "client": "WEB",
     }
     r = em_get(url, params=params, timeout=15)
-    d = r.json()
+    j = r.json()
 
-    items = d.get("result", {}).get("data", [])
-    if not items:
+    # Defensive: Eastmoney returns "result": null both on failure and when the
+    # stock has no forecast coverage. Treat both as "no data".
+    data = (j.get("result") or {}).get("data", [])
+    if not data:
         return None
 
-    item = items[0]
+    item = data[0]
     result = {}
-    if item.get("PREDICT_EPS_THISYEAR"):
-        result["consensus_eps"] = round(float(item["PREDICT_EPS_THISYEAR"]), 2)
-    if item.get("PREDICT_EPS_NEXTYEAR"):
-        result["consensus_eps_next_year"] = round(float(item["PREDICT_EPS_NEXTYEAR"]), 2)
-    if item.get("TARGET_PRICE"):
-        result["target_price"] = round(float(item["TARGET_PRICE"]), 2)
-    if item.get("RESEARCHER_NUM"):
-        result["analyst_count"] = int(item["RESEARCHER_NUM"])
-    if item.get("RATING"):
-        result["avg_rating"] = item["RATING"]
+
+    # 4-year EPS forecast (YEAR1 earliest; YEAR_MARK A=actual, E=estimate)
+    forecast_years = []
+    for i in range(1, 5):
+        eps = _f(item.get(f"EPS{i}"))
+        year = item.get(f"YEAR{i}")
+        mark = item.get(f"YEAR_MARK{i}")
+        if eps is not None and year is not None:
+            forecast_years.append({
+                "year": int(year),
+                "type": mark or "",        # "A" actual / "E" estimate
+                "eps": round(eps, 4),
+            })
+    if forecast_years:
+        result["forecast_years"] = forecast_years
+
+    # Current (first/earliest) and next-year consensus EPS
+    if len(forecast_years) >= 1:
+        result["consensus_eps_current"] = forecast_years[0]["eps"]
+    if len(forecast_years) >= 2:
+        result["consensus_eps_next"] = forecast_years[1]["eps"]
+
+    # EPS growth rate (current -> next year). Needs positive current EPS.
+    cur = result.get("consensus_eps_current")
+    nxt = result.get("consensus_eps_next")
+    if cur and nxt and cur > 0:
+        result["eps_growth_pct"] = round((nxt - cur) / cur * 100, 2)
+
+    # Analyst coverage + rating distribution (null categories → 0)
+    if item.get("RATING_ORG_NUM") is not None:
+        result["analyst_count"] = _int(item.get("RATING_ORG_NUM"))
+    result["ratings"] = {
+        "buy": _int(item.get("RATING_BUY_NUM")),
+        "overweight": _int(item.get("RATING_ADD_NUM")),
+        "neutral": _int(item.get("RATING_NEUTRAL_NUM")),
+        "underweight": _int(item.get("RATING_REDUCE_NUM")),
+        "sell": _int(item.get("RATING_SALE_NUM")),
+    }
+
+    # Analyst target-price range
+    tp_min = _f(item.get("DEC_AIMPRICEMIN"))
+    tp_max = _f(item.get("DEC_AIMPRICEMAX"))
+    if tp_min is not None:
+        result["target_price_min"] = round(tp_min, 2)
+    if tp_max is not None:
+        result["target_price_max"] = round(tp_max, 2)
 
     return result if result else None
 

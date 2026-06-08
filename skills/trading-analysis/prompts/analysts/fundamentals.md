@@ -21,7 +21,7 @@
 - `valuation`：实时估值（PE/PB/市值等）
 - `financial_snapshot`：最新财务快照（含 `roe`、`debt_ratio`、`operating_cash_flow`、`gross_margin` 等字段）
 - `quarterly_trends`：最近 4 季度营收/净利/EPS/同比/ROE/毛利率趋势
-- `consensus_eps`：机构一致预期 EPS / 目标价 / 评级 / 覆盖机构数
+- `consensus_eps`：机构一致预期，含 `forecast_years`（4 年 EPS 预测，`type` 标 A=实际/E=预测）、`consensus_eps_current`（当期）、`consensus_eps_next`（次年）、`eps_growth_pct`（预期增速%）、`forward_pe`（远期市盈率=现价/次年 EPS）、`peg`（=PE_TTM/预期增速，仅正增长时给出）、`target_price_min/max`（目标价区间）、`ratings`（评级分布）、`analyst_count`（覆盖机构数）
 
 {{fundamentals}}
 
@@ -50,9 +50,12 @@
 - 经营性现金流与净利润比值
 - 商誉占比（如有）
 
-### 4. 机构预期
-- 机构一致预期 EPS
-- 目标价区间（如有数据）
+### 4. 机构预期与远期估值
+- 机构一致预期 EPS（当期 `consensus_eps_current` + 次年 `consensus_eps_next`，可引用 `forecast_years` 多年趋势）
+- 远期市盈率 `forward_pe` 与当前 PE(TTM) 对比：远期更低 = 市场预期盈利改善，远期更高则反之
+- PEG 估值判断：`peg` < 1 通常视为增速下被低估，> 2 偏贵；务必结合 `eps_growth_pct` 解读（高增速股 PEG 容忍度更高）
+- 目标价区间（`target_price_min/max`）及相对当前价的空间
+- 机构评级分布（`ratings`：买入/增持/中性/减持/卖出）与覆盖机构数（`analyst_count`）
 
 ### 5. 估值评价
 - 当前估值处于历史分位（高估/合理/低估）

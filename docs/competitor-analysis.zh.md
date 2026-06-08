@@ -147,9 +147,12 @@ def get_lhb_detail(self, symbol: str, date: str) -> str:
 
 ---
 
-#### 3.2 一致预期 / 远期 PE-PEG（机构盈利预测） —— astock
+#### 3.2 一致预期 / 远期 PE-PEG（机构盈利预测） —— 已完成 ✅ —— astock
 
-**现状**：本项目 `skills/trading-fundamentals/scripts/fundamentals.py` 是**向后看**（历史 PE/PB/EPS 快照）。
+**调研纠错**：初稿称本项目 fundamentals.py "仅向后看"。实际情况——`_fetch_consensus_eps` 早已对接 Eastmoney `RPT_WEB_RESPREDICT`，但**实现有 3 个 bug 导致从未跑通**：
+1. `sortColumns=REPORTDATE` —— 该报表无此列，请求每次以 `success=False` 失败；
+2. 字段名全错（取 `PREDICT_EPS_THISYEAR` / `TARGET_PRICE` / `RESEARCHER_NUM`，实际是 `EPS1-4` / `DEC_AIMPRICEMAX` / `RATING_ORG_NUM` 等）；
+3. `"result": null` 时 `d.get("result", {}).get(...)` 崩溃（默认值仅在键缺失时生效，键值为 null 时不生效）。
 
 **借鉴点**：astock 拉了一致预期 EPS、forward PE、PEG、PE 消化时间。
 
@@ -159,8 +162,14 @@ def get_lhb_detail(self, symbol: str, date: str) -> str:
 ```
 
 **收益**：A 股成长股定价基本看一致预期，这是基本面分析**最大的盲点**。
-**注意**：同花顺爬取较脆，可改用 tushare 或 eastmoney 一致预期接口。
-**改动范围**：新增 `fundamentals.py` 数据段 / 或新 skill。
+**注意**：同花顺爬取较脆，本项目沿用 Eastmoney datacenter（已在用，免 token）。
+
+**已做改动**：
+- 修复 3 个 bug：移除 `sortColumns`、按真实字段映射、`(j.get("result") or {})` 防御 null。
+- 重构返回为结构化：`forecast_years`（4 年 EPS，A=实际/E=预测）、`consensus_eps_current/next`、`analyst_count`、`ratings`（买入/增持/中性/减持/卖出分布）、`target_price_min/max`。
+- Python 侧预计算远期估值（遵循本项目"预计算避免 LLM 算错"惯例）：`eps_growth_pct`、`forward_pe = 现价 / 次年 EPS`、`peg = PE_TTM / 预期增速`（仅正增长时）。
+- `fundamentals.md` 字段说明 + 必采清单 §4 同步更新，显式要求 LLM 解读 forward_pe 与 PEG。
+- 实测：茅台 PEG 4.04（低增速偏贵）/ 宁德时代 PEG 0.70（高增速下被低估），区分度有效。
 
 ---
 
@@ -261,13 +270,13 @@ Eastmoney 对激进调用会封 IP。astock 用 `1.0s + 0.1~0.5s 抖动` + Keep-
 | ~~P1~~ ✅ | 风控结构化约束（hard/soft/precondition/trigger） | 提示词+解析 | 中 | §2.2 |
 | ~~P1~~ ✅ | DEBATE_STATE 辩论状态追踪 | 提示词+解析 | 中（辩论收敛质变） | §2.1 |
 | ~~P2~~ ✅ | trader 加 triggers/invalidations | 提示词 | 小 | §2.4 |
-| **P2** | 一致预期 EPS/PEG 数据 | 数据 | 中（接口选型） | §3.2 |
+| ~~P2~~ ✅ | 一致预期 EPS/PEG 数据 | 数据 | 中（接口选型） | §3.2 |
 | **P3** | 涨停情绪池 + 板块资金流 | 数据 | 中 | §3.3 / §3.6 |
 | **P3** | 双层数据质量门 | 工程 | 中 | §4 |
 | 路线图 | 自我反思闭环 | 提示词+存储 | 大 | §2.5 |
 | 实验 | 辩论层英文推理 A/B | 提示词 | 小 | §2.6 |
 
-**P0 + P1 均已完成**。P0 见 commit `fa389a0`（龙虎榜字段 + 威科夫框架）；P1 含 §2.1 DEBATE_STATE 辩论状态追踪（见 `src/debate.ts` `parseDebateState`）与 §2.2 RISK_JUDGE 风控结构化约束（见 `src/risk.ts` `parseRiskJudge`，revise 回路经 `src/orchestrator.ts` 注入 trader）。**P2 进行中**：§2.4 trader triggers/invalidations 已完成（见 `TradingPlan.invalidations` + `trader.md` §3/§5）；剩余 §3.2 一致预期 EPS/PEG 数据。
+**P0 + P1 + P2 均已完成**。P0 见 commit `fa389a0`；P1 含 §2.1 DEBATE_STATE + §2.2 RISK_JUDGE；P2 含 §2.4 trader triggers/invalidations（`TradingPlan.invalidations`）与 §3.2 一致预期 EPS/PEG（修复 `fundamentals.py` 的 3 个 consensus 拉取 bug + Python 侧预计算 `forward_pe`/`peg`）。**剩余 P3 及实验/路线图层**（涨停情绪池、板块资金流、双层数据质量门、自我反思闭环、辩论英文推理 A/B）。
 
 ---
 
