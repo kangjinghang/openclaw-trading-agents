@@ -94,7 +94,7 @@ def _fetch_hot_stocks(date):
 
 
 def _fetch_dragon_tiger(code, date, lookback=30):
-    """Fetch dragon-tiger board appearances."""
+    """Fetch dragon-tiger board appearances with buy/sell amounts."""
     start_dt = (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=lookback)).strftime("%Y-%m-%d")
     try:
         data = eastmoney_datacenter(
@@ -107,10 +107,16 @@ def _fetch_dragon_tiger(code, date, lookback=30):
         if not data:
             return []
         return [
-            {"date": str(row.get("TRADE_DATE", ""))[:10],
-             "reason": row.get("EXPLANATION", ""),
-             "net_buy": round((row.get("BILLBOARD_NET_AMT") or 0) / 10000, 1),
-             "turnover": round(float(row.get("TURNOVERRATE") or 0), 2)}
+            {
+                "date": str(row.get("TRADE_DATE", ""))[:10],
+                "reason": row.get("EXPLANATION", ""),
+                "net_buy": round((row.get("BILLBOARD_NET_AMT") or 0) / 10000, 1),
+                "buy_amt": round((row.get("BILLBOARD_BUY_AMT") or 0) / 10000, 1),
+                "sell_amt": round((row.get("BILLBOARD_SELL_AMT") or 0) / 10000, 1),
+                "turnover": round(float(row.get("TURNOVERRATE") or 0), 2),
+                "close_price": round(float(row.get("CLOSE_PRICE") or 0), 2),
+                "change_rate": round(float(row.get("CHANGE_RATE") or 0), 2),
+            }
             for row in data
         ]
     except Exception:
