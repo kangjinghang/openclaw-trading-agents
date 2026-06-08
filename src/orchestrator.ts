@@ -605,7 +605,10 @@ export async function runFullAnalysis(
   while (riskAssessment.status === "revise" && retries < config.max_risk_retries) {
     retries++;
     logProgress(runId, `  风控要求修订 (${retries}/${config.max_risk_retries}), 重新生成交易计划...`);
-    tradingPlan = await runTrader(researchDecision, analystReports, quality.summary_text, config, openaiClient, traceLogger, ticker, date);
+    // Inject the prior risk constraints into the trader so the revised plan
+    // actually addresses them (instead of a blind retry). max_position_override
+    // remains as a hard numeric cap fallback in case the LLM ignores hard_constraints.
+    tradingPlan = await runTrader(researchDecision, analystReports, quality.summary_text, config, openaiClient, traceLogger, ticker, date, riskAssessment.judge);
     if (riskAssessment.max_position_override) {
       tradingPlan.position_pct = Math.min(tradingPlan.position_pct, riskAssessment.max_position_override);
     }

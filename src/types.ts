@@ -124,6 +124,9 @@ export interface DebateClaim {
   evidence: string;
   confidence: number;
   responded_by?: string;
+  // ── DEBATE_STATE tracking (optional, additive) ──
+  status?: "open" | "addressed" | "resolved" | "unresolved";
+  round?: number;
 }
 
 /** One round of Bull↔Bear debate. */
@@ -131,6 +134,28 @@ export interface DebateRound {
   round: number;
   bull_claims: DebateClaim[];
   bear_claims: DebateClaim[];
+  // ── DEBATE_STATE tracking (optional, additive) ──
+  bull_responded_ids?: string[];
+  bear_responded_ids?: string[];
+  resolved_ids?: string[];
+  unresolved_ids?: string[];
+  next_focus_ids?: string[];
+  round_summary?: string;
+  round_goal?: string;
+}
+
+/**
+ * Parsed DEBATE_STATE payload from an LLM debate turn.
+ * Extracted from `<!-- DEBATE_STATE: {...} -->` JSON blocks.
+ */
+export interface DebateStatePayload {
+  responded_claim_ids: string[];
+  new_claims: { claim: string; evidence: string[]; confidence: number }[];
+  resolved_claim_ids: string[];
+  unresolved_claim_ids: string[];
+  next_focus_claim_ids: string[];
+  round_summary: string;
+  round_goal: string;
 }
 
 /** Full Bull↔Bear debate result. */
@@ -182,9 +207,27 @@ export interface RiskDebateResult {
   total_cost_usd: number;
 }
 
+/**
+ * Parsed RISK_JUDGE payload from an LLM risk-manager turn.
+ * Extracted from `<!-- RISK_JUDGE: {...} -->` JSON blocks.
+ * Upgrades the binary pass/revise/reject gate into an actionable
+ * constraint checklist that downstream consumers (esp. the trader on
+ * revise-retry) can honor.
+ */
+export interface RiskJudge {
+  verdict: "pass" | "revise" | "reject";
+  reason: string;
+  hard_constraints: string[];          // 硬约束（必须遵守，违反即视为不合规）
+  soft_constraints: string[];          // 软建议（推荐但非强制）
+  execution_preconditions: string[];   // 进场前提（满足后才动手）
+  de_risk_triggers: string[];          // 降风险触发器（出现即减仓/重新评估）
+}
+
 /** Risk Manager final assessment. */
 export interface RiskAssessment {
   status: "pass" | "revise" | "reject";
+  /** Structured constraints from RISK_JUDGE block (undefined when LLM emits only VERDICT). */
+  judge?: RiskJudge;
   revised_plan?: TradingPlan;
   reasoning: string;
   risk_score: number;

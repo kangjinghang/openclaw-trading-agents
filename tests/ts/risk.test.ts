@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { runRiskDebate, runRiskManager } from "../../src/risk";
+import { runRiskDebate, runRiskManager, parseRiskJudge } from "../../src/risk";
 import { TradingAgentsConfig, TradingPlan, RiskDebateResult } from "../../src/types";
 import OpenAI from "openai";
 
@@ -126,5 +126,125 @@ describe("Risk Module", () => {
       expect(result.risk_score).toBe(45);
       expect(mockCreate).toHaveBeenCalledTimes(1);
     });
+
+    it("should populate judge from RISK_JUDGE block and derive status from it", async () => {
+      const mockCreate = vi.mocked(mockClient.chat.completions.create);
+      mockCreate.mockResolvedValueOnce({
+        choices: [{
+          message: {
+            content: `### 1. 风险评分（0-100）
+62
+
+### 2. 风控决策
+- **status**：revise
+- **理由**：仓位偏高，需降低并分批建仓
+
+### 4. 约束清单
+#### A. 硬约束
+- 仓位 ≤ 30%
+- 止损价 ≥ 60.5 元
+
+#### B. 软建议
+- 分两笔建仓
+
+#### C. 进场前提
+- 开盘不追高
+
+#### D. 降风险触发器
+- 跌破 60.5 减半仓
+
+<!-- VERDICT: {"direction": "revise", "reason": "仓位偏高"} -->
+<!-- RISK_JUDGE: {"verdict": "revise", "reason": "仓位偏高，需降低并分批建仓", "hard_constraints": ["仓位≤30%", "止损价≥60.5元"], "soft_constraints": ["分两笔建仓"], "execution_preconditions": ["开盘不追高"], "de_risk_triggers": ["跌破60.5减半仓"]} -->`,
+          },
+        }],
+        usage: { prompt_tokens: 600, completion_tokens: 300, total_tokens: 900 },
+      } as any);
+
+      const debateResult: RiskDebateResult = {
+        rounds: [[]],
+        risk_arguments: [],
+        total_tokens: 0,
+        total_cost_usd: 0,
+      };
+
+      const result = await runRiskManager(debateResult, mockTradingPlan(), mockConfig, mockClient, mockTraceLogger);
+
+      // status derived from RISK_JUDGE.verdict (preferred over VERDICT)
+      expect(result.status).toBe("revise");
+      expect(result.judge).toBeDefined();
+      expect(result.judge!.verdict).toBe("revise");
+      expect(result.judge!.reason).toBe("仓位偏高，需降低并分批建仓");
+      expect(result.judge!.hard_constraints).toEqual(["仓位≤30%", "止损价≥60.5元"]);
+      expect(result.judge!.soft_constraints).toEqual(["分两笔建仓"]);
+      expect(result.judge!.execution_preconditions).toEqual(["开盘不追高"]);
+      expect(result.judge!.de_risk_triggers).toEqual(["跌破60.5减半仓"]);
+      // risk_score still extracted via the separate risk-score regex
+      expect(result.risk_score).toBe(62);
+      // reasoning prefers judge.reason when present
+      expect(result.reasoning).toBe("仓位偏高，需降低并分批建仓");
+    });
+  });
+});
+
+describe("parseRiskJudge", () => {
+  it("should parse a valid RISK_JUDGE JSON block", () => {
+    const content = `### 4. 约束清单
+
+#### A. 硬约束
+- 仓位 ≤ 30%
+
+<!-- VERDICT: {"direction": "pass", "reason": "可控"} -->
+<!-- RISK_JUDGE: {"verdict": "pass", "reason": "风险可控", "hard_constraints": ["仓位≤30%"], "soft_constraints": ["分两笔建仓"], "execution_preconditions": ["开盘不追高"], "de_risk_triggers": ["跌破60.5减半仓"]} -->`;
+
+    const result = parseRiskJudge(content);
+    expect(result).not.toBeNull();
+    expect(result!.verdict).toBe("pass");
+    expect(result!.reason).toBe("风险可控");
+    expect(result!.hard_constraints).toEqual(["仓位≤30%"]);
+    expect(result!.soft_constraints).toEqual(["分两笔建仓"]);
+    expect(result!.execution_preconditions).toEqual(["开盘不追高"]);
+    expect(result!.de_risk_triggers).toEqual(["跌破60.5减半仓"]);
+  });
+
+  it("should return null for malformed JSON in RISK_JUDGE block", () => {
+    const content = `Some markdown.
+
+<!-- RISK_JUDGE: {invalid json, missing quotes} -->`;
+
+    expect(parseRiskJudge(content)).toBeNull();
+  });
+
+  it("should return null when no RISK_JUDGE block is present", () => {
+    const content = `### 风控决策
+- **status**：pass
+
+<!-- VERDICT: {"direction": "pass", "reason": "test"} -->`;
+
+    expect(parseRiskJudge(content)).toBeNull();
+  });
+
+  it("should tolerate missing optional fields by defaulting to empty arrays / empty reason", () => {
+    const content = `<!-- RISK_JUDGE: {"verdict": "revise"} -->`;
+
+    const result = parseRiskJudge(content);
+    expect(result).not.toBeNull();
+    expect(result!.verdict).toBe("revise");
+    expect(result!.reason).toBe("");
+    expect(result!.hard_constraints).toEqual([]);
+    expect(result!.soft_constraints).toEqual([]);
+    expect(result!.execution_preconditions).toEqual([]);
+    expect(result!.de_risk_triggers).toEqual([]);
+  });
+
+  it("should return null when verdict is not one of pass/revise/reject", () => {
+    const content = `<!-- RISK_JUDGE: {"verdict": "maybe", "reason": "x"} -->`;
+
+    expect(parseRiskJudge(content)).toBeNull();
+  });
+
+  it("should return null when RISK_JUDGE JSON is not an object", () => {
+    const content = `<!-- RISK_JUDGE: ["not", "an", "object"] -->`;
+
+    expect(parseRiskJudge(content)).toBeNull();
   });
 });

@@ -205,6 +205,21 @@ export function toMarkdown(result: AnyResult): string {
     lines.push(`- **风险评分**: ${ra.risk_score}/100`);
     lines.push(`- **说明**: ${ra.reasoning}`);
     lines.push(``);
+
+    // Structured constraints from RISK_JUDGE (when present)
+    const j = ra.judge;
+    if (j) {
+      const constraintSection = (title: string, items: string[]): void => {
+        if (!items || items.length === 0) return;
+        lines.push(`**${title}**:`);
+        for (const c of items) lines.push(`- ${c}`);
+        lines.push(``);
+      };
+      constraintSection("硬约束（必须遵守）", j.hard_constraints);
+      constraintSection("软建议", j.soft_constraints);
+      constraintSection("进场前提", j.execution_preconditions);
+      constraintSection("降风险触发器", j.de_risk_triggers);
+    }
   }
 
   lines.push(`---`);
@@ -366,7 +381,22 @@ ${markdownToHtml(cleanExecutionPlan(tp.execution_plan))}
 <h2>风控评估 ${dirBadge(ra.status)}</h2>
 <div class="card">
 <p>风险评分: <strong>${ra.risk_score}/100</strong></p>
-<p>${ra.reasoning}</p>
+<p>${ra.reasoning}</p>`;
+
+    const j = ra.judge;
+    if (j) {
+      const constraintHtml = (title: string, items: string[]): string => {
+        if (!items || items.length === 0) return "";
+        const lis = items.map((c) => `<li>${c}</li>`).join("");
+        return `<p><strong>${title}</strong></p><ul>${lis}</ul>`;
+      };
+      html += constraintHtml("硬约束（必须遵守）", j.hard_constraints);
+      html += constraintHtml("软建议", j.soft_constraints);
+      html += constraintHtml("进场前提", j.execution_preconditions);
+      html += constraintHtml("降风险触发器", j.de_risk_triggers);
+    }
+
+    html += `
 </div>
 </div>`;
   }

@@ -9,10 +9,37 @@ import {
   AnalystReport,
   ResearchDecision,
   TradingPlan,
+  RiskJudge,
 } from "./types";
 import * as path from "path";
 
 const SKILLS_DIR = path.resolve(__dirname, "../skills");
+
+/**
+ * Format a RiskJudge into a prompt section for the trader (used on revise retry).
+ * Emphasizes that hard_constraints MUST be satisfied; the others are advisory.
+ */
+function buildRiskJudgeText(j: RiskJudge): string {
+  const lines: string[] = [
+    "## 风控反馈（上一轮计划被要求修订，必须严格遵守以下约束）",
+    "",
+    `**结论**：${j.verdict}${j.reason ? ` — ${j.reason}` : ""}`,
+  ];
+
+  const section = (title: string, items: string[], must: boolean): void => {
+    if (items.length === 0) return;
+    lines.push("");
+    lines.push(`**${title}**${must ? "（必须满足，违反即视为不合规）" : ""}`);
+    for (const c of items) lines.push(`- ${c}`);
+  };
+
+  section("硬约束", j.hard_constraints, true);
+  section("软建议", j.soft_constraints, false);
+  section("进场前提", j.execution_preconditions, false);
+  section("降风险触发器", j.de_risk_triggers, false);
+
+  return lines.join("\n");
+}
 
 /**
  * Parse a price/percentage field from LLM output.
@@ -75,7 +102,8 @@ export async function runTrader(
   openaiClient: OpenAI,
   traceLogger: TraceLogger,
   ticker?: string,
-  date?: string
+  date?: string,
+  riskJudge?: RiskJudge
 ): Promise<TradingPlan> {
   const promptsBaseDir = path.join(
     SKILLS_DIR,
@@ -97,6 +125,7 @@ export async function runTrader(
       research_decision: decisionText,
       analyst_reports: reportsText,
       quality_summary: qualitySummary,
+      risk_judge: riskJudge ? buildRiskJudgeText(riskJudge) : "",
     },
     promptsBaseDir
   );

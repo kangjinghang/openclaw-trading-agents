@@ -11,6 +11,7 @@ import {
   RiskArgument,
   RiskDebateResult,
   RiskAssessment,
+  RiskJudge,
 } from "./types";
 import { LLM_CALL_STAGGER_MS, DEFAULT_CONCURRENCY } from "./constants";
 import * as path from "path";
@@ -79,6 +80,47 @@ function parseRiskArgument(content: string, role: RiskArgument["role"]): RiskArg
     position: positionMatch ? positionMatch[1].trim() : "",
     evidence,
     verdict,
+  };
+}
+
+const RISK_VERDICTS = new Set(["pass", "revise", "reject"]);
+
+/**
+ * Parse a `<!-- RISK_JUDGE: {...} -->` JSON block from risk-manager output.
+ * Returns null on: missing block, malformed JSON, non-object payload, or a
+ * `verdict` value outside pass/revise/reject. Missing optional constraint
+ * arrays are coerced to empty defaults so partial LLM output is still usable.
+ */
+export function parseRiskJudge(content: string): RiskJudge | null {
+  const regex = /<!--\s*RISK_JUDGE:\s*(\{.*?\})\s*-->/s;
+  const match = content.match(regex);
+  if (!match) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(match[1]);
+  } catch {
+    return null;
+  }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return null;
+  }
+
+  const obj = parsed as Record<string, unknown>;
+  const verdictRaw = typeof obj.verdict === "string" ? obj.verdict.toLowerCase() : "";
+  if (!RISK_VERDICTS.has(verdictRaw)) return null;
+
+  const coerceStrArray = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+
+  return {
+    verdict: verdictRaw as RiskJudge["verdict"],
+    reason: typeof obj.reason === "string" ? obj.reason : "",
+    hard_constraints: coerceStrArray(obj.hard_constraints),
+    soft_constraints: coerceStrArray(obj.soft_constraints),
+    execution_preconditions: coerceStrArray(obj.execution_preconditions),
+    de_risk_triggers: coerceStrArray(obj.de_risk_triggers),
   };
 }
 
@@ -172,15 +214,18 @@ export async function runRiskManager(
     traceLogger,
   });
 
+  // Prefer structured RISK_JUDGE block; fall back to VERDICT when absent.
+  const judge = parseRiskJudge(result.content);
   const verdict = parseVerdict(result.content);
-  const status = (verdict?.direction || "pass").toLowerCase() as RiskAssessment["status"];
+  const status = (judge?.verdict || verdict?.direction || "pass").toLowerCase() as RiskAssessment["status"];
 
   const scoreMatch = result.content.match(/风险评分[（(]0-100[)）]?[：:]*\s*\n?\s*(\d+)/) ||
                      result.content.match(/risk.?score[：:]*\s*\n?\s*(\d+)/i);
 
   return {
     status,
-    reasoning: verdict?.reason || "",
+    judge: judge ?? undefined,
+    reasoning: judge?.reason || verdict?.reason || "",
     risk_score: scoreMatch ? parseInt(scoreMatch[1], 10) : 50,
   };
 }

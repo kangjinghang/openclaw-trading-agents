@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { runTrader } from "../../src/trader";
+import { loadAndRender } from "../../src/prompt-loader";
 import {
   TradingAgentsConfig,
   AnalystReport,
   ResearchDecision,
+  RiskJudge,
 } from "../../src/types";
 import OpenAI from "openai";
 
@@ -378,5 +380,115 @@ Standard.
     expect(callArgs.messages[0].content).toContain(
       "A-share trader creating specific execution plans"
     );
+  });
+
+  it("should inject risk_judge constraints into the prompt when riskJudge is passed", async () => {
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+    mockCreate.mockResolvedValueOnce({
+      choices: [
+        {
+          message: {
+            content: `### 交易方向与仓位
+- **建议仓位**：20%
+
+### 价格区间
+- **目标价格**：1300 元
+- **止损价格**：1200 元
+
+### 入场信号
+1. 信号A
+
+### 退出信号
+1. 信号B
+
+### T+1 操作约束说明
+T+1.
+
+### 关键风险提示
+1. 风险A
+
+<!-- VERDICT: {"direction": "Buy", "reason": "test"} -->`,
+          },
+        },
+      ],
+      usage: { prompt_tokens: 800, completion_tokens: 200, total_tokens: 1000 },
+    } as any);
+
+    const riskJudge: RiskJudge = {
+      verdict: "revise",
+      reason: "仓位偏高",
+      hard_constraints: ["仓位≤30%", "止损价≥60.5元"],
+      soft_constraints: ["分两笔建仓"],
+      execution_preconditions: ["开盘不追高"],
+      de_risk_triggers: ["跌破60.5减半仓"],
+    };
+
+    await runTrader(
+      mockResearchDecision(),
+      [],
+      "",
+      mockConfig,
+      mockClient,
+      mockTraceLogger,
+      undefined,
+      undefined,
+      riskJudge
+    );
+
+    expect(loadAndRender).toHaveBeenCalledTimes(1);
+    const renderArgs = vi.mocked(loadAndRender).mock.calls[0];
+    const vars = renderArgs[1] as Record<string, string>;
+    // All four constraint types should be present in the rendered prompt
+    expect(vars.risk_judge).toContain("仓位≤30%");
+    expect(vars.risk_judge).toContain("止损价≥60.5元");
+    expect(vars.risk_judge).toContain("分两笔建仓");
+    expect(vars.risk_judge).toContain("开盘不追高");
+    expect(vars.risk_judge).toContain("跌破60.5减半仓");
+  });
+
+  it("should pass an empty risk_judge string when riskJudge is not provided", async () => {
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+    mockCreate.mockResolvedValueOnce({
+      choices: [
+        {
+          message: {
+            content: `### 交易方向与仓位
+- **建议仓位**：10%
+
+### 价格区间
+- **目标价格**：1300 元
+- **止损价格**：1200 元
+
+### 入场信号
+1. 信号A
+
+### 退出信号
+1. 信号B
+
+### T+1 操作约束说明
+T+1.
+
+### 关键风险提示
+1. 风险A
+
+<!-- VERDICT: {"direction": "Buy", "reason": "test"} -->`,
+          },
+        },
+      ],
+      usage: { prompt_tokens: 800, completion_tokens: 200, total_tokens: 1000 },
+    } as any);
+
+    await runTrader(
+      mockResearchDecision(),
+      [],
+      "",
+      mockConfig,
+      mockClient,
+      mockTraceLogger
+    );
+
+    const renderArgs = vi.mocked(loadAndRender).mock.calls[0];
+    const vars = renderArgs[1] as Record<string, string>;
+    expect(vars.risk_judge).toBe("");
   });
 });

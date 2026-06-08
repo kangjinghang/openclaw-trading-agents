@@ -24,7 +24,7 @@
 
 ### ⭐⭐⭐ 高价值
 
-#### 2.1 结构化多轮辩论状态追踪 —— TradingAgents-AShare【最大收获】
+#### 2.1 结构化多轮辩论状态追踪 —— 已完成 ✅ —— TradingAgents-AShare【最大收获】
 
 **现状**：本项目的 Bull/Bear 每轮各自输出 `BULL-N`/`BEAR-N` claims（见 `skills/trading-analysis/prompts/debate/bull_researcher.md`），但**轮与轮之间是平行独白**，不强制回应对方，辩论容易各说各话。
 
@@ -47,7 +47,7 @@
 
 ---
 
-#### 2.2 风控输出"结构化约束"而非 pass/revise/reject —— TradingAgents-AShare
+#### 2.2 风控输出"结构化约束"而非 pass/revise/reject —— 已完成 ✅ —— TradingAgents-AShare
 
 **现状**：本项目风控经理只给 `pass/revise/reject`（见 `skills/trading-analysis/prompts/debate/risk_manager.md`），下游很难直接用。
 
@@ -258,8 +258,8 @@ Eastmoney 对激进调用会封 IP。astock 用 `1.0s + 0.1~0.5s 抖动` + Keep-
 |--------|------|------|--------|------|
 | ~~P0~~ ✅ | 龙虎榜字段补齐 `hot_money.py`（4→8 字段，已与 ASHare 持平） | 数据 | 小 | §3.1 |
 | ~~P0~~ ✅ | 威科夫/量价理论框架塞入 `market.md` | 提示词 | 小（纯文本） | §2.3 |
-| **P1** | 风控结构化约束（hard/soft/precondition/trigger） | 提示词+解析 | 中 | §2.2 |
-| **P1** | DEBATE_STATE 辩论状态追踪 | 提示词+解析 | 中（辩论收敛质变） | §2.1 |
+| ~~P1~~ ✅ | 风控结构化约束（hard/soft/precondition/trigger） | 提示词+解析 | 中 | §2.2 |
+| ~~P1~~ ✅ | DEBATE_STATE 辩论状态追踪 | 提示词+解析 | 中（辩论收敛质变） | §2.1 |
 | **P2** | trader 加 triggers/invalidations | 提示词 | 小 | §2.4 |
 | **P2** | 一致预期 EPS/PEG 数据 | 数据 | 中（接口选型） | §3.2 |
 | **P3** | 涨停情绪池 + 板块资金流 | 数据 | 中 | §3.3 / §3.6 |
@@ -267,7 +267,7 @@ Eastmoney 对激进调用会封 IP。astock 用 `1.0s + 0.1~0.5s 抖动` + Keep-
 | 路线图 | 自我反思闭环 | 提示词+存储 | 大 | §2.5 |
 | 实验 | 辩论层英文推理 A/B | 提示词 | 小 | §2.6 |
 
-**P0 两条已完成**（commit `fa389a0`）。下一步进入 P1（DEBATE_STATE 辩论状态追踪 + 风控结构化约束）。
+**P0 + P1 均已完成**。P0 见 commit `fa389a0`（龙虎榜字段 + 威科夫框架）；P1 含 §2.1 DEBATE_STATE 辩论状态追踪（见 `src/debate.ts` `parseDebateState`）与 §2.2 RISK_JUDGE 风控结构化约束（见 `src/risk.ts` `parseRiskJudge`，revise 回路经 `src/orchestrator.ts` 注入 trader）。**下一步进入 P2。**
 
 ---
 
