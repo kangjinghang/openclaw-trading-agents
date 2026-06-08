@@ -69,20 +69,34 @@ tbody td{padding:8px 12px;font-size:13px;white-space:nowrap}
 .summary-item .value{font-size:15px;font-weight:600}
 /* Analyst cards */
 .analyst-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-bottom:12px}
-.analyst-card{background:var(--surface2);border-radius:8px;padding:12px;border-left:3px solid var(--border2);cursor:pointer;transition:background .15s}
-.analyst-card:hover{background:var(--border)}
+.analyst-card{background:var(--surface2);border-radius:8px;padding:12px;border-left:3px solid var(--border2);cursor:pointer;transition:all .2s}
+.analyst-card:hover{background:var(--border);transform:translateY(-1px)}
 .analyst-card.dir-buy{border-left-color:var(--green)}
 .analyst-card.dir-hold{border-left-color:var(--yellow)}
 .analyst-card.dir-sell{border-left-color:var(--red)}
+.analyst-card.selected{box-shadow:0 0 0 1px var(--blue);background:var(--surface)}
 .analyst-card .card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
 .analyst-card .role{font-size:13px;font-weight:500;color:var(--text)}
 .analyst-card .reason{font-size:11px;color:var(--text2);line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .analyst-card .source{font-size:10px;color:var(--text3);margin-top:4px}
+.analyst-card .no-content{font-size:10px;color:var(--text3);font-style:italic;margin-top:4px}
 /* Expanded analyst */
 .analyst-expanded{background:var(--surface2);border-radius:8px;padding:16px;margin-bottom:12px;display:none}
 .analyst-expanded.show{display:block}
 .analyst-expanded h4{font-size:14px;margin-bottom:8px}
-.analyst-expanded .md-content{font-size:13px;color:var(--text2);line-height:1.7;max-height:400px;overflow-y:auto}
+.analyst-expanded .md-content{font-size:13px;color:var(--text2);line-height:1.7;max-height:500px;overflow-y:auto}
+.ae-header{display:flex;align-items:center;gap:12px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+.ae-verdict{font-size:20px;font-weight:700;padding:6px 16px;border-radius:8px}
+.ae-verdict.v-buy{background:var(--green20);color:var(--green)}
+.ae-verdict.v-hold{background:var(--yellow20);color:var(--yellow)}
+.ae-verdict.v-sell{background:var(--red20);color:var(--red)}
+.ae-meta{display:flex;flex-direction:column;gap:2px}
+.ae-reason{font-size:12px;color:var(--text2);line-height:1.5}
+.ae-datasources{display:flex;gap:4px;flex-wrap:wrap;margin-top:2px}
+.ae-ds{font-size:10px;padding:1px 6px;border-radius:3px;background:var(--border);color:var(--text3)}
+.ae-ds.ds-fail{background:var(--red20);color:var(--red)}
+.ae-section{margin-top:12px}
+.ae-section-title{font-size:12px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.3px;margin-bottom:6px}
 .md-content h1,.md-content h2,.md-content h3,.md-content h4{color:var(--text);margin:12px 0 6px}
 .md-content h1{font-size:16px}.md-content h2{font-size:15px}.md-content h3{font-size:14px}.md-content h4{font-size:13px}
 .md-content p{margin:4px 0}
@@ -485,6 +499,23 @@ function closeModal() {
   currentTraces = [];
 }
 
+// ── Extract first meaningful paragraph from analyst content ──
+function extractSummary(content) {
+  if (!content) return '';
+  // Remove markdown headers, take first non-empty paragraph
+  const lines = content.split('\n');
+  let summary = '';
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('---') || trimmed.startsWith('<!--')) continue;
+    // Found first content line
+    summary = trimmed.replace(/\*\*/g, '').replace(/\*/g, '').replace(/`/g, '');
+    if (summary.length > 120) summary = summary.slice(0, 120) + '…';
+    break;
+  }
+  return summary;
+}
+
 // ── Analyst consensus bar ──
 function renderConsensusBar(analysts) {
   let bull = 0, bear = 0, neutral = 0;
@@ -548,19 +579,22 @@ async function loadAnalysts(report) {
           const dir = a.verdict?.direction || '中性';
           const dCls = directionClass(dir);
           const cardCls = dir.includes('看多') || dir === 'Buy' ? 'dir-buy' : dir.includes('看空') || dir === 'Sell' ? 'dir-sell' : 'dir-hold';
+          const hasContent = a.content && a.content.length > 10;
+          // Extract first paragraph as summary
+          const summary = extractSummary(a.content);
           return `<div class="analyst-card ${cardCls}" data-role="${a.role}">
             <div class="card-head">
               <span class="role">${roleName(a.role)}</span>
               ${badgeHtml(dir, dCls)}
             </div>
-            <div class="reason">${a.verdict?.reason || ''}</div>
-            <div class="source">${(a.data_sources_used || []).join(', ')}</div>
+            <div class="reason">${a.verdict?.reason || summary || ''}</div>
+            ${(a.data_sources_used && a.data_sources_used.length) ? `<div class="source">${a.data_sources_used.join(', ')}</div>` : ''}
+            ${!hasContent ? `<div class="no-content">${lang === 'zh' ? '无详细报告' : 'No detail report'}</div>` : ''}
           </div>`;
         }).join('')}
       </div>
       <div class="analyst-expanded" id="analyst-expanded">
-        <h4 id="expanded-title"></h4>
-        <div class="md-content" id="expanded-content"></div>
+        <div id="analyst-expanded-inner"></div>
       </div>
     `;
 
@@ -568,11 +602,51 @@ async function loadAnalysts(report) {
       card.addEventListener('click', () => {
         const role = card.dataset.role;
         const analyst = valid.find(a => a.role === role);
-        if (!analyst || !analyst.content) return;
+        if (!analyst) return;
+
+        // Toggle selected state
+        const wasSelected = card.classList.contains('selected');
+        panel.querySelectorAll('.analyst-card').forEach(c => c.classList.remove('selected'));
+
         const expanded = document.getElementById('analyst-expanded');
-        document.getElementById('expanded-title').textContent = roleName(role);
-        document.getElementById('expanded-content').innerHTML = renderMd(analyst.content);
-        expanded.classList.toggle('show');
+        if (wasSelected) {
+          expanded.classList.remove('show');
+          return;
+        }
+        card.classList.add('selected');
+
+        const dir = analyst.verdict?.direction || '中性';
+        const vCls = dir.includes('看多') || dir === 'Buy' || dir === 'Overweight' ? 'v-buy' : dir.includes('看空') || dir === 'Sell' || dir === 'Underweight' ? 'v-sell' : 'v-hold';
+
+        let html = `
+          <div class="ae-header">
+            <div class="ae-verdict ${vCls}">${dir}</div>
+            <div class="ae-meta">
+              <div style="font-size:14px;font-weight:600;color:var(--text)">${roleName(role)}</div>
+              <div class="ae-reason">${analyst.verdict?.reason || ''}</div>
+            </div>
+          </div>`;
+
+        // Data sources section
+        const dsUsed = analyst.data_sources_used || [];
+        const allRoles = ['market','fundamentals','news','sentiment','policy','hot_money','lockup'];
+        if (dsUsed.length > 0) {
+          html += `<div class="ae-datasources">${dsUsed.map(d => `<span class="ae-ds">${d}</span>`).join('')}</div>`;
+        }
+
+        // Full report content
+        if (analyst.content && analyst.content.length > 10) {
+          html += `
+            <div class="ae-section">
+              <div class="ae-section-title">${lang === 'zh' ? '完整分析报告' : 'Full Analysis Report'}</div>
+              <div class="md-content" style="max-height:500px;overflow-y:auto">${renderMd(analyst.content)}</div>
+            </div>`;
+        }
+
+        document.getElementById('analyst-expanded-inner').innerHTML = html;
+        expanded.classList.add('show');
+        // Scroll expanded into view
+        expanded.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       });
     });
 
