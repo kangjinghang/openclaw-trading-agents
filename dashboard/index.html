@@ -111,9 +111,48 @@ tbody td{padding:8px 12px;font-size:13px;white-space:nowrap}
 .debate-bear{background:#f8717110;border:1px solid #f8717130}
 .debate-side .side-label{font-weight:600;font-size:11px;margin-bottom:6px}
 /* Trace table */
-.trace-detail{background:var(--surface2);border-radius:8px;padding:12px;margin-top:8px;font-family:var(--mono);font-size:12px;max-height:500px;overflow-y:auto;line-height:1.6;white-space:pre-wrap;word-break:break-all;color:var(--text2)}
-.trace-detail .prompt-label{color:var(--blue)}
-.trace-detail .resp-label{color:var(--green)}
+.trace-detail{background:var(--surface2);border-radius:8px;padding:12px;margin-top:8px;font-family:var(--mono);font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all;color:var(--text2)}
+.trace-detail .prompt-label{color:var(--blue);font-weight:600}
+.trace-detail .resp-label{color:var(--green);font-weight:600}
+/* JSON tree */
+.jt-root{font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--text2)}
+.jt-node{position:relative;padding-left:20px}
+.jt-toggle{position:absolute;left:0;top:0;width:16px;cursor:pointer;color:var(--text3);user-select:none;font-size:10px;line-height:1.7}
+.jt-toggle:hover{color:var(--text)}
+.jt-key{color:var(--blue)}
+.jt-string{color:var(--green)}
+.jt-number{color:#fb923c}
+.jt-bool{color:var(--purple)}
+.jt-null{color:var(--text3);font-style:italic}
+.jt-bracket{color:var(--text3)}
+.jt-count{color:var(--text3);font-size:10px;margin-left:4px}
+.jt-children{overflow:hidden}
+.jt-children.collapsed{display:none}
+.jt-controls{display:flex;gap:6px;margin-bottom:8px}
+.jt-controls button{background:var(--surface2);border:1px solid var(--border2);border-radius:4px;padding:3px 10px;color:var(--text2);font-size:11px;cursor:pointer}
+.jt-controls button:hover{background:var(--border);color:var(--text)}
+/* Trace sections */
+.trace-section{margin-bottom:8px;border:1px solid var(--border);border-radius:6px;overflow:hidden}
+.trace-section-header{display:flex;align-items:center;padding:6px 12px;background:var(--surface);cursor:pointer;user-select:none;gap:8px}
+.trace-section-header:hover{background:var(--surface2)}
+.trace-section-body{padding:10px 12px;max-height:500px;overflow-y:auto;font-family:var(--mono);font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all;color:var(--text2)}
+.trace-section.collapsed .trace-section-body{display:none}
+.trace-section.collapsed .trace-section-header .sec-arrow{transform:rotate(-90deg)}
+.sec-arrow{font-size:10px;color:var(--text3);transition:transform .15s}
+.trace-controls{display:flex;gap:4px;margin-left:auto;align-items:center}
+.md-toggle{background:var(--surface2);border:1px solid var(--border2);border-radius:4px;padding:2px 8px;color:var(--text2);font-size:11px;cursor:pointer;transition:all .15s}
+.md-toggle:hover{background:var(--border)}
+.md-toggle.active{background:var(--blue);color:#fff;border-color:var(--blue)}
+.resp-md{line-height:1.7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:13px;color:var(--text2);white-space:normal}
+.resp-md h1,.resp-md h2,.resp-md h3,.resp-md h4{color:var(--text);margin:10px 0 6px}
+.resp-md h1{font-size:16px}.resp-md h2{font-size:15px}.resp-md h3{font-size:14px}.resp-md h4{font-size:13px}
+.resp-md p{margin:4px 0}.resp-md ul,.resp-md ol{padding-left:20px;margin:4px 0}
+.resp-md li{margin:2px 0}.resp-md strong{color:var(--text)}.resp-md em{color:var(--text2)}
+.resp-md code{background:var(--border);padding:1px 5px;border-radius:3px;font-family:var(--mono);font-size:12px}
+.resp-md hr{border:none;border-top:1px solid var(--border);margin:12px 0}
+.resp-raw{font-family:var(--mono);font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all;color:var(--text2)}
+.copy-btn{background:var(--surface2);border:1px solid var(--border2);border-radius:4px;padding:2px 6px;color:var(--text3);font-size:12px;cursor:pointer;line-height:1}
+.copy-btn:hover{color:var(--text);background:var(--border)}
 /* Responsive */
 @media(max-width:768px){.header{flex-direction:column;gap:12px}.plan-grid{grid-template-columns:1fr}.analyst-grid{grid-template-columns:1fr}.debate-row{flex-direction:column}}
 </style>
@@ -644,13 +683,42 @@ async function loadTraces(report) {
           const sys = escapeHtml(tc.request?.system_prompt || '');
           const userMsg = escapeHtml(tc.request?.user_message || '');
           const resp = escapeHtml(tc.response?.raw_content || '');
+          const respRaw = tc.response?.raw_content || '';
           const verdict = tc.response?.parsed_verdict;
           const userTruncated = userMsg.length > 3000 ? userMsg.slice(0, 3000) + '...' : userMsg;
           detail.innerHTML = `
-            <div style="margin-bottom:12px"><span class="prompt-label">${t('systemPrompt')}:</span>\n${sys}</div>
-            <div style="margin-bottom:12px"><span class="prompt-label" style="color:var(--yellow)">User Message:</span>\n${userTruncated}</div>
-            <div style="margin-bottom:12px"><span class="resp-label">${t('response')}:</span>\n${resp}</div>
-            ${verdict ? `<div><span style="color:var(--green);font-weight:600">VERDICT:</span> ${escapeHtml(JSON.stringify(verdict))}</div>` : ''}`;
+            <div class="trace-section">
+              <div class="trace-section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+                <span class="sec-arrow">▼</span>
+                <span class="prompt-label">${t('systemPrompt')}</span>
+                <div class="trace-controls"><button class="copy-btn" onclick="event.stopPropagation();copyContent(this,'sys-${idx}')">📋</button></div>
+              </div>
+              <div class="trace-section-body" id="sys-${idx}">${sys}</div>
+            </div>
+            <div class="trace-section">
+              <div class="trace-section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+                <span class="sec-arrow">▼</span>
+                <span class="prompt-label" style="color:var(--yellow)">User Message</span>
+                <div class="trace-controls"><button class="copy-btn" onclick="event.stopPropagation();copyContent(this,'user-${idx}')">📋</button></div>
+              </div>
+              <div class="trace-section-body" id="user-${idx}">${userTruncated}</div>
+            </div>
+            <div class="trace-section">
+              <div class="trace-section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+                <span class="sec-arrow">▼</span>
+                <span class="resp-label">${t('response')}</span>
+                <div class="trace-controls">
+                  <button class="md-toggle active" data-idx="${idx}" data-mode="md" onclick="event.stopPropagation();toggleMdMode(this)">Markdown</button>
+                  <button class="md-toggle" data-idx="${idx}" data-mode="raw" onclick="event.stopPropagation();toggleMdMode(this)">Raw</button>
+                  <button class="copy-btn" onclick="event.stopPropagation();copyContent(this,'resp-${idx}')">📋</button>
+                </div>
+              </div>
+              <div class="trace-section-body" id="resp-${idx}">
+                <div class="resp-md">${renderMd(respRaw)}</div>
+                <div class="resp-raw" style="display:none">${resp}</div>
+              </div>
+            </div>
+            ${verdict ? `<div style="margin-top:8px;padding:8px 12px;background:var(--green20);border-radius:6px;font-family:var(--mono);font-size:12px"><span style="color:var(--green);font-weight:600">VERDICT:</span> ${escapeHtml(JSON.stringify(verdict))}</div>` : ''}`;
           detail.style.display = 'block';
         } else {
           detail.style.display = 'none';
@@ -687,20 +755,26 @@ async function loadDataSources(report) {
       <div class="analyst-grid">
         ${dataSources.map(ds => {
           const statusIcon = ds.success ? '✅' : '❌';
-          const fieldCount = ds.data ? Object.keys(ds.data).length : 0;
-          const source = ds._source ? ` (${ds._source})` : '';
+          const summary = ds.success ? summarizeData(ds.role, ds.data) : '';
+          const source = ds._source ? ` · ${ds._source}` : '';
           return `<div class="analyst-card" data-role="${ds.role}" style="cursor:pointer">
             <div class="card-head">
               <span class="role">${statusIcon} ${roleName(ds.role)}</span>
-              <span class="badge" style="background:var(--surface2);color:var(--text2)">${fieldCount} fields${source}</span>
+              ${summary || ds.error ? `<span class="badge" style="background:var(--surface2);color:${ds.success ? 'var(--text2)' : 'var(--red)'}">${ds.success ? summary + source : escapeHtml(ds.error || 'Error')}</span>` : ''}
             </div>
-            <div class="reason" style="font-size:11px;color:${ds.success ? 'var(--text3)' : 'var(--red)'}">${ds.error || 'OK'}</div>
           </div>`;
         }).join('')}
       </div>
       <div class="analyst-expanded" id="data-expanded">
-        <h4 id="data-expanded-title"></h4>
-        <div class="trace-detail" id="data-expanded-content" style="display:block;max-height:500px"></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <h4 id="data-expanded-title" style="margin:0"></h4>
+          <div class="jt-controls">
+            <button onclick="expandAllTree(document.getElementById('data-tree'))">${lang === 'zh' ? '展开全部' : 'Expand All'}</button>
+            <button onclick="collapseAllTree(document.getElementById('data-tree'))">${lang === 'zh' ? '折叠全部' : 'Collapse All'}</button>
+            <button onclick="copyContent(this,'data-tree')">${'📋 ' + (lang === 'zh' ? '复制' : 'Copy')}</button>
+          </div>
+        </div>
+        <div class="jt-root" id="data-tree" style="display:block;max-height:600px;overflow-y:auto"></div>
       </div>
     `;
 
@@ -711,8 +785,7 @@ async function loadDataSources(report) {
         if (!ds) return;
         const expanded = document.getElementById('data-expanded');
         document.getElementById('data-expanded-title').textContent = roleName(role);
-        document.getElementById('data-expanded-content').textContent =
-          JSON.stringify(ds, null, 2);
+        document.getElementById('data-tree').innerHTML = renderJsonTree(ds);
         expanded.classList.toggle('show');
       });
     });
@@ -752,6 +825,153 @@ function capitalize(s) {
 function formatNum(n) {
   if (n == null) return '—';
   return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+}
+
+// ── JSON tree viewer ──
+function renderJsonTree(data, key, depth) {
+  if (depth === undefined) depth = 0;
+  const indent = '  '.repeat(depth);
+  let html = '';
+
+  if (data === null) {
+    html += `<span class="jt-null">null</span>`;
+    return html;
+  }
+
+  const type = typeof data;
+  if (type === 'string') {
+    const s = escapeHtml(data);
+    if (data.length > 80) {
+      html += `<span class="jt-string">"${s.slice(0, 80)}<span style="color:var(--text3)">…"</span> <span class="jt-count">(${data.length} chars)</span></span>`;
+    } else {
+      html += `<span class="jt-string">"${s}"</span>`;
+    }
+    return html;
+  }
+  if (type === 'number') {
+    html += `<span class="jt-number">${data}</span>`;
+    return html;
+  }
+  if (type === 'boolean') {
+    html += `<span class="jt-bool">${data}</span>`;
+    return html;
+  }
+
+  if (Array.isArray(data)) {
+    if (data.length === 0) {
+      html += `<span class="jt-bracket">[]</span>`;
+      return html;
+    }
+    const collapsed = depth >= 2;
+    html += `<span class="jt-toggle" onclick="toggleJsonNode(this)">${collapsed ? '▶' : '▼'}</span>`;
+    html += `<span class="jt-bracket">[</span><span class="jt-count">${data.length} items</span>`;
+    html += `<div class="jt-children${collapsed ? ' collapsed' : ''}">`;
+    for (let i = 0; i < data.length; i++) {
+      html += `<div class="jt-node">${renderJsonTree(data[i], String(i), depth + 1)}</div>`;
+    }
+    html += `</div>`;
+    html += `<span class="jt-bracket">]</span>`;
+    return html;
+  }
+
+  if (type === 'object') {
+    const keys = Object.keys(data);
+    if (keys.length === 0) {
+      html += `<span class="jt-bracket">{}</span>`;
+      return html;
+    }
+    const collapsed = depth >= 2;
+    html += `<span class="jt-toggle" onclick="toggleJsonNode(this)">${collapsed ? '▶' : '▼'}</span>`;
+    html += `<span class="jt-bracket">{</span><span class="jt-count">${keys.length} fields</span>`;
+    html += `<div class="jt-children${collapsed ? ' collapsed' : ''}">`;
+    for (const k of keys) {
+      html += `<div class="jt-node"><span class="jt-key">"${escapeHtml(k)}"</span>: ${renderJsonTree(data[k], k, depth + 1)}</div>`;
+    }
+    html += `</div>`;
+    html += `<span class="jt-bracket">}</span>`;
+    return html;
+  }
+
+  return escapeHtml(String(data));
+}
+
+function toggleJsonNode(el) {
+  const children = el.parentElement.querySelector(':scope > .jt-children');
+  if (!children) return;
+  const isCollapsed = children.classList.toggle('collapsed');
+  el.textContent = isCollapsed ? '▶' : '▼';
+}
+
+function expandAllTree(container) {
+  container.querySelectorAll('.jt-children.collapsed').forEach(el => {
+    el.classList.remove('collapsed');
+  });
+  container.querySelectorAll('.jt-toggle').forEach(el => {
+    el.textContent = '▼';
+  });
+}
+
+function collapseAllTree(container) {
+  container.querySelectorAll('.jt-children').forEach(el => {
+    el.classList.add('collapsed');
+  });
+  container.querySelectorAll('.jt-toggle').forEach(el => {
+    el.textContent = '▶';
+  });
+}
+
+function summarizeData(role, data) {
+  if (!data || typeof data !== 'object') return '';
+  const parts = [];
+  if (Array.isArray(data)) {
+    parts.push(`${data.length} 条记录`);
+    return parts.join(' · ');
+  }
+  // Role-specific summaries
+  if (role === 'market' && data.data) {
+    if (Array.isArray(data.data)) parts.push(`${data.data.length} 条K线`);
+    if (data.ticker) parts.push(data.ticker);
+  } else if (role === 'fundamentals') {
+    const keys = Object.keys(data);
+    parts.push(`${keys.length} 项指标`);
+  } else if (role === 'news' && data.news) {
+    const n = Array.isArray(data.news) ? data.news.length : 0;
+    parts.push(`${n} 条新闻`);
+  } else {
+    parts.push(`${Object.keys(data).length} 个字段`);
+  }
+  return parts.join(' · ');
+}
+
+function copyContent(btn, targetId) {
+  const el = document.getElementById(targetId);
+  if (!el) return;
+  const text = el.textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = '✓';
+    setTimeout(() => btn.textContent = orig, 1500);
+  }).catch(() => {});
+}
+
+function toggleMdMode(btn) {
+  const idx = btn.dataset.idx;
+  const mode = btn.dataset.mode;
+  const container = document.getElementById('resp-' + idx);
+  if (!container) return;
+  const mdDiv = container.querySelector('.resp-md');
+  const rawDiv = container.querySelector('.resp-raw');
+  if (!mdDiv || !rawDiv) return;
+  // Update toggle buttons
+  container.closest('.trace-section').querySelectorAll('.md-toggle').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  if (mode === 'md') {
+    mdDiv.style.display = '';
+    rawDiv.style.display = 'none';
+  } else {
+    mdDiv.style.display = 'none';
+    rawDiv.style.display = '';
+  }
 }
 
 // ── Simple markdown → HTML ──
