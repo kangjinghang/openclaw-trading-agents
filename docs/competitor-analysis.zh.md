@@ -227,9 +227,9 @@ def get_zt_pool(self, date: str) -> str:
 
 ---
 
-#### 3.6 板块资金流排名 —— ASHare
+#### 3.6 板块资金流排名 —— ASHare —— 已完成 ✅
 
-**现状**：本项目 `skills/trading-sector/scripts/sector.py` 有板块列表 + 相关概念块，但缺**板块主力资金净流入排名**。
+**现状**：本项目 `skills/trading-sector/scripts/sector.py` 有板块列表 + 相关概念块，但缺**板块主力资金净流入排名**。调研发现 **`sector.py` 是孤儿脚本**——`orchestrator.ts` 的 7 个分析师配置（market / fundamentals / news / sentiment / policy / hot_money / lockup）均不调用它，数据无消费者。
 
 **借鉴点**：
 
@@ -239,7 +239,12 @@ def get_zt_pool(self, date: str) -> str:
 ```
 
 **收益**：板块轮动是 A 股主驱动之一。
-**改动范围**：`sector.py` 增加数据段。
+
+**已做改动**（注入 hot_money 而非孤儿 sector.py —— 用户已确认）：
+- `hot_money.py` 新增 `_fetch_sector_fund_flow()`，调东财 push2 clist（`fs=m:90+t:2` 行业板块 ~90 个，`fields=f62/f184/f136`），Python 侧按主力净流入排序，返回 `inflow_top`（top8 净流入 = 主线）/ `outflow_top`（top8 净流出 = 弱势）/ `total_boards`；每项含 `main_net_yi` / `super_net_yi` / `main_net_pct` / `change_pct`。
+- hot_money 本是主力资金追踪者（北向 / 个股资金流 / 龙虎榜），板块资金流是个股资金流的市场级递进，语义契合，复用已有分析师渠道即时生效。
+- `hot_money.md` 字段说明 + 必采清单新增 §4"板块资金流排名（板块轮动信号）"，引导 LLM 解读主线 vs 弱势 + 标的行业归属；原 §4-§6 顺延为 §5-§7。
+- 注意：push2 字段基于东财官方文档（f62 主力净流入等，akshare 同源）；实施期遇 push2 临时限流，已验证 graceful degrade（返回 None 不影响其他字段）。
 
 ---
 
@@ -277,12 +282,12 @@ Eastmoney 对激进调用会封 IP。astock 用 `1.0s + 0.1~0.5s 抖动` + Keep-
 | ~~P2~~ ✅ | trader 加 triggers/invalidations | 提示词 | 小 | §2.4 |
 | ~~P2~~ ✅ | 一致预期 EPS/PEG 数据 | 数据 | 中（接口选型） | §3.2 |
 | ~~P3~~ ✅ | 涨停情绪池（连板梯队） | 数据 | 中 | §3.3 |
-| **P3** | 板块资金流排名 | 数据 | 中 | §3.6 |
+| ~~P3~~ ✅ | 板块资金流排名 | 数据 | 中 | §3.6 |
 | **P3** | 双层数据质量门 | 工程 | 中 | §4 |
 | 路线图 | 自我反思闭环 | 提示词+存储 | 大 | §2.5 |
 | 实验 | 辩论层英文推理 A/B | 提示词 | 小 | §2.6 |
 
-**P0 + P1 + P2 + P3(§3.3) 均已完成**。P0 见 commit `fa389a0`；P1 含 §2.1 DEBATE_STATE + §2.2 RISK_JUDGE；P2 含 §2.4 trader triggers/invalidations 与 §3.2 一致预期 EPS/PEG；P3 已完成 §3.3 涨停情绪池（`sentiment.py` 增 `zt_pool` + `sentiment.md` 必采项）。另修 `_fetch_quarterly_financials`（§3.2 sibling）。**剩余 P3（板块资金流 §3.6、双层质量门 §4）及实验/路线图层**（自我反思闭环、辩论英文推理 A/B）。
+**P0 + P1 + P2 + P3(§3.3/§3.6) 均已完成**。P0 见 commit `fa389a0`；P1 含 §2.1 DEBATE_STATE + §2.2 RISK_JUDGE；P2 含 §2.4 trader triggers/invalidations 与 §3.2 一致预期 EPS/PEG；P3 已完成 §3.3 涨停情绪池（`sentiment.py` `zt_pool`）与 §3.6 板块资金流（注入 `hot_money.py`——调研发现 `sector.py` 是孤儿脚本）。另修 `_fetch_quarterly_financials`（§3.2 sibling）。**剩余 P3（双层质量门 §4）及实验/路线图层**（自我反思闭环、辩论英文推理 A/B）。
 
 ---
 

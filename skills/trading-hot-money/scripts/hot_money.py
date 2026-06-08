@@ -123,6 +123,49 @@ def _fetch_dragon_tiger(code, date, lookback=30):
         return []
 
 
+def _fetch_sector_fund_flow(top_n=8):
+    """Fetch industry board fund-flow ranking (主力净流入) from 东财 push2.
+
+    Board rotation is a primary A-share driver. Returns top-N inflow and
+    top-N outflow industry boards so the LLM can read main theme (主线) vs
+    weak (弱势) camps. Source: push2 clist fs=m:90+t:2 (行业板块, ~90 boards)
+    with f62 (main net inflow), f184 (main net pct), f136 (super-large net).
+    """
+    url = "https://push2.eastmoney.com/api/qt/clist/get"
+    params = {
+        "pn": "1", "pz": "100", "po": "1", "np": "1",
+        "fltt": "2", "invt": "2",
+        "fs": "m:90+t:2",
+        "fields": "f3,f12,f14,f62,f136,f184",
+    }
+    try:
+        r = em_get(url, params=params, timeout=15)
+        items = r.json().get("data", {}).get("diff", []) or []
+    except Exception:
+        return None
+
+    if not items:
+        return None
+
+    boards = [
+        {
+            "name": it.get("f14", ""),
+            "change_pct": it.get("f3", 0),
+            "main_net_yi": round((it.get("f62") or 0) / 1e8, 2),
+            "super_net_yi": round((it.get("f136") or 0) / 1e8, 2),
+            "main_net_pct": it.get("f184", 0),
+        }
+        for it in items
+    ]
+    boards_sorted = sorted(boards, key=lambda x: x["main_net_yi"], reverse=True)
+
+    return {
+        "inflow_top": boards_sorted[:top_n],
+        "outflow_top": list(reversed(boards_sorted[-top_n:])),
+        "total_boards": len(boards_sorted),
+    }
+
+
 def fetch_hot_money(ticker, date):
     """Fetch all hot money data."""
     code = normalize_ticker(ticker)
@@ -130,6 +173,7 @@ def fetch_hot_money(ticker, date):
 
     data["northbound"] = _fetch_northbound()
     data["fund_flow"] = _fetch_fund_flow(code, date)
+    data["sector_fund_flow"] = _fetch_sector_fund_flow()
     data["hot_stocks"] = _fetch_hot_stocks(date)
     data["dragon_tiger"] = _fetch_dragon_tiger(code, date)
 
