@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>OpenClaw Trading Agents — Dashboard</title>
+<script src="https://unpkg.com/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{--bg:#0f1019;--surface:#1a1b2e;--surface2:#1e1f32;--border:#2d2e45;--border2:#3d3e55;--text:#e2e4f0;--text2:#8b8da0;--text3:#6b6d82;--green:#4ade80;--green20:#4ade8020;--yellow:#fbbf24;--yellow20:#fbbf2420;--red:#f87171;--red20:#f8717120;--blue:#60a5fa;--blue20:#3b82f620;--purple:#a78bfa;--purple20:#8b5cf620;--mono:'Cascadia Code','Fira Code','JetBrains Mono',monospace}
@@ -153,6 +154,46 @@ tbody td{padding:8px 12px;font-size:13px;white-space:nowrap}
 .resp-raw{font-family:var(--mono);font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all;color:var(--text2)}
 .copy-btn{background:var(--surface2);border:1px solid var(--border2);border-radius:4px;padding:2px 6px;color:var(--text3);font-size:12px;cursor:pointer;line-height:1}
 .copy-btn:hover{color:var(--text);background:var(--border)}
+/* Consensus bar */
+.consensus-bar{margin-bottom:16px;background:var(--surface2);border-radius:8px;padding:14px 16px}
+.consensus-labels{display:flex;justify-content:space-between;margin-bottom:6px;font-size:12px}
+.consensus-label{display:flex;align-items:center;gap:4px}
+.consensus-dot{width:8px;height:8px;border-radius:2px}
+.consensus-track{display:flex;height:24px;border-radius:6px;overflow:hidden;gap:2px}
+.consensus-seg{display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:rgba(255,255,255,.9);min-width:0;transition:flex .3s}
+.consensus-seg.seg-bull{background:var(--green)}
+.consensus-seg.seg-neutral{background:var(--yellow);color:var(--bg)}
+.consensus-seg.seg-bear{background:var(--red)}
+.consensus-final{margin-top:8px;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2)}
+/* Gantt */
+.gantt-container{display:flex;flex-direction:column;gap:3px;margin-bottom:16px;padding:12px;background:var(--surface2);border-radius:8px}
+.gantt-row{display:flex;align-items:center;height:22px}
+.gantt-label{width:130px;font-size:11px;color:var(--text2);text-align:right;padding-right:8px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gantt-track{flex:1;height:14px;position:relative;border-radius:3px}
+.gantt-bg{position:absolute;left:0;right:0;top:0;height:100%;background:var(--border);border-radius:3px;opacity:.15}
+.gantt-bar{position:absolute;height:100%;border-radius:3px;min-width:3px;cursor:pointer;opacity:.85;transition:opacity .15s}
+.gantt-bar:hover{opacity:1}
+.gantt-time{display:flex;justify-content:space-between;font-size:10px;color:var(--text3);margin-top:4px;padding-left:138px}
+.gantt-tooltip{position:absolute;bottom:calc(100% + 4px);left:50%;transform:translateX(-50%);background:var(--bg);border:1px solid var(--border2);border-radius:4px;padding:4px 8px;font-size:10px;color:var(--text2);white-space:nowrap;pointer-events:none;display:none;z-index:10}
+.gantt-bar:hover .gantt-tooltip{display:block}
+/* Kline chart */
+.kline-section{margin-bottom:12px}
+.kline-chart{width:100%;height:400px;border-radius:8px;overflow:hidden;background:var(--surface2)}
+.kline-indicators{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+.kline-indicator-box{background:var(--surface2);border-radius:8px;padding:12px}
+.kline-indicator-box h5{font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px}
+.kline-indicator-box .md-content{font-size:12px;max-height:200px;overflow-y:auto;line-height:1.6}
+/* News timeline */
+.news-timeline{margin-bottom:16px}
+.news-date{margin-bottom:12px}
+.news-date-label{font-size:13px;font-weight:600;color:var(--text);margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid var(--border)}
+.news-card{display:flex;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)}
+.news-time{font-size:11px;color:var(--text3);font-family:var(--mono);min-width:50px;padding-top:2px}
+.news-title{font-size:13px;font-weight:500;color:var(--text);margin-bottom:2px}
+.news-content{font-size:12px;color:var(--text2);line-height:1.5}
+.news-source{font-size:10px;color:var(--text3);margin-top:4px}
+.news-stats{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.news-stat{background:var(--surface2);padding:4px 10px;border-radius:4px;font-size:11px;color:var(--text2)}
 /* Responsive */
 @media(max-width:768px){.header{flex-direction:column;gap:12px}.plan-grid{grid-template-columns:1fr}.analyst-grid{grid-template-columns:1fr}.debate-row{flex-direction:column}}
 </style>
@@ -444,6 +485,37 @@ function closeModal() {
   currentTraces = [];
 }
 
+// ── Analyst consensus bar ──
+function renderConsensusBar(analysts) {
+  let bull = 0, bear = 0, neutral = 0;
+  for (const a of analysts) {
+    const d = (a.verdict?.direction || '中性');
+    if (d.includes('看多') || d === 'Buy' || d === 'Overweight' || d === 'Strong Buy') bull++;
+    else if (d.includes('看空') || d === 'Sell' || d === 'Underweight' || d === 'Strong Sell') bear++;
+    else neutral++;
+  }
+  const total = bull + bear + neutral || 1;
+  const bullPct = (bull / total * 100).toFixed(0);
+  const bearPct = (bear / total * 100).toFixed(0);
+  const neutralPct = (neutral / total * 100).toFixed(0);
+  const bullLabel = lang === 'zh' ? '看多' : 'Bull';
+  const neutralLabel = lang === 'zh' ? '中性' : 'Neutral';
+  const bearLabel = lang === 'zh' ? '看空' : 'Bear';
+  return `
+    <div class="consensus-bar">
+      <div class="consensus-labels">
+        <span class="consensus-label"><span class="consensus-dot" style="background:var(--green)"></span>${bullLabel} ${bull}</span>
+        <span class="consensus-label"><span class="consensus-dot" style="background:var(--yellow)"></span>${neutralLabel} ${neutral}</span>
+        <span class="consensus-label"><span class="consensus-dot" style="background:var(--red)"></span>${bearLabel} ${bear}</span>
+      </div>
+      <div class="consensus-track">
+        ${bull > 0 ? `<div class="consensus-seg seg-bull" style="flex:${bull}">${bullPct}%</div>` : ''}
+        ${neutral > 0 ? `<div class="consensus-seg seg-neutral" style="flex:${neutral}">${neutralPct}%</div>` : ''}
+        ${bear > 0 ? `<div class="consensus-seg seg-bear" style="flex:${bear}">${bearPct}%</div>` : ''}
+      </div>
+    </div>`;
+}
+
 // ── Analysts panel ──
 async function loadAnalysts(report) {
   const panel = document.getElementById('panel-analysts');
@@ -470,6 +542,7 @@ async function loadAnalysts(report) {
     const valid = analysts.filter(Boolean);
 
     panel.innerHTML = `
+      ${renderConsensusBar(valid)}
       <div class="analyst-grid">
         ${valid.map(a => {
           const dir = a.verdict?.direction || '中性';
@@ -616,6 +689,50 @@ async function loadDebateRounds(ticker, detailPath) {
   return rounds;
 }
 
+// ── Gantt chart for LLM calls ──
+function renderGanttChart(traces) {
+  if (traces.length < 2) return '';
+  const items = traces.map(tr => {
+    const ts = tr.meta?.timestamp;
+    const dur = tr.meta?.duration_ms || 0;
+    if (!ts) return null;
+    return { ...tr, tsMs: new Date(ts).getTime(), dur };
+  }).filter(Boolean);
+  if (items.length < 2) return '';
+
+  const minT = Math.min(...items.map(i => i.tsMs));
+  const lastEnd = Math.max(...items.map(i => i.tsMs + i.dur));
+  const span = lastEnd - minT || 1;
+
+  const rows = items.map(tr => {
+    const left = ((tr.tsMs - minT) / span * 100).toFixed(2);
+    const width = Math.max((tr.dur / span * 100), 0.5).toFixed(2);
+    const phase = tr.phase || '';
+    const c = phaseColors[phase] || ['var(--border2)','var(--text2)'];
+    const label = (tr.role ? roleName(tr.role) : phaseName(phase));
+    const dur = tr.dur > 0 ? (tr.dur / 1000).toFixed(1) + 's' : '—';
+    const tokens = tr.meta?.usage?.total_tokens || 0;
+    return `
+      <div class="gantt-row">
+        <div class="gantt-label">${label}</div>
+        <div class="gantt-track">
+          <div class="gantt-bg"></div>
+          <div class="gantt-bar" style="left:${left}%;width:${width}%;background:${c[1]}">
+            <div class="gantt-tooltip">${label} · ${dur} · ${tokens.toLocaleString()} tokens</div>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+
+  const startSec = '0s';
+  const totalSec = (span / 1000).toFixed(1) + 's';
+  return `
+    <div class="gantt-container">
+      ${rows}
+      <div class="gantt-time"><span>${startSec}</span><span>${totalSec}</span></div>
+    </div>`;
+}
+
 // ── Traces panel ──
 async function loadTraces(report) {
   const panel = document.getElementById('panel-traces');
@@ -643,6 +760,7 @@ async function loadTraces(report) {
     }
 
     panel.innerHTML = `
+      ${renderGanttChart(traces)}
       <table>
         <thead>
           <tr>
@@ -774,7 +892,8 @@ async function loadDataSources(report) {
             <button onclick="copyContent(this,'data-tree')">${'📋 ' + (lang === 'zh' ? '复制' : 'Copy')}</button>
           </div>
         </div>
-        <div class="jt-root" id="data-tree" style="display:block;max-height:600px;overflow-y:auto"></div>
+        <div id="data-viz"></div>
+        <div class="jt-root" id="data-tree" style="display:block;max-height:600px;overflow-y:auto;margin-top:12px"></div>
       </div>
     `;
 
@@ -783,8 +902,20 @@ async function loadDataSources(report) {
         const role = card.dataset.role;
         const ds = dataSources.find(d => d.role === role);
         if (!ds) return;
+        // Clean up previous chart
+        if (klineChartInstance) {
+          klineChartInstance.ro?.disconnect();
+          klineChartInstance.chart?.remove();
+          klineChartInstance = null;
+        }
         const expanded = document.getElementById('data-expanded');
         document.getElementById('data-expanded-title').textContent = roleName(role);
+        // Render role-specific visualization
+        const vizEl = document.getElementById('data-viz');
+        let vizHtml = '';
+        if (role === 'market') vizHtml = renderKlineSection(ds);
+        else if (role === 'news') vizHtml = renderNewsTimeline(ds);
+        vizEl.innerHTML = vizHtml;
         document.getElementById('data-tree').innerHTML = renderJsonTree(ds);
         expanded.classList.toggle('show');
       });
@@ -825,6 +956,151 @@ function capitalize(s) {
 function formatNum(n) {
   if (n == null) return '—';
   return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+}
+
+// ── K-line candlestick chart ──
+let klineChartInstance = null;
+
+function renderKlineSection(ds) {
+  if (!ds.success || !ds.data || !Array.isArray(ds.data.data) || ds.data.data.length === 0) {
+    if (!ds.success) {
+      return `<div style="padding:16px;text-align:center;color:var(--text3)">${lang === 'zh' ? '⚠️ 数据获取失败，无法渲染K线图' : '⚠️ Data fetch failed, cannot render K-line chart'}</div>`;
+    }
+    return '';
+  }
+
+  const candles = ds.data.data;
+  const chartId = 'kline-chart-' + Date.now();
+  const vpa = ds.vpa || '';
+  const ti = ds.technical_indicators || '';
+
+  let indicatorsHtml = '';
+  if (vpa || ti) {
+    indicatorsHtml = `<div class="kline-indicators">`;
+    if (vpa) indicatorsHtml += `<div class="kline-indicator-box"><h5>VPA 量价分析</h5><div class="md-content">${renderMd(vpa)}</div></div>`;
+    if (ti) indicatorsHtml += `<div class="kline-indicator-box"><h5>${lang === 'zh' ? '技术指标' : 'Technical Indicators'}</h5><div class="md-content">${renderMd(ti)}</div></div>`;
+    indicatorsHtml += `</div>`;
+  }
+
+  // Delay chart rendering with setTimeout so the DOM is ready
+  setTimeout(() => {
+    const container = document.getElementById(chartId);
+    if (!container || typeof LightweightCharts === 'undefined') return;
+
+    const chart = LightweightCharts.createChart(container, {
+      width: container.clientWidth,
+      height: 400,
+      layout: {
+        background: { color: '#1a1b2e' },
+        textColor: '#8b8da0',
+        fontSize: 11,
+      },
+      grid: {
+        vertLines: { color: '#2d2e45' },
+        horzLines: { color: '#2d2e45' },
+      },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+      rightPriceScale: { borderColor: '#2d2e45' },
+      timeScale: { borderColor: '#2d2e45', timeVisible: false },
+    });
+
+    const candleSeries = chart.addCandlestickSeries({
+      upColor: '#4ade80',
+      downColor: '#f87171',
+      borderUpColor: '#4ade80',
+      borderDownColor: '#f87171',
+      wickUpColor: '#4ade80',
+      wickDownColor: '#f87171',
+    });
+
+    const volumeSeries = chart.addHistogramSeries({
+      color: '#60a5fa',
+      priceFormat: { type: 'volume' },
+      priceScaleId: '',
+    });
+
+    volumeSeries.priceScale().applyOptions({
+      scaleMargins: { top: 0.8, bottom: 0 },
+    });
+
+    const klineData = candles.map(c => ({
+      time: c.date,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+    }));
+
+    const volumeData = candles.map(c => ({
+      time: c.date,
+      value: c.volume || 0,
+      color: c.close >= c.open ? '#4ade8040' : '#f8717140',
+    }));
+
+    candleSeries.setData(klineData);
+    volumeSeries.setData(volumeData);
+    chart.timeScale().fitContent();
+
+    // Resize observer
+    const ro = new ResizeObserver(() => chart.applyOptions({ width: container.clientWidth }));
+    ro.observe(container);
+    klineChartInstance = { chart, ro };
+  }, 50);
+
+  return `
+    <div class="kline-section">
+      ${indicatorsHtml}
+      <div class="kline-chart" id="${chartId}"></div>
+    </div>`;
+}
+
+// ── News timeline ──
+function renderNewsTimeline(ds) {
+  if (!ds.success || !ds.data) return '';
+  const data = ds.data;
+  const news = data.stock_news || [];
+  const layers = data.news_layers || {};
+  const stats = data.layer_stats || {};
+
+  let html = '<div class="news-timeline">';
+
+  // Layer stats badges
+  if (Object.keys(stats).length > 0) {
+    html += '<div class="news-stats">';
+    if (stats.realtime_6h_count !== undefined) html += `<span class="news-stat">🕐 ${lang === 'zh' ? '近6小时' : '6h'}: ${stats.realtime_6h_count}</span>`;
+    if (stats.extended_24h_count !== undefined) html += `<span class="news-stat">📅 ${lang === 'zh' ? '6-24小时' : '6-24h'}: ${stats.extended_24h_count}</span>`;
+    if (stats.history_7d_count !== undefined) html += `<span class="news-stat">📋 ${lang === 'zh' ? '1-7天' : '1-7d'}: ${stats.history_7d_count}</span>`;
+    html += `<span class="news-stat">${lang === 'zh' ? '总计' : 'Total'}: ${news.length}</span>`;
+    html += '</div>';
+  }
+
+  // Group by date
+  const groups = {};
+  for (const item of news) {
+    const date = (item.time || '').split(/[\sT]/)[0] || (lang === 'zh' ? '未知日期' : 'Unknown');
+    if (!groups[date]) groups[date] = [];
+    groups[date].push(item);
+  }
+
+  for (const [date, items] of Object.entries(groups)) {
+    html += `<div class="news-date">
+      <div class="news-date-label">${date} (${items.length}${lang === 'zh' ? '条' : ''})</div>`;
+    for (const n of items) {
+      const time = (n.time || '').split(/[\sT]/)[1] || '';
+      html += `<div class="news-card">
+        <div class="news-time">${time}</div>
+        <div>
+          <div class="news-title">${escapeHtml(n.title || '')}</div>
+          <div class="news-content">${escapeHtml((n.content || '').slice(0, 200))}</div>
+          <div class="news-source">${escapeHtml(n.source || '')}</div>
+        </div>
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  html += '</div>';
+  return html;
 }
 
 // ── JSON tree viewer ──
