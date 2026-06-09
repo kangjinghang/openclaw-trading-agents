@@ -31,8 +31,44 @@ import * as fs from "fs";
 
 const SKILLS_DIR = path.resolve(__dirname, "../skills");
 
-/** Generate a data quality description for an analyst based on their ScriptResult */
-function generateDataQuality(result: ScriptResult): string {
+// ── Market-data completeness thresholds ───────────────────────────
+// These catch the two most dangerous silent failures: K-line returned far
+// fewer bars than requested, or the source silently returned stale data.
+// Tuned conservative to avoid false positives (新股/停牌/回测):
+//  - MIN_BARS is an absolute floor, not a ratio, so newly-listed stocks
+//    that simply have <50 bars of history are flagged correctly (TI needs
+//    ≥50) without penalizing normal short-history tickers disproportionately.
+//  - Freshness is checked ONLY when --date is within RECENT_WINDOW_DAYS of
+//    today, so backtesting with an old --date never trips it. The stale gap
+//    tolerance absorbs weekends + short holidays.
+const KLINE_MIN_BARS = 50; // technical indicators (MACD/RSI/...) need ≥50 bars
+const FRESHNESS_RECENT_WINDOW_DAYS = 7; // only check freshness for near-term analysis
+const FRESHNESS_STALE_GAP_DAYS = 7; // weekend (~3d) + short-holiday headroom
+
+/** Parse a "YYYY-MM-DD" prefix out of an arbitrary date-ish string. Returns null if none. */
+function extractDateStr(s: unknown): string | null {
+  if (typeof s !== "string") return null;
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : null;
+}
+
+/** Whole-day distance between two "YYYY-MM-DD" strings. 0 if either is unparseable. */
+function daysBetween(a: string, b: string): number {
+  const ta = Date.parse(a);
+  const tb = Date.parse(b);
+  if (Number.isNaN(ta) || Number.isNaN(tb)) return 0;
+  return Math.abs(Math.round((tb - ta) / 86_400_000));
+}
+
+/** Is `date` within `windowDays` of `nowMs`? Used to gate freshness checks to near-term analysis. */
+function isRecentDate(date: string, windowDays: number, nowMs: number = Date.now()): boolean {
+  const t = Date.parse(date);
+  if (Number.isNaN(t)) return false;
+  return Math.abs(Math.round((nowMs - t) / 86_400_000)) <= windowDays;
+}
+
+/** Generate a data quality description for an analyst based on their ScriptResult. */
+export function generateDataQuality(role: string, date: string, result: ScriptResult): string {
   if (!result.success) {
     return "⚠️ 数据缺失：数据源获取失败，以下分析中必须明确声明数据不可用，不得推测或编造数据。置信度应降低。";
   }
@@ -57,6 +93,30 @@ function generateDataQuality(result: ScriptResult): string {
 
     if (fieldCount < 3) {
       issues.push(`数据字段较少（仅 ${fieldCount} 个字段），置信度应适当降低。`);
+    }
+
+    // Market-role completeness: K-line is the foundation of every downstream
+    // judgment, so row-count and freshness get a dedicated, stricter check.
+    if (role === "market") {
+      const klineArr = Array.isArray((data as any).data) ? (data as any).data as unknown[] : null;
+      const rowCount = typeof (data as any).count === "number"
+        ? (data as any).count
+        : (klineArr?.length ?? 0);
+
+      if (rowCount < KLINE_MIN_BARS) {
+        issues.push(`K线仅 ${rowCount} 根（技术指标需 ≥${KLINE_MIN_BARS} 根），MACD/RSI/布林带等可能缺失，趋势判断不可靠，置信度应显著降低。`);
+      }
+
+      if (klineArr && klineArr.length > 0 && isRecentDate(date, FRESHNESS_RECENT_WINDOW_DAYS)) {
+        const latestBarDate = extractDateStr((klineArr[klineArr.length - 1] as any)?.date);
+        const analysisDate = extractDateStr(date);
+        if (latestBarDate && analysisDate) {
+          const gapDays = daysBetween(latestBarDate, analysisDate);
+          if (gapDays > FRESHNESS_STALE_GAP_DAYS) {
+            issues.push(`K线最新数据为 ${latestBarDate}，距分析日 ${analysisDate} 已 ${gapDays} 天，数据可能过期（停牌或数据源异常），置信度应降低。`);
+          }
+        }
+      }
     }
   }
 
@@ -360,7 +420,7 @@ async function runAnalystPhase(
     } else {
       dataMap[role] = `[数据缺失: ${result.error || "unknown error"}]`;
     }
-    dataQualityMap[role] = generateDataQuality(result);
+    dataQualityMap[role] = generateDataQuality(role, date, result);
   }
 
   // ── Phase 2: Run all 7 analysts with concurrency limit ─────────
