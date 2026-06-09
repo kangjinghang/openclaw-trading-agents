@@ -1,7 +1,7 @@
 // tests/ts/quality-gate.test.ts
 
 import { describe, it, expect } from "vitest";
-import { validateAnalystReports } from "../../src/quality-gate";
+import { validateAnalystReports, checkFieldCitations } from "../../src/quality-gate";
 import { AnalystReport } from "../../src/types";
 
 function makeReport(role: string, content: string, direction = "看多", reason = "test"): AnalystReport {
@@ -146,5 +146,43 @@ describe("validateAnalystReports", () => {
     expect(result.warn_count).toBe(0);
     expect(result.summary_text).toContain("fundamentals");
     expect(result.summary_text).toContain("sentiment");
+  });
+
+  it("flags a water-essay report that cites no data fields (citation check)", () => {
+    // No market keywords (收盘/成交量/RSI/...) and no numeric citations.
+    const waterEssay =
+      "该股近期表现平稳，整体走势符合预期，建议保持关注。市场环境复杂多变，" +
+      "投资者需谨慎决策，结合自身风险偏好操作。未来走势仍需观察，暂无明确方向。";
+    const reports = [makeReport("market", waterEssay)];
+    const result = validateAnalystReports(reports);
+    const grade = result.grades.find((g) => g.role === "market")!;
+    expect(grade.issues.some((i) => i.includes("数据字段"))).toBe(true);
+  });
+});
+
+describe("checkFieldCitations", () => {
+  it("flags generic prose that cites no data fields and no numbers", () => {
+    const issue = checkFieldCitations(
+      "该股走势平稳，建议保持关注，暂无明确方向。",
+      "market"
+    );
+    expect(issue).not.toBeNull();
+    expect(issue).toContain("数据字段");
+  });
+
+  it("does not flag when a known field keyword is cited", () => {
+    // "MACD" / "RSI" are market keywords.
+    expect(checkFieldCitations("MACD 出现金叉，RSI 偏强。", "market")).toBeNull();
+  });
+
+  it("does not flag a data-grounded report with numeric citations but no keyword match", () => {
+    // No fundamentals keyword, but 3+ numeric citations → engaging with data.
+    expect(
+      checkFieldCitations("价格 25.8 元，涨幅 2.3%，成交 1500 手。", "fundamentals")
+    ).toBeNull();
+  });
+
+  it("skips unknown roles (no keyword map)", () => {
+    expect(checkFieldCitations("no data here at all", "unknown_role")).toBeNull();
   });
 });

@@ -22,6 +22,42 @@ const FAILURE_MARKERS = [
 const MIN_REPORT_LENGTH = 200;
 
 /**
+ * High-signal data-field keywords each analyst role is expected to cite.
+ * A report that genuinely engaged with its data will hit at least one keyword
+ * (or cite several numeric values). Zero keyword hits AND fewer than three
+ * numeric citations is a strong "ignored the data, wrote generic prose" signal.
+ *
+ * Conservative by design: keyword lists are generous, and a numeric-citation
+ * floor gives a second chance so synonym-using but data-grounded reports are
+ * not false-positive'd. Complements the LLM Layer-2 review (which catches
+ * semantic issues like fabrication); this catches the cruder "wrote nothing
+ * real" case at zero cost.
+ */
+const ROLE_CITATIONS: Record<string, string[]> = {
+  market: ["收盘", "涨跌", "成交量", "成交额", "均线", "SMA", "MACD", "RSI", "KDJ", "布林", "换手", "量价", "量比", "支撑", "阻力", "VPA", "金叉", "死叉"],
+  fundamentals: ["PE", "市盈率", "PB", "市净率", "ROE", "净利润", "净利", "营收", "收入", "商誉", "现金流", "资产负债", "负债率", "毛利率", "净利率", "EPS", "PEG", "forward", "ROA"],
+  news: ["新闻", "公告", "利好", "利空", "政策", "事件", "披露", "调研", "预告", "快报", "合同", "中标", "收购", "重组"],
+  sentiment: ["情绪", "涨停", "连板", "炸板", "热度", "看多", "看空", "悲观", "乐观", "龙头", "追涨", "恐慌", "氛围"],
+  policy: ["政策", "国务院", "证监会", "监管", "扶持", "补贴", "利好", "利空", "产业", "部委", "通知", "意见", "央行", "发改委"],
+  hot_money: ["北向", "主力", "龙虎榜", "资金", "游资", "净流入", "净流出", "板块", "换手", "大单", "超大单", "吸筹", "出货"],
+  lockup: ["解禁", "减持", "股东", "限售", "质押", "压力", "增持", "解禁市值", "流通"],
+};
+
+/**
+ * Check whether a report engaged with its data at all. Returns an issue string
+ * when the report cites none of its role's key fields AND lacks numeric
+ * citations; null otherwise. Unknown roles are skipped (no check).
+ */
+export function checkFieldCitations(content: string, role: string): string | null {
+  const keywords = ROLE_CITATIONS[role];
+  if (!keywords) return null;
+  if (keywords.some((k) => content.includes(k))) return null;
+  const numbers = content.match(/\d+(\.\d+)?/g) || [];
+  if (numbers.length >= 3) return null;
+  return "未引用关键数据字段且缺少数值引用（疑似无视数据写水文）";
+}
+
+/**
  * Hard-check a single analyst report for quality issues.
  * Returns a QualityGrade with identified issues.
  */
@@ -59,6 +95,10 @@ function hardCheckReport(report: AnalystReport): QualityGrade {
   if (report.verdict.direction === "中性" && report.verdict.reason === "无法解析结论") {
     issues.push("VERDICT 解析失败");
   }
+
+  // Check 6: Field citation — did the report engage with its data at all?
+  const citationIssue = checkFieldCitations(content, report.role);
+  if (citationIssue) issues.push(citationIssue);
 
   // Determine grade based on issue count
   const grade: QualityGrade["grade"] =
