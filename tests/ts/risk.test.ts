@@ -287,6 +287,28 @@ describe("extractPositionCap", () => {
     expect(extractPositionCap([])).toBeUndefined();
     expect(extractPositionCap(undefined)).toBeUndefined();
   });
+
+  it("extracts 持仓 phrasings (持仓 is a 仓位 synonym in A-share trading)", () => {
+    // Regression: 600600 real run emitted "最终持仓≤30%" but the 仓位-only
+    // regex missed it, leaving max_position_override undefined. The cap only
+    // held by coincidence (trader happened to pick the same number).
+    expect(extractPositionCap(["最终持仓≤30%"])).toBe(30);
+    expect(extractPositionCap(["持仓≤30%"])).toBe(30);
+    expect(extractPositionCap(["总持仓≤20%"])).toBe(20);
+    expect(extractPositionCap(["持仓不超过25%"])).toBe(25);
+  });
+
+  it("rejects absolute-quantity 持仓 constraints (no % → not a percentage cap)", () => {
+    // 持仓量≤100万手 is open-interest, 持仓≤1000股 is share count — neither is
+    // a position-% cap. The required % in the regex is what excludes these.
+    expect(extractPositionCap(["持仓量≤100万手"])).toBeUndefined();
+    expect(extractPositionCap(["持仓≤1000股"])).toBeUndefined();
+  });
+
+  it("requires a % sign (position caps are always percentages)", () => {
+    // Without %, "仓位≤30" is ambiguous (30 what?) — not a clean cap to enforce.
+    expect(extractPositionCap(["仓位≤30"])).toBeUndefined();
+  });
 });
 
 describe("parseRiskJudge", () => {

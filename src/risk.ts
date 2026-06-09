@@ -129,10 +129,17 @@ export function parseRiskJudge(content: string): RiskJudge | null {
 
 /**
  * Extract a numeric total-position cap (%) from `hard_constraints` text like
- * "总仓位≤10%", "仓位不超过20%", "仓位上限15%". Returns the SMALLEST cap found
+ * "总仓位≤10%", "仓位不超过20%", "最终持仓≤30%". Returns the SMALLEST cap found
  * (most restrictive) when multiple constraints apply. Returns undefined when
  * no total-position constraint is present — callers treat undefined as "no
  * override" and leave position_pct unchanged.
+ *
+ * Matches both "仓位" and "持仓" — they're synonyms in A-share trading and the
+ * LLM emits either (600600 real run used "最终持仓≤30%"; an earlier run used
+ * "总仓位≤10%"). The % sign is REQUIRED: it's what distinguishes a position-
+ * PERCENT cap from an absolute-quantity constraint like "持仓量≤100万手"
+ * (open interest) or "持仓≤1000股" (share count), which must NOT be treated
+ * as a percentage cap.
  *
  * Why text extraction instead of a dedicated RISK_JUDGE field: the cap already
  * lives in hard_constraints (the LLM emits it there naturally — confirmed on
@@ -140,8 +147,7 @@ export function parseRiskJudge(content: string): RiskJudge | null {
  * extra LLM cost, deterministic.
  *
  * Sub-batch constraints ("首批建仓≤5%", "首笔仓位≤3%", "分批…", "加仓…") are
- * explicitly skipped — they cap a tranche, not the total. Note "建仓" alone
- * never matches because it doesn't contain the "仓位" substring.
+ * explicitly skipped — they cap a tranche, not the total.
  */
 export function extractPositionCap(
   hardConstraints: string[] | undefined
@@ -151,7 +157,10 @@ export function extractPositionCap(
   for (const c of hardConstraints) {
     // Skip sub-batch constraints — they're not total-position caps.
     if (/首批|首笔|首次|分批|加仓/.test(c)) continue;
-    const m = c.match(/仓位\s*(?:≤|<=|不超过|不多于|最多|上限)\s*(\d{1,3})\s*%?/);
+    // Match 仓位 OR 持仓 (synonyms in A-share trading). The % sign is REQUIRED:
+    // it's what distinguishes a position-PERCENT cap ("仓位≤30%") from an
+    // absolute-quantity constraint ("持仓量≤100万手" = open interest, no %).
+    const m = c.match(/(?:仓位|持仓)\s*(?:≤|<=|不超过|不多于|最多|上限)\s*(\d{1,3})\s*%/);
     if (m) {
       const val = parseInt(m[1], 10);
       if (val > 0 && val <= 100) caps.push(val);

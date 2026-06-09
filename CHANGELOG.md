@@ -52,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - revise 重试耗尽的诚实标注（`src/orchestrator.ts`，commit `6b6dc86`）：超过 `max_risk_retries` 仍 revise 时，旧逻辑强制翻转为 pass，但内层 `judge.verdict` 仍是 revise、reasoning 仍是"禁止建仓"，报告自相矛盾。改为保留 `status: "revise"` + 设置 `retries_exhausted: true`，下游消费者（dashboard/report-formatter/`FinalDecision`）本就处理 revise
 - 质量门 sentinel 双检查（`src/quality-gate.ts`，commit `0bb2b63`）：Check 4 只数**不同**失败短语的数量，13 个 `[数据缺失: 新闻]` 哨兵只算"1 种"漏网（实跑 600600 拿了 A 级）。加 Check 4b 数哨兵**出现次数** ≥3 触发；`checkFieldCitations` 先 strip 哨兵再查关键词，避免哨兵里的字段名（如"新闻"）被当成"引用了该数据"
 - 风控硬约束仓位 cap 未执行（`src/risk.ts` + `src/orchestrator.ts`）：`runRiskManager` 从未填 `max_position_override`（永远 undefined），orchestrator 只在 revise 回路内套 cap，回路外（一次通过 / 回路耗尽后）的最终 judge 不绑定最终计划——600600 看到 judge 说"总仓位≤10%"但 `position_pct` 仍为 15%。新增 `extractPositionCap` 从 `hard_constraints` 文本取最严 cap（跳过 `首批/首笔/分批/加仓` 子批次约束），回路外加一道 cap；零额外 LLM 成本，deterministic
+- `extractPositionCap` 正则补 `持仓` 同义词 + `%` 必填（`src/risk.ts`）：复跑 600600 发现 LLM 这次吐的是"最终持仓≤30%"（上次是"总仓位≤10%"），`仓位`-only 正则漏匹配，cap 靠 trader 碰巧填同值才"看上去对"。改为 `(?:仓位|持仓)` 别名 + `%` 必填（必填同时排除"持仓量≤100万手"这类绝对数量约束，不会误当百分比 cap）
 
 ## [0.1.0] - 2026-06-06
 
