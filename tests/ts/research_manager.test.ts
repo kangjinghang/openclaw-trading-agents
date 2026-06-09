@@ -171,4 +171,34 @@ describe('runResearchManager', () => {
     expect(result.confidence).toBe(0.5);
     expect(result.key_debate_points).toEqual([]);
   });
+
+  it('should use decision_deep model when set (deep-thinking tier for the gatekeeper)', async () => {
+    const deepConfig: TradingAgentsConfig = {
+      ...mockConfig,
+      models: { ...mockConfig.models, decision_deep: 'glm-4.6' },
+    };
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: '<!-- VERDICT: {"direction": "Hold", "reason": "x"} -->' } }],
+      usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+    } as any);
+
+    await runResearchManager([], mockDebateResult(), '', deepConfig, mockClient, mockTraceLogger);
+
+    const callArgs = mockCreate.mock.calls[0][0] as any;
+    expect(callArgs.model).toBe('glm-4.6');
+  });
+
+  it('should fall back to decision model when decision_deep is unset', async () => {
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: '<!-- VERDICT: {"direction": "Hold", "reason": "x"} -->' } }],
+      usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+    } as any);
+
+    await runResearchManager([], mockDebateResult(), '', mockConfig, mockClient, mockTraceLogger);
+
+    const callArgs = mockCreate.mock.calls[0][0] as any;
+    expect(callArgs.model).toBe('gpt-4o'); // mockConfig.models.decision
+  });
 });

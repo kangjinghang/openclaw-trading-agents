@@ -82,7 +82,7 @@ User → trading_full → src/orchestrator.ts → runFullAnalysis()
 
 ### Config
 
-Plugin config lives at `~/.openclaw/plugins/trading-agents/config.json` (schema in `openclaw.plugin.json`). Key fields: `models` (analyst/debater/decision/risk), `debate_rounds`, `risk_debate_rounds`, `max_risk_retries`, `report_dir`. Defaults are in `src/index.ts`.
+Plugin config lives at `~/.openclaw/plugins/trading-agents/config.json` (schema in `openclaw.plugin.json`). Key fields: `models` (analyst/debater/decision/risk; optional `decision_deep` — a stronger/reasoning model for the research manager + risk manager gatekeepers, falling back to `decision`/`risk` when unset), `debate_rounds`, `risk_debate_rounds`, `max_risk_retries`, `report_dir`. Defaults are in `src/index.ts`.
 
 ### Types
 

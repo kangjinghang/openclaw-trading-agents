@@ -87,7 +87,7 @@ export async function runResearchManager(
   );
 
   const result = await callLLM(openaiClient, {
-    model: config.models.decision,
+    model: config.models.decision_deep || config.models.decision,
     systemPrompt: "You are a research manager evaluating Bull↔Bear debate quality and making trading direction decisions.",
     userMessage,
     temperature: 0.3,

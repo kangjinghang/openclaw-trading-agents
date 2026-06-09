@@ -7,6 +7,14 @@ export interface TradingAgentsConfig {
     debater: string;
     decision: string;
     risk: string;
+    /**
+     * Deep/reasoning model for the two synthesis-gatekeeper roles
+     * (research manager + risk manager) — the reasoning-intensive calls.
+     * Optional: when unset, research manager falls back to `decision`
+     * and risk manager falls back to `risk` (legacy behavior).
+     * Mirrors TradingAgents' quick/deep-thinking two-tier split.
+     */
+    decision_deep?: string;
   };
   debate_rounds: number;
   risk_debate_rounds: number;

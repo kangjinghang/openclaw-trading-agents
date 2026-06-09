@@ -205,7 +205,7 @@ export async function runRiskManager(
   );
 
   const result = await callLLM(openaiClient, {
-    model: config.models.risk,
+    model: config.models.decision_deep || config.models.risk,
     systemPrompt: "You are a risk manager making final pass/revise/reject decisions for A-share trading plans.",
     userMessage,
     temperature: 0.3,

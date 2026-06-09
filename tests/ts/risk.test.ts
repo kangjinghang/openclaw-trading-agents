@@ -183,6 +183,70 @@ describe("Risk Module", () => {
       // reasoning prefers judge.reason when present
       expect(result.reasoning).toBe("仓位偏高，需降低并分批建仓");
     });
+
+    it("should use decision_deep model when set (deep-thinking tier for the gatekeeper)", async () => {
+      const deepConfig: TradingAgentsConfig = {
+        ...mockConfig,
+        models: { ...mockConfig.models, decision_deep: "glm-4.6" },
+      };
+      const mockCreate = vi.mocked(mockClient.chat.completions.create);
+      mockCreate.mockResolvedValueOnce({
+        choices: [{ message: { content: '<!-- VERDICT: {"direction": "pass", "reason": "ok"} -->' } }],
+        usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+      } as any);
+
+      await runRiskManager(
+        { rounds: [[]], risk_arguments: [], total_tokens: 0, total_cost_usd: 0 },
+        mockTradingPlan(),
+        deepConfig,
+        mockClient,
+        mockTraceLogger
+      );
+
+      const callArgs = mockCreate.mock.calls[0][0] as any;
+      expect(callArgs.model).toBe("glm-4.6");
+    });
+
+    it("should fall back to risk model when decision_deep is unset", async () => {
+      const mockCreate = vi.mocked(mockClient.chat.completions.create);
+      mockCreate.mockResolvedValueOnce({
+        choices: [{ message: { content: '<!-- VERDICT: {"direction": "pass", "reason": "ok"} -->' } }],
+        usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+      } as any);
+
+      await runRiskManager(
+        { rounds: [[]], risk_arguments: [], total_tokens: 0, total_cost_usd: 0 },
+        mockTradingPlan(),
+        mockConfig,
+        mockClient,
+        mockTraceLogger
+      );
+
+      const callArgs = mockCreate.mock.calls[0][0] as any;
+      expect(callArgs.model).toBe("gpt-4o"); // mockConfig.models.risk
+    });
+  });
+
+  describe("runRiskDebate model routing", () => {
+    it("should keep using the risk model (NOT decision_deep) for the 3-way risk debaters", async () => {
+      const deepConfig: TradingAgentsConfig = {
+        ...mockConfig,
+        models: { ...mockConfig.models, decision_deep: "glm-4.6", risk: "gpt-4o" },
+      };
+      const calls: any[] = [];
+      const mockCreate = vi.fn(async (params: any) => {
+        calls.push(params);
+        return mockRiskDebateResponse("pass");
+      });
+      mockClient.chat.completions.create = mockCreate;
+
+      await runRiskDebate(mockTradingPlan(), [], deepConfig, mockClient, mockTraceLogger);
+
+      expect(calls).toHaveLength(3);
+      for (const c of calls) {
+        expect(c.model).toBe("gpt-4o"); // risk debaters stay on the quick tier
+      }
+    });
   });
 });
 
