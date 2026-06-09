@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { runRiskDebate, runRiskManager, parseRiskJudge } from "../../src/risk";
+import { runRiskDebate, runRiskManager, parseRiskJudge, RISK_ROLES } from "../../src/risk";
 import { TradingAgentsConfig, TradingPlan, RiskDebateResult } from "../../src/types";
 import OpenAI from "openai";
 
@@ -310,5 +310,46 @@ describe("parseRiskJudge", () => {
     const content = `<!-- RISK_JUDGE: ["not", "an", "object"] -->`;
 
     expect(parseRiskJudge(content)).toBeNull();
+  });
+});
+
+describe("RISK_ROLES framework richness", () => {
+  const byRole = (role: string) =>
+    RISK_ROLES.find((r) => r.role === role)!.instructions;
+
+  it("exposes all three debate roles in order", () => {
+    expect(RISK_ROLES.map((r) => r.role)).toEqual([
+      "aggressive",
+      "conservative",
+      "neutral",
+    ]);
+  });
+
+  it("aggressive argues the A-share bull case with concrete reframes (not a one-liner)", () => {
+    const t = byRole("aggressive");
+    expect(t.length).toBeGreaterThan(150);
+    expect(t).toContain("政策底");
+    expect(t).toContain("北向");
+    expect(t).toContain("涨停");
+    expect(t).toMatch(/50[-—]100x/); // PE-expansion reframe vs US 15-25x
+  });
+
+  it("conservative enumerates structural A-share risks with thresholds", () => {
+    const t = byRole("conservative");
+    expect(t.length).toBeGreaterThan(150);
+    expect(t).toContain("T+1");
+    expect(t).toContain("涨跌停");
+    expect(t).toContain("解禁");
+    expect(t).toContain("政策反转");
+    expect(t).toMatch(/20%/); // 解禁 >20% threshold
+    expect(t).toMatch(/PE>50x/);
+  });
+
+  it("neutral reframes risk around position sizing over direction", () => {
+    const t = byRole("neutral");
+    expect(t.length).toBeGreaterThan(150);
+    expect(t).toContain("双刃剑"); // T+1 double-edged
+    expect(t).toContain("仓位管理优先于方向"); // signature thesis
+    expect(t).toMatch(/2[-—]4\s*周/); // rotation cycle
   });
 });
