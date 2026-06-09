@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { runTrader } from "../../src/trader";
+import { runTrader, parseTraderPlan } from "../../src/trader";
 import { loadAndRender } from "../../src/prompt-loader";
 import {
   TradingAgentsConfig,
@@ -586,5 +586,168 @@ T+1.
     );
 
     expect(result.invalidations).toEqual([]);
+  });
+
+  it("should parse TRADER_PLAN block into structured signals (real LLM format: numbered headings + tables)", async () => {
+    // This mirrors actual LLM output: sections numbered per the prompt
+    // ("### 3. 入场信号（triggers — …）") with markdown TABLE bodies —
+    // a format parseListSection cannot parse. The TRADER_PLAN JSON block
+    // is the reliable path.
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+    mockCreate.mockResolvedValueOnce({
+      choices: [
+        {
+          message: {
+            content: `### 1. 交易方向与仓位
+- **建议方向**：买入
+- **建议仓位**：30%
+
+### 2. 价格区间
+- **目标价格**：1400 元
+- **止损价格**：1200 元
+
+### 3. 入场信号（triggers — 等什么信号才动手）
+
+| # | 信号条件 | 触发动作 |
+|---|----------|----------|
+| **1** | 放量突破5.35元 | 加仓 |
+| **2** | MACD零轴下方金叉 | 加仓 |
+
+### 4. 退出信号
+
+| # | 信号条件 |
+|---|----------|
+| **1** | 收盘价连续2日低于4.98元 |
+
+### 5. 失效条件（invalidations — 出现即推翻判断）
+
+| # | 失效条件 |
+|---|----------|
+| **1** | 半年报净利润环比下降>30% |
+
+### 7. 关键风险提示
+
+| # | 风险因素 |
+|---|----------|
+| **1** | 北向资金持续流出 |
+
+<!-- TRADER_PLAN: {"entry_signals": ["放量突破5.35元", "MACD零轴下方金叉"], "exit_signals": ["收盘价连续2日低于4.98元"], "invalidations": ["半年报净利润环比下降>30%"], "key_risks": ["北向资金持续流出"]} -->
+
+<!-- VERDICT: {"direction": "Buy", "reason": "分批建仓"} -->`,
+          },
+        },
+      ],
+      usage: { prompt_tokens: 800, completion_tokens: 400, total_tokens: 1200 },
+    } as any);
+
+    const result = await runTrader(
+      mockResearchDecision(),
+      [],
+      "",
+      mockConfig,
+      mockClient,
+      mockTraceLogger
+    );
+
+    expect(result.entry_signals).toEqual([
+      "放量突破5.35元",
+      "MACD零轴下方金叉",
+    ]);
+    expect(result.exit_signals).toEqual(["收盘价连续2日低于4.98元"]);
+    expect(result.invalidations).toEqual(["半年报净利润环比下降>30%"]);
+    expect(result.key_risks).toEqual(["北向资金持续流出"]);
+  });
+
+  it("should fall back to parseListSection when TRADER_PLAN block is absent (numbered headings + list items)", async () => {
+    // No TRADER_PLAN block → must fall back to parseListSection, which now
+    // tolerates the "### 3. 入场信号（…）" numbered-heading format.
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+    mockCreate.mockResolvedValueOnce({
+      choices: [
+        {
+          message: {
+            content: `### 交易方向与仓位
+- **建议仓位**：20%
+
+### 价格区间
+- **目标价格**：1300 元
+- **止损价格**：1200 元
+
+### 3. 入场信号（triggers — 等什么信号才动手）
+1. 放量突破5.35元
+2. MACD金叉
+
+### 5. 失效条件（invalidations — 出现即推翻判断）
+1. 半年报环比下降30%
+
+### T+1 操作约束说明
+T+1.
+
+### 关键风险提示
+1. 北向流出
+
+<!-- VERDICT: {"direction": "Buy", "reason": "test"} -->`,
+          },
+        },
+      ],
+      usage: { prompt_tokens: 800, completion_tokens: 200, total_tokens: 1000 },
+    } as any);
+
+    const result = await runTrader(
+      mockResearchDecision(),
+      [],
+      "",
+      mockConfig,
+      mockClient,
+      mockTraceLogger
+    );
+
+    expect(result.entry_signals).toEqual(["放量突破5.35元", "MACD金叉"]);
+    expect(result.invalidations).toEqual(["半年报环比下降30%"]);
+  });
+});
+
+describe("parseTraderPlan", () => {
+  it("parses a complete TRADER_PLAN block", () => {
+    const content = `some prose
+
+<!-- TRADER_PLAN: {"entry_signals": ["放量突破5.35", "MACD金叉"], "exit_signals": ["跌破4.98"], "invalidations": ["半年报环比-30%"], "key_risks": ["北向流出"]} -->
+trailing text`;
+    const plan = parseTraderPlan(content);
+    expect(plan).not.toBeNull();
+    expect(plan!.entry_signals).toEqual(["放量突破5.35", "MACD金叉"]);
+    expect(plan!.exit_signals).toEqual(["跌破4.98"]);
+    expect(plan!.invalidations).toEqual(["半年报环比-30%"]);
+    expect(plan!.key_risks).toEqual(["北向流出"]);
+  });
+
+  it("returns null when no block is present", () => {
+    expect(parseTraderPlan("no block here")).toBeNull();
+  });
+
+  it("returns null on malformed JSON", () => {
+    expect(parseTraderPlan("<!-- TRADER_PLAN: {bad json} -->")).toBeNull();
+  });
+
+  it("returns null on a non-object payload", () => {
+    expect(parseTraderPlan('<!-- TRADER_PLAN: ["not", "object"] -->')).toBeNull();
+  });
+
+  it("coerces missing arrays to empty defaults (partial output)", () => {
+    const plan = parseTraderPlan(
+      '<!-- TRADER_PLAN: {"entry_signals": ["信号A"]} -->'
+    );
+    expect(plan).not.toBeNull();
+    expect(plan!.entry_signals).toEqual(["信号A"]);
+    expect(plan!.exit_signals).toEqual([]);
+    expect(plan!.invalidations).toEqual([]);
+    expect(plan!.key_risks).toEqual([]);
+  });
+
+  it("filters non-string entries from arrays", () => {
+    const plan = parseTraderPlan(
+      '<!-- TRADER_PLAN: {"entry_signals": ["ok", 123, true, "ok2"]} -->'
+    );
+    expect(plan!.entry_signals).toEqual(["ok", "ok2"]);
   });
 });

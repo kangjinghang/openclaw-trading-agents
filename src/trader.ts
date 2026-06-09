@@ -83,15 +83,60 @@ function parseNumericField(content: string, fieldPattern: string, isPercent: boo
 }
 
 function parseListSection(content: string, header: string): string[] {
+  // Allow an optional numeric prefix ("### 3.") and trailing parenthetical
+  // ("（triggers — …）") on the header so real LLM output (which numbers
+  // sections per the prompt) still matches. Best-effort fallback only —
+  // the TRADER_PLAN JSON block is the primary parse path.
   const regex = new RegExp(
-    `### ${header}[\\s\\S]*?\\n([\\s\\S]*?)(?=\\n###|\\n<!-- VERDICT|$)`
+    `### \\d*[\\.、]?\\s*${header}[^\\n]*\\n([\\s\\S]*?)(?=\\n###|\\n<!-- |$)`
   );
   const match = content.match(regex);
   if (!match) return [];
   return match[1]
     .split("\n")
     .map((l) => l.replace(/^\d+\.\s*/, "").replace(/^-\s*/, "").trim())
-    .filter((l) => l.length > 0);
+    .filter((l) => l.length > 0 && !l.includes("|")); // skip markdown table rows
+}
+
+/**
+ * Parse a `<!-- TRADER_PLAN: {...} -->` JSON block from trader output.
+ * Returns null on: missing block, malformed JSON, or non-object payload.
+ * Missing optional arrays are coerced to empty defaults so partial LLM
+ * output is still usable. Mirrors the VERDICT/DEBATE_STATE/RISK_JUDGE
+ * structured-output protocol — decouples signal parsing from the exact
+ * markdown heading format the LLM happens to emit.
+ */
+export function parseTraderPlan(content: string): {
+  entry_signals: string[];
+  exit_signals: string[];
+  invalidations: string[];
+  key_risks: string[];
+} | null {
+  const regex = /<!--\s*TRADER_PLAN:\s*(\{.*?\})\s*-->/s;
+  const match = content.match(regex);
+  if (!match) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(match[1]);
+  } catch {
+    return null;
+  }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return null;
+  }
+
+  const obj = parsed as Record<string, unknown>;
+  const coerceStrArray = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+
+  return {
+    entry_signals: coerceStrArray(obj.entry_signals),
+    exit_signals: coerceStrArray(obj.exit_signals),
+    invalidations: coerceStrArray(obj.invalidations),
+    key_risks: coerceStrArray(obj.key_risks),
+  };
 }
 
 export async function runTrader(
@@ -142,6 +187,8 @@ export async function runTrader(
   });
 
   const direction = researchDecision.direction;
+  // Prefer the structured TRADER_PLAN block; fall back to list-section parsing.
+  const plan = parseTraderPlan(result.content);
 
   return {
     direction:
@@ -154,10 +201,10 @@ export async function runTrader(
     stop_loss: parseNumericField(result.content, "止损价格", false),
     position_pct: parseNumericField(result.content, "建议仓位", true),
     execution_plan: result.content.slice(0, 3000),
-    entry_signals: parseListSection(result.content, "入场信号"),
-    exit_signals: parseListSection(result.content, "退出信号"),
-    invalidations: parseListSection(result.content, "失效条件"),
-    key_risks: parseListSection(result.content, "关键风险提示"),
+    entry_signals: plan?.entry_signals.length ? plan.entry_signals : parseListSection(result.content, "入场信号"),
+    exit_signals: plan?.exit_signals.length ? plan.exit_signals : parseListSection(result.content, "退出信号"),
+    invalidations: plan?.invalidations.length ? plan.invalidations : parseListSection(result.content, "失效条件"),
+    key_risks: plan?.key_risks.length ? plan.key_risks : parseListSection(result.content, "关键风险提示"),
     t_plus_1_note: (() => {
       const match = result.content.match(
         /### [T＋+]1 操作约束说明\s*\n([\s\S]*?)(?=\n###|$)/
