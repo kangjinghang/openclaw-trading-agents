@@ -2,7 +2,7 @@
 
 > **状态**：延期，未实现。本文档为**实现级深度设计**，供后期立项时直接参考。
 > **依赖关系**：P2-a 的"跨次复盘"形态**依赖** P3 记忆系统才能落地；P2-a 的"in-run 一致性校验"形态可独立先做。
-> **来源**：竞品 TradingAgents-AShare（详见 [../competitor-analysis.zh.md](../competitor-analysis.zh.md) §2.5、§5）。
+> **来源**：竞品 TradingAgents-AShare（[../competitor-analysis.zh.md](../competitor-analysis.zh.md) §2.5、§5）+ **TradingAgents-astock**（`simonlin1212` v0.2.11，活体参考实现，见 §1.4-1.6）。
 
 ---
 
@@ -16,11 +16,22 @@
 
 **推荐实施顺序**：P2-a(in-run) → P3(记忆) → P2-a(cross-run 复盘)。
 
+> **重要更新（2026-06）**：调研了第二个 fork **TradingAgents-astock**（`simonlin1212`，v0.2.11），其记忆+反思**已真上线、非死代码**，是本设计的**活体参考实现**（详见 §1.4-1.6）。它验证了我们 §3/§4 的核心判断（沪深300 alpha、2-4 句小反思、PM-only 注入、下次补录 outcome），把"暂缓照搬"降级为"按已验证路径重写"。**实施建议也随之收敛**：P3 Phase A 先走 astock 简版（markdown 日志 + 仅 PM + 下次补录），别一上来建 JSON+向量全量（见 §1.6、§5）。
+
 ---
 
-## 1. 背景：TradingAgents-AShare 怎么做（已源码核实）
+## 1. 背景：两个 fork 怎么做（已源码核实）
 
-### 1.1 记忆（memory）
+我们调研了**两个**独立的 TradingAgents A 股 fork，结论迥异：
+
+| fork | 作者/版本 | 记忆+反思状态 | 参考价值 |
+|---|---|---|---|
+| **TradingAgents-AShare** | （另一 fork） | 反思**死代码**，记忆 5 角色 BM25 | 有限（§1.1-1.3，仅供对比） |
+| **TradingAgents-astock** | `simonlin1212` v0.2.11 | **已真上线**：markdown 日志 + Reflector | **活体参考实现**（§1.4-1.6，主参考） |
+
+> 下面 §1.1-1.3 是 **AShare fork（死代码，仅供对比）**；**§1.4-1.6 是 astock fork（活体，实施时主参考）**。
+
+### 1.1 记忆（memory）—— AShare fork
 - `tradingagents/graph/setup.py:65-81` 为 5 个角色各建独立记忆：`bull_memory` / `bear_memory` / `trader_memory` / `invest_judge_memory` / `risk_manager_memory`。
 - 记忆源自上游 TradingAgents（LangGraph）的全局记忆组件，按**情境相似度检索**过往建议。
 - 关键 API：`memory.add_situations([(situation, result)])` 写入；agent 节点构造时传入对应 memory，运行时检索相关条目。
@@ -34,7 +45,55 @@
 - 产出**仅写入 per-agent memory**（`memory.add_situations`），**不改当前决策、不循环、纯标注**。
 
 ### 1.3 关键结论
-**TA 的反思与记忆是耦合的**：反思的价值闭环 = "本次复盘 → 写记忆 → 下次同类标的检索借鉴"。没有记忆系统，反思结果无处落地。这正是我们暂缓照搬的原因——**不是抄一段代码，而是要建一套子系统**。
+**TA 的反思与记忆是耦合的**：反思的价值闭环 = "本次复盘 → 写记忆 → 下次同类标的检索借鉴"。没有记忆系统，反思结果无处落地。这正是我们暂缓照搬（AShare）的原因——**不是抄一段代码，而是要建一套子系统**。
+
+> ⚠️ 此悲观结论针对 AShare 的死代码。**astock fork（§1.4-1.6）已证明这套子系统可工程落地、收益闭环成立**，故结论在 §1.6 修订。
+
+### 1.4 记忆 —— TradingAgents-astock（活体参考）
+
+**存储**：**单文件 markdown 追加日志** `~/.tradingagents/memory/trading_memory.md`（`memory.py`）。用 `<!-- ENTRY_END -->` 做硬分隔符——选它的理由是"不会出现在 LLM prose 输出里，安全"（`memory.py:14`）。**非 JSON、非 5 角色分库**；v0.2.4 用它替换了旧的 per-agent BM25 系统（`FinancialSituationMemory` 移除，CHANGELOG.md:211-213）。
+
+**两阶段写入**：
+- **Phase A — 决策时存（无 LLM，`store_decision`）**：分析结束写一条 `[date | ticker | rating | pending]` 头 + `DECISION: {...}` 正文，标 `pending`（结果未出）。零额外 LLM 成本。
+- **Phase B — 下次同标的跑时补录（`_resolve_pending_entries`，`trading_graph.py:265-299`）**：对历史 pending 条目，调 `_fetch_returns`（`trading_graph.py:227-263`）算 **5 日持有期 raw 收益 + alpha（vs 沪深300 `000300.SS`）**，再调 Reflector（§1.5）生成反思，**批量回写**同一条目。即 outcome 回录**折进下次运行**，不靠独立 cron。
+
+**消费**：**仅 Portfolio Manager** 读取（非 5 角色），且仅当 `past_context` 非空时注入 prompt。`get_past_context`（`memory.py:71-96`）取 **≤5 条同标的（full decision+reflection）+ ≤3 条跨标的（仅 reflection，省 token）**，最近优先。
+
+**约束**：`memory_log_max_entries` 总量上限；**pending 条目永不剪枝**（等下次同标的跑时补录）。
+
+**与我们 §3.2 的关键差异**：astock = 单 markdown 日志（零依赖、人可读、易手编/删误条目）；我们设计 = JSON `index.json`+`entries/*.json`+可选向量。**两者都可行**；astock 的简版更适合作为 P3 Phase A 的**起点**（先跑通闭环，再决定是否上 JSON+向量；向量检索跨标的情境是 markdown 方案唯一做不到的能力，见 §3.4 Phase C）。详见 §1.6、§5。
+
+### 1.5 反思 —— TradingAgents-astock（活体参考）
+
+**接入点**：`reflection.py` 的 `Reflector` 类，在 `_resolve_pending_entries`（`trading_graph.py:128, 284`）中被调用——**真接入管道，非死代码**（对比 AShare §1.2 的 `reflect_and_remember` 全库无调用）。
+
+**反思 prompt（`reflection.py:20-29`，精炼版）**——注意这是 **astock 的 2-4 句版**，不是 AShare `zh.py:331` 的长版：
+
+> You are a trading analyst reviewing your own past decision now that the outcome is known. Write exactly 2-4 sentences of plain prose (no bullets, no headers, no markdown). Cover in order: 1. Was the directional call correct? (cite the alpha figure) 2. Which part of the investment thesis held or failed? 3. One concrete lesson to apply to the next similar analysis. Be specific and terse. Your output will be stored verbatim in a decision log and re-read by future analysts, so every word must earn its place.
+
+**alpha 基准 = 沪深300（`000300.SS`）**，非美股 SPY——A 股适配（`trading_graph.py:242`）。
+
+**闭环**：反思写回对应 memory entry，下次同/跨标的分析时作为 `past_context` 被 PM 读到 → 影响新决策。**价值闭环成立**（决策→存→出结果→反思→下次借鉴）。
+
+**与我们 §4 的一致性**：我们提的"2-4 句小反思（防注入膨胀）+ alpha 对标沪深300 + 写记忆供下次用"——astock **三项全部验证**。
+
+### 1.6 三方案对比与结论更新
+
+| 维度 | AShare（§1.1-1.3，死） | **astock（§1.4-1.5，活，主参考）** | 我们设计文档（§3/§4） |
+|---|---|---|---|
+| 反思是否接入管道 | ❌ `reflect_and_remember` 死代码 | ✅ `_resolve_pending_entries` 调 Reflector | 待实现 |
+| 记忆存储 | 5 角色 BM25（情境相似度） | 单 markdown 追加日志 | JSON `index.json`+`entries/` |
+| 消费者 | 5 角色各自检索 | **仅 PM**，有 `past_context` 才注入 | 所有 agent `{{memory}}` |
+| alpha 基准 | — | **沪深300** | 沪深300（一致 ✓） |
+| outcome 回录 | — | **下次同标的跑时补录**（折进运行） | 独立 `backfill-outcome.ts` 脚本 |
+| 反思粒度 | 长 prompt（+5 调用/次） | **2-4 句**（+1/条） | 2-4 句（一致 ✓） |
+| 跨标的检索 | — | ≤3 条 reflection-only（省 token） | tags/industry 重叠（Phase A）→ 向量（C） |
+
+**结论更新**（修订 §1.3 针对 AShare 的悲观结论）：
+
+- astock 已证明"情境→决策→结果→反思→下次借鉴"这套子系统**可工程落地、收益闭环成立**。我们的 §3/§4 设计与 astock 在 **alpha 基准、反思粒度（2-4 句）、PM 注入**上**高度一致**——方向被验证。
+- 主要分叉在**存储格式**（JSON vs markdown）与**消费者范围**（全 agent vs 仅 PM）。这两点 astock 都更**简**。
+- **实施建议**：P3 Phase A **先走 astock 简版**——单 markdown 日志 + 仅 PM 消费 + 下次同标的补录 outcome——跑通闭环、验证收益后，再决定是否升级到我们 §3.2 的 JSON+向量全量。**别一上来就建 JSON+index+backfill 全套**。
 
 ---
 
@@ -116,6 +175,8 @@
 
 **建议**：先 Phase A（无 outcome，仅"我上次这么说过"回看），再 Phase B 自动随访（价值跃升），Phase C 向量检索。
 
+> **astock 已验证 Phase B 的"自动随访"可行**（§1.4）：它把补录**折进下次同标的分析**（`_resolve_pending_entries` + `_fetch_returns`），**不靠独立 cron**。我们可同样省掉 `backfill-outcome.ts` 独立脚本，改为 `runFullAnalysis` 入口处先 resolve pending 条目——比原设计更简，且无需额外调度基础设施。
+
 ### 3.6 集成清单（实现时要动的）
 | 文件 | 改动 |
 |---|---|
@@ -181,7 +242,7 @@
 
 **与 P3 的接口**：`runFullAnalysis` 末尾，若 `outcome` 可得（Phase B 随访已回填历史条目）或本次为补录，调 `runReflection(cross-run)` 产出 `reflection` 文本 + `可复用经验清单`，写入对应角色的 `MemoryEntry.reflection`。
 
-**反思 prompt**：直接参考 TA `zh.py:331` 的 `reflection_system_prompt`（判成败→拆解成因→改进项→可复用经验清单），中文化适配我们的 5 角色与 A 股维度。
+**反思 prompt**：**优先参考 astock 的精炼版**（`reflection.py:20-29`，2-4 句：判对错 + 引 alpha + 一条可复用经验，见 §1.5 引文）——更省 token、更适合注入。AShare `zh.py:331` 的长版（判成败→拆解 5 维度成因→改进项→经验清单）信息更全但冗长，可作为"深度复盘"可选形态。中文化适配我们的角色与 A 股维度。
 
 **触发条件**：仅当该次决策有 `outcome`（随访已回填）时才值得复盘——否则判不了成败。
 
@@ -190,7 +251,7 @@
 ## 5. 推荐实施顺序与里程碑
 
 1. **P2-a(in-run 一致性校验)** —— 独立、+1 调用、可量化。先做，验证 self-critique 在我们 pipeline 的实际收益。
-2. **P3 Phase A** —— 记忆存储 + 同 ticker/industry 检索注入（无 outcome）。建立基础设施。
+2. **P3 Phase A** —— 记忆存储 + 检索注入（无 outcome）。建立基础设施。**优先采用 astock 简版**：单 markdown 日志 + 仅 PM 消费（非全 agent `{{memory}}`）+ 下次同标的补录 outcome（非独立 backfill），见 §1.4/§1.6。
 3. **P3 Phase B** —— outcome 自动随访（`backfill-outcome.ts`）。记忆价值跃升。
 4. **P2-a(cross-run 复盘)** —— 接 P3，判成败写记忆，闭环。
 5. **P3 Phase C** —— 向量检索（embedding），跨标的情境相似度。
@@ -209,10 +270,16 @@
 
 | 事实 | TA 源码位置 |
 |---|---|
+| **AShare fork（死代码，仅供对比）** | |
 | 5 角色独立记忆 | `TradingAgents-AShare/tradingagents/graph/setup.py:65-81` |
 | Reflector 类 | `TradingAgents-AShare/tradingagents/graph/reflection.py`（invoke L42） |
 | 反思方法（**死代码，未调用**） | `TradingAgents-AShare/tradingagents/graph/trading_graph.py:468` `reflect_and_remember` |
-| 反思 prompt 原文 | `TradingAgents-AShare/tradingagents/prompts/zh.py:331` `reflection_system_prompt` |
+| 反思 prompt 原文（长版） | `TradingAgents-AShare/tradingagents/prompts/zh.py:331` `reflection_system_prompt` |
 | memory API | `memory.add_situations([(situation, result)])` |
+| **astock fork（活体，主参考）** | |
+| markdown 决策日志 + `<!-- ENTRY_END -->` 分隔符 | `TradingAgents-astock` `memory.py:14` |
+| Phase B 补录 + 5 日 alpha（沪深300） | `trading_graph.py:227-263`(`_fetch_returns`)、`265-299`(`_resolve_pending_entries`)、`242`(CSI300) |
+| Reflector（**真接入管道**） | `trading_graph.py:128,284`；`reflection.py:20-29`（2-4 句 prompt） |
+| PM 消费 past_context（≤5 同标的 + ≤3 跨标的） | `memory.py:71-96`（`get_past_context`） |
 
 > 本项目相关：`src/orchestrator.ts`（`runFullAnalysis`/`runAnalystPhase`）、`src/report-store.ts`（`saveFull`）、`src/quality-gate.ts`（输入层预检，**不与反思重叠**）、`docs/competitor-analysis.zh.md` §2.5。
