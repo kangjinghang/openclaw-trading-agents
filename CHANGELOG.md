@@ -40,12 +40,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 数据抓取 retry/backoff（`http_helpers.py`）：`_with_retry` 指数退避（默认只重试 ConnectionError，不重试 Timeout，防撞爆 30s 脚本预算）+ `http_get` drop-in 替换裸 requests.get
 - market 数据完整性检查（`src/orchestrator.ts`）：K 线 ≥50 行下限 + 日期新鲜度（gap>7 天），仅 market role，抓"看起来有数据实际是坏数据"
 
+**文档**
+- `docs/pipeline-deep-dive.zh.md`：流程深度解读（~1000 行），面向初学者的通俗 + 深度讲解。10 章 + 术语表，覆盖公共底座、数据层、双层质量门、Quick 终点、多空辩论状态机、研究经理、交易员、风控辩论 + revise 循环、设计哲学。每章用生活比喻引入，再讲实现细节与设计权衡
+
 ### Fixed
 
 - `_fetch_consensus_eps` 三个 bug：无效 `sortColumns` 致 `success=False` / `"result": null` 崩溃 / 字段名错误（§3.2）
 - `_fetch_quarterly_financials` 同族三个 bug（sibling to §3.2）
 - trader entry/exit/invalidations/key_risks 静默为空（`src/trader.ts`）：`parseListSection` 匹配 bare heading，但 LLM 实际输出编号 + 括号标题（`### 3. 入场信号（triggers — …）`），测试 fixtures 给假信心。改用 TRADER_PLAN JSON 块作主路径
 - trader Buy/Sell 价格镜像（`trader.md`）：Sell 方向时目标价/止损价措辞是 Buy 视角，LLM 填 0，risk.ts 误触发一轮 revise。三方向都强制填具体数值
+- revise 重试耗尽的诚实标注（`src/orchestrator.ts`，commit `6b6dc86`）：超过 `max_risk_retries` 仍 revise 时，旧逻辑强制翻转为 pass，但内层 `judge.verdict` 仍是 revise、reasoning 仍是"禁止建仓"，报告自相矛盾。改为保留 `status: "revise"` + 设置 `retries_exhausted: true`，下游消费者（dashboard/report-formatter/`FinalDecision`）本就处理 revise
+- 质量门 sentinel 双检查（`src/quality-gate.ts`，commit `0bb2b63`）：Check 4 只数**不同**失败短语的数量，13 个 `[数据缺失: 新闻]` 哨兵只算"1 种"漏网（实跑 600600 拿了 A 级）。加 Check 4b 数哨兵**出现次数** ≥3 触发；`checkFieldCitations` 先 strip 哨兵再查关键词，避免哨兵里的字段名（如"新闻"）被当成"引用了该数据"
+- 风控硬约束仓位 cap 未执行（`src/risk.ts` + `src/orchestrator.ts`）：`runRiskManager` 从未填 `max_position_override`（永远 undefined），orchestrator 只在 revise 回路内套 cap，回路外（一次通过 / 回路耗尽后）的最终 judge 不绑定最终计划——600600 看到 judge 说"总仓位≤10%"但 `position_pct` 仍为 15%。新增 `extractPositionCap` 从 `hard_constraints` 文本取最严 cap（跳过 `首批/首笔/分批/加仓` 子批次约束），回路外加一道 cap；零额外 LLM 成本，deterministic
 
 ## [0.1.0] - 2026-06-06
 
