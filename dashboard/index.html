@@ -122,6 +122,34 @@ tbody td{padding:8px 12px;font-size:13px;white-space:nowrap}
 .plan-box h4{font-size:12px;font-weight:600;margin-bottom:8px}
 .plan-items{display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:13px}
 .plan-items .k{color:var(--text3)}
+/* Quality gate card */
+.quality-card{background:var(--surface2);border-radius:8px;padding:14px;margin-bottom:16px;border:1px solid var(--border)}
+.quality-card h4{font-size:12px;font-weight:600;margin-bottom:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.3px}
+.quality-grades{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.quality-grade{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text2)}
+.grade-badge{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:4px;font-size:11px;font-weight:700}
+.g-a{background:var(--green20);color:var(--green)}
+.g-b{background:#4ade8030;color:#86efac}
+.g-c{background:var(--yellow20);color:var(--yellow)}
+.g-d{background:#fb923c20;color:#fb923c}
+.g-f{background:var(--red20);color:var(--red)}
+.quality-layer2{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px;margin-top:6px}
+.cred-badge{padding:2px 10px;border-radius:4px;font-weight:600}
+.cred-high{background:var(--green20);color:var(--green)}
+.cred-mid{background:var(--yellow20);color:var(--yellow)}
+.cred-low{background:var(--red20);color:var(--red)}
+.quality-chip{padding:2px 8px;border-radius:3px;font-size:11px;background:var(--border);color:var(--text3)}
+.quality-chip.chip-warn{background:var(--red20);color:var(--red)}
+.quality-chip.chip-stale{background:#fb923c20;color:#fb923c}
+/* Risk judge constraints */
+.judge-constraints{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+.constraint-group{font-size:12px;line-height:1.5}
+.constraint-label{font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.3px}
+.constraint-group ul{padding-left:16px;margin:2px 0 0}
+.constraint-group li{color:var(--text2);margin:1px 0}
+.constraint-hard li{color:var(--red)}
+.constraint-derisk li{color:#fb923c}
+.warn-badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;background:var(--red20);color:var(--red);margin-left:6px}
 /* Debate */
 .debate-round{margin-bottom:12px}
 .debate-round h4{font-size:13px;font-weight:600;margin-bottom:8px;color:var(--text2)}
@@ -384,6 +412,10 @@ const I18N = {
     target: '目标价', stop: '止损价', position: '仓位', direction: '方向',
     entry: '入场信号', exit: '退出信号', risks: '风险提示',
     score: '评分', status: '状态', debate: '辩论', round: '第{n}轮',
+    qualityGate: '数据质量门控', credibility: '可信度',
+    hardConstraints: '硬约束', softConstraints: '软建议', preconditions: '进场前提', deRiskTriggers: '降风险触发',
+    retriesExhausted: '重试耗尽', invalidations: '失效条件',
+    staleReports: '陈旧', fabricationSuspects: '可疑捏造',
     systemPrompt: '系统提示', response: '模型回复',
     errorPrefix: '错误：',
     roleNames: { market:'技术面', fundamentals:'基本面', news:'新闻', sentiment:'情绪', policy:'政策', hot_money:'资金流', lockup:'解禁' },
@@ -408,6 +440,10 @@ const I18N = {
     target: 'Target', stop: 'Stop', position: 'Position', direction: 'Direction',
     entry: 'Entry', exit: 'Exit', risks: 'Risks',
     score: 'Score', status: 'Status', debate: 'Debate', round: 'Round {n}',
+    qualityGate: 'Quality Gate', credibility: 'Credibility',
+    hardConstraints: 'Hard Constraints', softConstraints: 'Soft', preconditions: 'Preconditions', deRiskTriggers: 'De-risk Triggers',
+    retriesExhausted: 'Retries Exhausted', invalidations: 'Invalidations',
+    staleReports: 'Stale', fabricationSuspects: 'Fabrication Suspects',
     systemPrompt: 'System prompt', response: 'Response',
     errorPrefix: 'Error: ',
     roleNames: { market:'Market', fundamentals:'Fundamentals', news:'News', sentiment:'Sentiment', policy:'Policy', hot_money:'Hot Money', lockup:'Lockup' },
@@ -759,14 +795,21 @@ async function loadFullDetail(report) {
   const detailPath = `${date}_${mode}`;
 
   try {
-    const [research, trading, riskMgr, debateFiles] = await Promise.all([
+    const [research, trading, riskMgr, debateFiles, quality] = await Promise.all([
       fetchJson(`/api/detail/${ticker}/${detailPath}/03_research.json`),
       fetchJson(`/api/detail/${ticker}/${detailPath}/04_trading_plan.json`),
       fetchJson(`/api/detail/${ticker}/${detailPath}/05_risk/risk_manager.json`),
       loadDebateRounds(ticker, detailPath),
+      fetchJson(`/api/detail/${ticker}/${detailPath}/00_quality.json`),
     ]);
 
     let html = '';
+
+    // Quality gate card (review gap #3): Layer-1 grades + Layer-2 credibility.
+    // Rendered BEFORE research — if the data is garbage, the analysis is garbage.
+    if (quality) {
+      html += renderQualityGate(quality);
+    }
 
     if (research) {
       const bullScore = research.bull_score || 0;
@@ -799,6 +842,7 @@ async function loadFullDetail(report) {
           </div>
           ${(trading.entry_signals || []).length ? `<div style="margin-top:8px;font-size:12px"><span class="k">${t('entry')}:</span> ${trading.entry_signals.join('; ')}</div>` : ''}
           ${(trading.exit_signals || []).length ? `<div style="font-size:12px"><span class="k">${t('exit')}:</span> ${trading.exit_signals.join('; ')}</div>` : ''}
+          ${(trading.invalidations || []).length ? `<div style="font-size:12px;color:var(--red)"><span class="k">${t('invalidations')}:</span> ${trading.invalidations.join('; ')}</div>` : ''}
           ${(trading.key_risks || []).length ? `<div style="font-size:12px;color:var(--red)"><span class="k">${t('risks')}:</span> ${trading.key_risks.join('; ')}</div>` : ''}
           ${renderPriceLevels(trading)}
         </div>
@@ -812,9 +856,10 @@ async function loadFullDetail(report) {
           ${renderRiskGauge(riskMgr)}
           <div class="plan-items" style="margin-top:8px">
             <div><span class="k">${t('score')}:</span> <span>${riskMgr.risk_score}/100</span></div>
-            <div><span class="k">${t('status')}:</span> ${badgeHtml(riskMgr.status || '', riskCls)}</div>
+            <div><span class="k">${t('status')}:</span> ${badgeHtml(riskMgr.status || '', riskCls)}${riskMgr.retries_exhausted ? `<span class="warn-badge">⚠ ${t('retriesExhausted')}</span>` : ''}</div>
           </div>
           <p style="color:var(--text2);font-size:12px;margin-top:8px;line-height:1.5">${riskMgr.reasoning || ''}</p>
+          ${riskMgr.judge ? renderJudgeConstraints(riskMgr.judge) : ''}
         </div>
       `;
     }
@@ -1179,6 +1224,73 @@ function renderPriceLevels(trading) {
 }
 
 // ── Risk gauge (SVG semicircle) ──
+// ── Quality gate card (review gap #3) ──
+function gradeClass(grade) {
+  const g = (grade || '').toUpperCase();
+  return ['A','B','C','D','F'].includes(g) ? `g-${g.toLowerCase()}` : 'g-f';
+}
+function credClass(cred) {
+  if (cred === '高' || cred === 'high') return 'cred-high';
+  if (cred === '中' || cred === 'mid' || cred === 'medium') return 'cred-mid';
+  if (cred === '低' || cred === 'low') return 'cred-low';
+  return 'cred-mid';
+}
+function renderQualityGate(quality) {
+  const layer1 = quality.layer1;
+  const layer2 = quality.layer2;
+  if (!layer1) return '';
+  const grades = layer1.grades || [];
+  const gradeBadges = grades.map(g => {
+    const role = roleName(g.role);
+    return `<span class="quality-grade"><span class="grade-badge ${gradeClass(g.grade)}">${escapeHtml((g.grade || '?').toUpperCase())}</span>${escapeHtml(role)}</span>`;
+  }).join('');
+
+  let layer2Html = '';
+  if (layer2) {
+    const chips = [];
+    if (layer2.credibility) {
+      chips.push(`<span class="cred-badge ${credClass(layer2.credibility)}">${t('credibility')}: ${escapeHtml(layer2.credibility)}</span>`);
+    }
+    (layer2.stale_reports || []).forEach(r => {
+      chips.push(`<span class="quality-chip chip-stale">${t('staleReports')}: ${escapeHtml(roleName(r))}</span>`);
+    });
+    (layer2.fabrication_suspects || []).forEach(r => {
+      chips.push(`<span class="quality-chip chip-warn">${t('fabricationSuspects')}: ${escapeHtml(roleName(r))}</span>`);
+    });
+    if (layer2.note) {
+      chips.push(`<span style="color:var(--text3);font-size:11px">${escapeHtml(layer2.note)}</span>`);
+    }
+    layer2Html = `<div class="quality-layer2">${chips.join('')}</div>`;
+  }
+
+  return `
+    <div class="quality-card">
+      <h4>📊 ${t('qualityGate')}</h4>
+      <div class="quality-grades">${gradeBadges}</div>
+      ${layer2Html}
+    </div>
+  `;
+}
+
+// ── Risk judge constraints (review gap #3) ──
+function renderJudgeConstraints(judge) {
+  const groups = [
+    { key: 'hard_constraints', label: t('hardConstraints'), cls: 'constraint-hard' },
+    { key: 'soft_constraints', label: t('softConstraints'), cls: '' },
+    { key: 'execution_preconditions', label: t('preconditions'), cls: '' },
+    { key: 'de_risk_triggers', label: t('deRiskTriggers'), cls: 'constraint-derisk' },
+  ];
+  let html = '<div class="judge-constraints">';
+  for (const g of groups) {
+    const items = judge[g.key] || [];
+    if (!items.length) continue;
+    const lis = items.map(i => `<li>${escapeHtml(i)}</li>`).join('');
+    html += `<div class="constraint-group ${g.cls}"><span class="constraint-label">${g.label}</span><ul>${lis}</ul></div>`;
+  }
+  html += '</div>';
+  return html;
+}
+
 function renderRiskGauge(riskMgr) {
   const score = riskMgr.risk_score || 0;
   const status = riskMgr.status || '';
