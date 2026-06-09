@@ -165,8 +165,8 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
     expect(result.final.analyst_verdicts['hot_money']).toBe('看多');
     expect(result.final.analyst_verdicts['market']).toBe('中性');
 
-    // Verify LLM calls: 7 analysts + 1 PM = 8
-    expect(mockCreate).toHaveBeenCalledTimes(8);
+    // Verify LLM calls: 7 analysts + 1 quality_review + 1 PM = 9
+    expect(mockCreate).toHaveBeenCalledTimes(9);
 
     // Verify execPython was called for all 7 data scripts
     expect(execPython).toHaveBeenCalledTimes(7);
@@ -311,8 +311,8 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
     expect(result.trading_plan.target_price).toBe(1400);
     expect(result.risk_assessment.status).toBe('pass');
 
-    // Total LLM calls: 7 analysts + 4 debate + 1 research + 1 trader + 3 risk + 1 risk_mgr = 17
-    expect(mockCreate).toHaveBeenCalledTimes(17);
+    // Total LLM calls: 7 analysts + 1 quality_review + 4 debate + 1 research + 1 trader + 3 risk + 1 risk_mgr = 18
+    expect(mockCreate).toHaveBeenCalledTimes(18);
 
     // Verify report files
     const summaryFile = join(tmpReportDir, '600519', '2026-06-05_full.json');

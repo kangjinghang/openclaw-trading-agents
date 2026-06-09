@@ -75,4 +75,17 @@ describe("prompt contracts", () => {
       expect(md).toContain("严禁跳过");
     }
   });
+
+  it("quality_review.md is a credibility-review prompt with the QUALITY_REVIEW protocol", () => {
+    const md = fs.readFileSync(
+      path.join(PROMPTS, "quality_review.md"),
+      "utf-8"
+    );
+    expect(md).toContain("数据可信度"); // credibility lens (not investment merit)
+    expect(md).toContain("数据时效"); // staleness check
+    expect(md).toContain("QUALITY_REVIEW"); // output protocol
+    expect(md).toContain("credibility"); // JSON field
+    expect(md).toContain("{{reports}}"); // reports placeholder
+    expect(md).toContain("{{grades_table}}"); // Layer-1 grades placeholder
+  });
 });

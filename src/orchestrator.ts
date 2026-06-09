@@ -12,6 +12,7 @@ import { runResearchManager } from "./research-manager";
 import { runTrader } from "./trader";
 import { runRiskDebate, runRiskManager } from "./risk";
 import { validateAnalystReports } from "./quality-gate";
+import { runQualityReview, formatQualityReview } from "./quality-review";
 import {
   TradingAgentsConfig,
   QuickAnalysisResult,
@@ -451,7 +452,10 @@ export async function runQuickAnalysis(
 
   // ── Quality Gate ──────────────────────────────────────────────────
   const quality = validateAnalystReports(analystReports);
-  logProgress(runId, `[2/4] 质量门控: ${quality.grades.map(g => `${g.role}=${g.grade}`).join(", ")}`);
+  // Layer-2 LLM credibility review (optional; degrades to Layer-1 on skip/failure)
+  const qualityReview = await runQualityReview(analystReports, quality, ticker, date, config, openaiClient, traceLogger);
+  if (qualityReview) quality.summary_text += formatQualityReview(qualityReview);
+  logProgress(runId, `[2/4] 质量门控: ${quality.grades.map(g => `${g.role}=${g.grade}`).join(", ")}${qualityReview ? ` (可信度 ${qualityReview.credibility})` : ""}`);
 
   // ── Portfolio Manager ────────────────────────────────────────────
   logProgress(runId, "[3/4] 投资组合经理决策...");
@@ -570,7 +574,10 @@ export async function runFullAnalysis(
 
   // Quality Gate
   const quality = validateAnalystReports(analystReports);
-  logProgress(runId, `质量门控: ${quality.grades.map(g => `${g.role}=${g.grade}`).join(", ")}`);
+  // Layer-2 LLM credibility review (optional; degrades to Layer-1 on skip/failure)
+  const qualityReview = await runQualityReview(analystReports, quality, ticker, date, config, openaiClient, traceLogger);
+  if (qualityReview) quality.summary_text += formatQualityReview(qualityReview);
+  logProgress(runId, `质量门控: ${quality.grades.map(g => `${g.role}=${g.grade}`).join(", ")}${qualityReview ? ` (可信度 ${qualityReview.credibility})` : ""}`);
 
   // Phase 3: Bull↔Bear Debate
   logProgress(runId, `[3/7] 多空辩论 (${config.debate_rounds} 轮)...`);

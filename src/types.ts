@@ -87,7 +87,7 @@ export interface LLMCallTrace {
   trace_id: string;
   run_id?: string;
   call_index: number;
-  phase: "analyst" | "debate" | "research" | "trader" | "risk_debate" | "risk" | "portfolio";
+  phase: "analyst" | "debate" | "research" | "trader" | "risk_debate" | "risk" | "portfolio" | "quality_review";
   role: string;
   request: {
     model: string;
@@ -270,6 +270,20 @@ export interface QualitySummary {
   failed_count: number;
   warn_count: number;
   summary_text: string;
+}
+
+/**
+ * LLM Layer-2 quality review of analyst reports (data-credibility lens).
+ * Parsed from `<!-- QUALITY_REVIEW: {...} -->` JSON. Catches semantic issues
+ * the deterministic Layer-1 gate cannot (fabrication, stale data, internal
+ * inconsistency). null/undefined when the review is skipped (≥4 hard-fails) or
+ * the LLM call fails — downstream then relies on Layer-1 grades only.
+ */
+export interface QualityReview {
+  credibility: "高" | "中" | "低";
+  note: string;
+  stale_reports: string[];          // roles whose data looks stale/outdated
+  fabrication_suspects: string[];   // roles with suspicious/unsupported numbers
 }
 
 /** Metadata about an analysis run for auditing */
