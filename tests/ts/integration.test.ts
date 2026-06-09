@@ -410,6 +410,63 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
     expect(mockCreate).toHaveBeenCalledTimes(23);
   }, 15000);
 
+  it('should cap final position_pct to the risk manager hard-constraint cap', async () => {
+    // Regression for 600600: risk_manager emitted "总仓位≤10%" as a
+    // hard_constraint but max_position_override was never populated, so the
+    // orchestrator's numeric cap never fired and the trader's 15% plan stood.
+    // Fix: runRiskManager extracts the cap from hard_constraints text, and the
+    // orchestrator applies it AFTER the loop (final assessment binds final plan).
+    vi.mocked(execPython).mockResolvedValue({
+      success: true,
+      data: { ticker: '600519', data: [] }
+    });
+
+    const mockCreate = vi.fn();
+    let debateCallIdx = 0;
+
+    mockCreate.mockImplementation(async (params: any) => {
+      const systemPrompt = params.messages?.[0]?.content || '';
+
+      if (!systemPrompt.includes('portfolio') && !systemPrompt.includes('manager') && !systemPrompt.includes('bullish') && !systemPrompt.includes('bearish') && !systemPrompt.includes('research') && !systemPrompt.includes('trader') && !systemPrompt.includes('risk')) {
+        return mockAnalystResponse('market', '看多', 'market reason');
+      }
+      if (systemPrompt.includes('bullish')) {
+        debateCallIdx++;
+        return { choices: [{ message: { content: `BULL-${Math.ceil(debateCallIdx/2)} claim.\n\n<!-- VERDICT: {"direction": "看多", "reason": "bull"} -->` } }], usage: { prompt_tokens: 600, completion_tokens: 300, total_tokens: 900 } };
+      }
+      if (systemPrompt.includes('bearish')) {
+        return { choices: [{ message: { content: `BEAR claim.\n\n<!-- VERDICT: {"direction": "看空", "reason": "bear"} -->` } }], usage: { prompt_tokens: 600, completion_tokens: 300, total_tokens: 900 } };
+      }
+      if (systemPrompt.includes('research') && !systemPrompt.includes('trader')) {
+        return { choices: [{ message: { content: `### 评分\n- **多头得分**：70\n- **空头得分**：40\n\n### 最终决策\n- **方向**：Overweight\n- **信心水平**：0.75\n\n<!-- VERDICT: {"direction": "Overweight", "reason": "bull wins"} -->` } }], usage: { prompt_tokens: 1000, completion_tokens: 400, total_tokens: 1400 } };
+      }
+      // Trader returns 25% — exceeds the risk cap, must be capped downstream.
+      if (systemPrompt.includes('trader')) {
+        return { choices: [{ message: { content: `### 交易方向与仓位\n- **建议仓位**：25%\n\n### 价格区间\n- **目标价格**：1400 元\n- **止损价格**：1200 元\n\n<!-- VERDICT: {"direction": "Buy", "reason": "分批建仓"} -->` } }], usage: { prompt_tokens: 800, completion_tokens: 400, total_tokens: 1200 } };
+      }
+      if (systemPrompt.includes('risk assessor')) {
+        return { choices: [{ message: { content: `<!-- VERDICT: {"direction": "pass", "reason": "ok"} -->` } }], usage: { prompt_tokens: 500, completion_tokens: 200, total_tokens: 700 } };
+      }
+      // Risk Manager: PASS but with a hard cap of 10% — the bug was that this
+      // cap lived only in text and never reached the numeric enforcement path.
+      if (systemPrompt.includes('risk manager')) {
+        return { choices: [{ message: { content: `### 1. 风险评分（0-100）\n30\n\n### 2. 风控决策\n- **status**：pass\n\n<!-- VERDICT: {"direction": "pass", "reason": "risk ok"} -->\n<!-- RISK_JUDGE: {"verdict": "pass", "reason": "通过但需控仓位", "hard_constraints": ["总仓位≤10%", "止损价≥1200元"], "soft_constraints": [], "execution_preconditions": [], "de_risk_triggers": []} -->` } }], usage: { prompt_tokens: 600, completion_tokens: 200, total_tokens: 800 } };
+      }
+
+      return { choices: [{ message: { content: `<!-- VERDICT: {"direction": "Hold", "reason": "fallback"} -->` } }], usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 } };
+    });
+
+    mockClient.chat.completions.create = mockCreate;
+
+    const [result] = await runFullAnalysis('600519', '2026-06-05', config, mockClient);
+
+    // Trader said 25%, risk_manager capped at 10% → final must be 10, not 25.
+    expect(result.trading_plan.position_pct).toBe(10);
+    expect(result.final.position_pct).toBe(10);
+    // And the cap was extracted onto the assessment.
+    expect(result.risk_assessment.max_position_override).toBe(10);
+  }, 15000);
+
   it('should handle pipe-separated VERDICT direction by taking first option', async () => {
     vi.mocked(execPython).mockResolvedValue({
       success: true,

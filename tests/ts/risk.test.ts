@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { runRiskDebate, runRiskManager, parseRiskJudge, RISK_ROLES } from "../../src/risk";
+import { runRiskDebate, runRiskManager, parseRiskJudge, extractPositionCap, RISK_ROLES } from "../../src/risk";
 import { TradingAgentsConfig, TradingPlan, RiskDebateResult } from "../../src/types";
 import OpenAI from "openai";
 
@@ -182,6 +182,8 @@ describe("Risk Module", () => {
       expect(result.risk_score).toBe(62);
       // reasoning prefers judge.reason when present
       expect(result.reasoning).toBe("仓位偏高，需降低并分批建仓");
+      // max_position_override extracted from hard_constraints "仓位≤30%"
+      expect(result.max_position_override).toBe(30);
     });
 
     it("should use decision_deep model when set (deep-thinking tier for the gatekeeper)", async () => {
@@ -247,6 +249,43 @@ describe("Risk Module", () => {
         expect(c.model).toBe("gpt-4o"); // risk debaters stay on the quick tier
       }
     });
+  });
+});
+
+describe("extractPositionCap", () => {
+  it("extracts a 总仓位≤N% cap", () => {
+    expect(extractPositionCap(["总仓位≤10%"])).toBe(10);
+  });
+
+  it("extracts a bare 仓位≤N% cap", () => {
+    expect(extractPositionCap(["仓位≤30%"])).toBe(30);
+  });
+
+  it("extracts 仓位不超过 / 仓位最多 / 仓位上限 phrasings", () => {
+    expect(extractPositionCap(["仓位不超过20%"])).toBe(20);
+    expect(extractPositionCap(["仓位最多15%"])).toBe(15);
+    expect(extractPositionCap(["仓位上限10%"])).toBe(10);
+  });
+
+  it("skips sub-batch constraints (首批/首笔/分批/加仓)", () => {
+    // These are tranche caps, not total-position caps — must not be extracted.
+    expect(extractPositionCap(["首批建仓≤5%"])).toBeUndefined();
+    expect(extractPositionCap(["首笔仓位≤3%"])).toBeUndefined();
+    expect(extractPositionCap(["分批建仓每批≤2%"])).toBeUndefined();
+    expect(extractPositionCap(["加仓不超过5%"])).toBeUndefined();
+  });
+
+  it("returns the min (most restrictive) when multiple caps present", () => {
+    expect(extractPositionCap(["总仓位≤15%", "总仓位≤10%"])).toBe(10);
+  });
+
+  it("returns undefined when no position constraint is present", () => {
+    expect(extractPositionCap(["止损价≥58.90元严格执行", "跌破58.00元清仓", "建仓时间限定14:30-14:50"])).toBeUndefined();
+  });
+
+  it("returns undefined for empty or undefined input", () => {
+    expect(extractPositionCap([])).toBeUndefined();
+    expect(extractPositionCap(undefined)).toBeUndefined();
   });
 });
 

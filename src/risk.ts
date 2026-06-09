@@ -127,6 +127,39 @@ export function parseRiskJudge(content: string): RiskJudge | null {
   };
 }
 
+/**
+ * Extract a numeric total-position cap (%) from `hard_constraints` text like
+ * "总仓位≤10%", "仓位不超过20%", "仓位上限15%". Returns the SMALLEST cap found
+ * (most restrictive) when multiple constraints apply. Returns undefined when
+ * no total-position constraint is present — callers treat undefined as "no
+ * override" and leave position_pct unchanged.
+ *
+ * Why text extraction instead of a dedicated RISK_JUDGE field: the cap already
+ * lives in hard_constraints (the LLM emits it there naturally — confirmed on
+ * 600600); adding a parallel numeric field risks the two disagreeing. Zero
+ * extra LLM cost, deterministic.
+ *
+ * Sub-batch constraints ("首批建仓≤5%", "首笔仓位≤3%", "分批…", "加仓…") are
+ * explicitly skipped — they cap a tranche, not the total. Note "建仓" alone
+ * never matches because it doesn't contain the "仓位" substring.
+ */
+export function extractPositionCap(
+  hardConstraints: string[] | undefined
+): number | undefined {
+  if (!hardConstraints || hardConstraints.length === 0) return undefined;
+  const caps: number[] = [];
+  for (const c of hardConstraints) {
+    // Skip sub-batch constraints — they're not total-position caps.
+    if (/首批|首笔|首次|分批|加仓/.test(c)) continue;
+    const m = c.match(/仓位\s*(?:≤|<=|不超过|不多于|最多|上限)\s*(\d{1,3})\s*%?/);
+    if (m) {
+      const val = parseInt(m[1], 10);
+      if (val > 0 && val <= 100) caps.push(val);
+    }
+  }
+  return caps.length > 0 ? Math.min(...caps) : undefined;
+}
+
 export async function runRiskDebate(
   tradingPlan: TradingPlan,
   analystReports: AnalystReport[],
@@ -230,5 +263,6 @@ export async function runRiskManager(
     judge: judge ?? undefined,
     reasoning: judge?.reason || verdict?.reason || "",
     risk_score: scoreMatch ? parseInt(scoreMatch[1], 10) : 50,
+    max_position_override: extractPositionCap(judge?.hard_constraints),
   };
 }

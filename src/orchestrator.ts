@@ -693,6 +693,16 @@ export async function runFullAnalysis(
     riskAssessment = { ...riskAssessment, retries_exhausted: true };
   }
 
+  // Apply the FINAL risk assessment's numeric position cap to the final plan.
+  // The in-loop cap (above) only applied during revise retries, so without
+  // this, a final judge saying "总仓位≤10%" never bound the final plan when
+  // the loop didn't run (pass on first try) or exited revise-exhausted.
+  // Regression: 600600 final judge said ≤10% but trader's 15% stood.
+  if (riskAssessment.max_position_override !== undefined && riskAssessment.max_position_override < tradingPlan.position_pct) {
+    logProgress(runId, `  风控硬约束：仓位 ${tradingPlan.position_pct}% → ${riskAssessment.max_position_override}%`);
+    tradingPlan = { ...tradingPlan, position_pct: riskAssessment.max_position_override };
+  }
+
   logProgress(runId, `[7/7] 风控评估: ${riskAssessment.status} (风险评分 ${riskAssessment.risk_score})`);
 
   // Assemble FinalDecision
