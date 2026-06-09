@@ -31,15 +31,54 @@ _EM_MIN_INTERVAL = float(os.environ.get("EM_MIN_INTERVAL", "1.0"))
 _em_last_call = [0.0]
 
 
+def _with_retry(fn, *, attempts=3, base_delay=0.5, factor=2.0,
+                retry_on=None, _sleep=time.sleep):
+    """Call fn() with exponential-backoff retry on transient (fast) errors.
+
+    By default retries only connection-level errors (requests.ConnectionError)
+    — these fail fast (<1s), so 3 attempts stay well within the 30s script
+    budget. Timeouts are deliberately NOT retried by default: a single timeout
+    already nears the budget, and retrying it would blow the deadline. Pass
+    ``retry_on`` to override (e.g. opt into retrying JSONDecodeError).
+
+    ``_sleep`` is injectable for testing.
+    """
+    if retry_on is None:
+        retry_on = (requests.exceptions.ConnectionError,)
+    last_exc = None
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except retry_on as exc:
+            last_exc = exc
+            if attempt + 1 >= attempts:
+                break
+            delay = base_delay * (factor ** attempt) + random.uniform(0, base_delay * 0.5)
+            _sleep(delay)
+    raise last_exc
+
+
 def em_get(url, params=None, headers=None, timeout=15, **kwargs):
-    """Eastmoney throttled GET: auto-rate-limit + session reuse."""
+    """Eastmoney throttled GET: auto-rate-limit + session reuse + transient retry."""
     wait = _EM_MIN_INTERVAL - (time.time() - _em_last_call[0])
     if wait > 0:
         time.sleep(wait + random.uniform(0.1, 0.5))
     try:
-        return _EM_SESSION.get(url, params=params, headers=headers, timeout=timeout, **kwargs)
+        return _with_retry(
+            lambda: _EM_SESSION.get(url, params=params, headers=headers, timeout=timeout, **kwargs)
+        )
     finally:
         _em_last_call[0] = time.time()
+
+
+def http_get(url, **kwargs):
+    """requests.get with automatic retry on transient connection errors.
+
+    Drop-in replacement for requests.get (same Response return type) used for
+    non-eastmoney sources (sina / 10jqka / cls / baidu). All kwargs forward to
+    requests.get.
+    """
+    return _with_retry(lambda: requests.get(url, **kwargs))
 
 
 def eastmoney_datacenter(report_name, columns="ALL", filter_str="",

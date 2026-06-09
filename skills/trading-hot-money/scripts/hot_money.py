@@ -8,7 +8,7 @@ import os
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
-from http_helpers import em_get, eastmoney_datacenter, output_json, normalize_ticker
+from http_helpers import em_get, http_get, eastmoney_datacenter, output_json, normalize_ticker
 
 import requests
 
@@ -22,7 +22,7 @@ def _fetch_northbound():
     }
     try:
         url = "https://data.hexin.cn/market/hsgtApi/method/dayChart/"
-        r = requests.get(url, headers=headers, timeout=10)
+        r = http_get(url, headers=headers, timeout=10)
         d = r.json()
         times = d.get("time", [])
         hgt = d.get("hgt", [])
@@ -79,7 +79,7 @@ def _fetch_hot_stocks(date):
             f"date/{date}/orderby/date/orderway/desc/charset/GBK/"
         )
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/117.0.0.0 Safari/537.36"}
-        r = requests.get(url, headers=headers, timeout=10)
+        r = http_get(url, headers=headers, timeout=10)
         data = r.json()
         if data.get("errocode", 0) != 0:
             return None

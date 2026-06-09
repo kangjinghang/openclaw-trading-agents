@@ -8,7 +8,7 @@ import os
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
-from http_helpers import em_get, output_json, normalize_ticker
+from http_helpers import em_get, http_get, output_json, normalize_ticker
 
 _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
@@ -74,7 +74,7 @@ def _fetch_macro_policy_cls(limit=20):
         url = "https://www.cls.cn/nodeapi/telegraphList"
         params = {"rn": str(limit), "page": "1"}
         headers = {"User-Agent": _UA, "Referer": "https://www.cls.cn/"}
-        r = requests.get(url, params=params, headers=headers, timeout=10)
+        r = http_get(url, params=params, headers=headers, timeout=10)
         d = r.json()
         for item in d.get("data", {}).get("roll_data", []):
             title = item.get("title", "") or item.get("brief", "")

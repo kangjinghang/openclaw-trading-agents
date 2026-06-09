@@ -8,7 +8,7 @@ import os
 from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
-from http_helpers import em_get, output_json, normalize_ticker
+from http_helpers import em_get, http_get, output_json, normalize_ticker
 
 import requests
 
@@ -47,7 +47,7 @@ def _fetch_concept_blocks(code):
         headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
         }
-        r = requests.get(url, headers=headers, timeout=10)
+        r = http_get(url, headers=headers, timeout=10)
         d = r.json()
         if str(d.get("ResultCode", -1)) != "0":
             return None
