@@ -285,11 +285,28 @@ Eastmoney 对激进调用会封 IP。astock 用 `1.0s + 0.1~0.5s 抖动` + Keep-
 | ~~P2~~ ✅ | 一致预期 EPS/PEG 数据 | 数据 | 中（接口选型） | §3.2 |
 | ~~P3~~ ✅ | 涨停情绪池（连板梯队） | 数据 | 中 | §3.3 |
 | ~~P3~~ ✅ | 板块资金流排名 | 数据 | 中 | §3.6 |
-| **P3** | 双层数据质量门 | 工程 | 中 | §4 |
+| ~~P3~~ ✅ | 双层数据质量门（Layer-1 字段引用 + Layer-2 LLM 复核 + 缺失哨兵） | 工程 | 中 | §4 |
 | 路线图 | 自我反思闭环 | 提示词+存储 | 大 | §2.5 |
 | 实验 | 辩论层英文推理 A/B | 提示词 | 小 | §2.6 |
 
-**P0 + P1 + P2 + P3(§3.3/§3.6) 均已完成**。P0 见 commit `fa389a0`；P1 含 §2.1 DEBATE_STATE + §2.2 RISK_JUDGE；P2 含 §2.4 trader triggers/invalidations 与 §3.2 一致预期 EPS/PEG；P3 已完成 §3.3 涨停情绪池（`sentiment.py` `zt_pool`）与 §3.6 板块资金流（注入 `hot_money.py`——调研发现 `sector.py` 是孤儿脚本）。另修 `_fetch_quarterly_financials`（§3.2 sibling）。**剩余 P3（双层质量门 §4）及实验/路线图层**（自我反思闭环、辩论英文推理 A/B）。
+**§5 表内全部完成**：P0（龙虎榜 + 威科夫）、P1（DEBATE_STATE + RISK_JUDGE）、P2（trader triggers + 一致预期）、P3（涨停池 + 板块资金流 + **双层质量门 §4**）均已上线。§4 双层质量门见 commit `bc32fe8`（Layer-1 字段引用）+ `3074692`（Layer-2 LLM 复核）+ `e233467`（7 个分析师缺失哨兵）。**剩余只有路线图/实验层**（未排期）：§2.5 自我反思闭环（[实现级设计已落档](design/deferred-memory-and-reflection.zh.md)）、§2.6 英文推理 A/B 实验。
+
+### 延伸工作（TA-astock 活体参考，不在原 §2/§3 表内）
+
+调研第二个 fork **TradingAgents-astock**（`simonlin1212` v0.2.11，记忆+反思已真上线，详见 [design/deferred-memory-and-reflection.zh.md](design/deferred-memory-and-reflection.zh.md) §1.4-1.6）后，额外落地了一批 prompt 纪律与工程稳健性改动。它们不是原 §2/§3 竞品调研的条目，而是 astock 对比新增的发现：
+
+| 改动 | commit | 说明 |
+|------|--------|------|
+| `decision_deep` 双层模型 | `d9072ac` | research/risk 守门员走深推理，其余留快档 |
+| HOLD 反懒散闸门 + trader 方向锚定 | `034d0cf` | HOLD 需"无趋势/无资金/无催化剂"三条件全满足；trader 不可翻转方向 |
+| financial_health 派生比率 | `52085fd` | 商誉占比/OCF 质量/杠杆趋势，~4 期预计算（fundamentals.py） |
+| 跨维度 TI 覆盖要求 | `81abaa2` | 技术指标需跨 ≥3 of {趋势/动量/量能/波动}（market.md） |
+| 风险辩论三角色 A 股对称重述 | `7a62a4c` | aggressive/conservative/neutral 一句话 → 整段反述框架 |
+| 数据抓取 retry/backoff | `53dab80` | `http_helpers._with_retry` + `http_get` drop-in（只重试 ConnectionError） |
+| market 数据完整性检查 | `0da23a3` | K 线 ≥50 行 + 日期新鲜度，仅 market role |
+| lockup 结构化公告事件 | `82b0e07` | 东财 ann API，业绩预告/停牌/回购等，importance 0-3 |
+| TRADER_PLAN JSON 块（fix） | `35e2149` | 治 entry/exit/invalidations/key_risks 静默为空 |
+| trader Buy/Sell 价格镜像（fix） | `95ca94e` | 治 Sell 方向 target/stop_loss 填 0 |
 
 ---
 
