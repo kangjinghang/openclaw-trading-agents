@@ -47,12 +47,18 @@ const ROLE_CITATIONS: Record<string, string[]> = {
  * Check whether a report engaged with its data at all. Returns an issue string
  * when the report cites none of its role's key fields AND lacks numeric
  * citations; null otherwise. Unknown roles are skipped (no check).
+ *
+ * `[数据缺失: 指标名]` sentinels are stripped before the keyword/numeric scan
+ * so a field declared missing doesn't itself satisfy the citation check —
+ * otherwise a report saying "[数据缺失: 新闻]" would be treated as if it had
+ * cited news data.
  */
 export function checkFieldCitations(content: string, role: string): string | null {
   const keywords = ROLE_CITATIONS[role];
   if (!keywords) return null;
-  if (keywords.some((k) => content.includes(k))) return null;
-  const numbers = content.match(/\d+(\.\d+)?/g) || [];
+  const cleaned = content.replace(/\[数据缺失:\s*[^\]]*\]/g, "");
+  if (keywords.some((k) => cleaned.includes(k))) return null;
+  const numbers = cleaned.match(/\d+(\.\d+)?/g) || [];
   if (numbers.length >= 3) return null;
   return "未引用关键数据字段且缺少数值引用（疑似无视数据写水文）";
 }
@@ -89,6 +95,19 @@ function hardCheckReport(report: AnalystReport): QualityGrade {
   }
   if (foundMarkers.length >= 3) {
     issues.push(`包含多个失败标记: ${foundMarkers.slice(0, 3).join(", ")}`);
+  }
+
+  // Check 4b: [数据缺失: 指标名] sentinels — the structured form analysts emit
+  // when a required field is genuinely unavailable. Check 4 counts DISTINCT
+  // marker phrases (catches reports vomiting "无法获取"+"分析失败"+"暂无数据"
+  // together); this check counts OCCURRENCES of the single sentinel shape, so
+  // a report with 13 missing-field sentinels doesn't score as "1 distinct
+  // marker". ≥3 means the analyst couldn't access most required data, so the
+  // conclusion's credibility is materially impaired. Regression: 600600 news
+  // had 13 sentinels and got grade A because Check 4 alone missed it.
+  const sentinelMatches = content.match(/\[数据缺失:\s*[^\]]+\]/g) || [];
+  if (sentinelMatches.length >= 3) {
+    issues.push(`包含 ${sentinelMatches.length} 个 [数据缺失] 哨兵（多项必采项无数据）`);
   }
 
   // Check 5: Verdict missing

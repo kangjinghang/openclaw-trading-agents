@@ -158,6 +158,38 @@ describe("validateAnalystReports", () => {
     const grade = result.grades.find((g) => g.role === "market")!;
     expect(grade.issues.some((i) => i.includes("数据字段"))).toBe(true);
   });
+
+  it("flags a report with ≥3 [数据缺失] sentinels even when prose is otherwise valid", () => {
+    // Regression for 600600: the news report carried 13 [数据缺失: ...]
+    // sentinels but got grade A. Two flaws let it through — (A) Check 4
+    // counted DISTINCT marker strings (数据缺失 = 1 entry) not occurrences,
+    // so 13 sentinels scored as 1; (B) Check 6's keyword match was satisfied
+    // by the sentinel text itself. The sentinel-count check catches (A).
+    const content = `
+## 执行摘要
+该股新闻面平静，近期无重大事件，建议观望。
+
+## 详细分析
+### 1. 公告
+[数据缺失: 重大公告] — 接口未返回。
+
+### 2. 行业新闻
+[数据缺失: 行业新闻] — 无数据。
+
+### 3. 调研
+[数据缺失: 调研记录] — 无记录。
+
+### 4. 综合
+无明显利好利空，新闻面中性。
+
+<!-- VERDICT: {"direction": "中性", "reason": "新闻面平静"} -->
+`;
+    const reports = [makeReport("news", content)];
+    const result = validateAnalystReports(reports);
+    const grade = result.grades.find((g) => g.role === "news")!;
+    expect(grade.grade).not.toBe("A");
+    expect(grade.issues.some((i) => i.includes("数据缺失") && i.includes("哨兵"))).toBe(true);
+  });
 });
 
 describe("checkFieldCitations", () => {
@@ -184,5 +216,19 @@ describe("checkFieldCitations", () => {
 
   it("skips unknown roles (no keyword map)", () => {
     expect(checkFieldCitations("no data here at all", "unknown_role")).toBeNull();
+  });
+
+  it("does not count a keyword that appears only inside a [数据缺失] sentinel", () => {
+    // "新闻" / "公告" appear ONLY inside sentinels declaring them missing.
+    // Before the fix, checkFieldCitations saw "新闻" via the sentinel text
+    // and returned null (passed) — a report declaring "I have no news data"
+    // was treated as if it had cited news data. After: sentinels stripped
+    // before the keyword scan, so no real engagement → flagged.
+    const issue = checkFieldCitations(
+      "[数据缺失: 新闻] [数据缺失: 公告] [数据缺失: 调研] 该股无明显方向。",
+      "news"
+    );
+    expect(issue).not.toBeNull();
+    expect(issue).toContain("数据字段");
   });
 });
