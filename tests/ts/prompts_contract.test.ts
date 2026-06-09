@@ -1,0 +1,33 @@
+import { describe, it, expect } from "vitest";
+import * as fs from "fs";
+import * as path from "path";
+
+// Stable contracts over prompt templates: these assert that key guardrail
+// sections survive prompt edits. They check section headers + a few anchor
+// phrases, not full wording, so routine rephrasing doesn't break them.
+const PROMPTS = path.resolve(
+  __dirname,
+  "../../skills/trading-analysis/prompts"
+);
+
+describe("prompt contracts", () => {
+  it("research_manager.md gates HOLD behind a 3-condition anti-laziness rule", () => {
+    const md = fs.readFileSync(
+      path.join(PROMPTS, "debate/research_manager.md"),
+      "utf-8"
+    );
+    expect(md).toContain("## HOLD 判定约束");
+    expect(md).toContain("技术面无明确趋势");
+    expect(md).toContain("资金面无明确方向");
+    expect(md).toContain("基本面与新闻面无近期催化剂");
+  });
+
+  it("trader.md anchors its direction to the research manager", () => {
+    const md = fs.readFileSync(
+      path.join(PROMPTS, "debate/trader.md"),
+      "utf-8"
+    );
+    expect(md).toContain("## 方向锚定规则");
+    expect(md).toContain("必须与研究经理的决策一致");
+  });
+});
