@@ -112,6 +112,8 @@
 **收益**：可作为事后（或下次同票时）回看机制，形成学习闭环。
 **前置条件**：需先有"结果记录"才有意义 → 属路线图项，非即时可做。
 
+> 📌 **实现级深度设计已落档**（延期，待规划）：两种形态（in-run 一致性校验 / cross-run 复盘）、与 P3 记忆的耦合关系、TA 反思为死代码的核实、代码草图与实施顺序 → 见 [design/deferred-memory-and-reflection.zh.md](design/deferred-memory-and-reflection.zh.md)。
+
 ---
 
 #### 2.6 辩论层用英文推理、面向用户用中文 —— TradingAgents-astock

@@ -56,6 +56,19 @@
 
 ---
 
+## 延期深度设计（待规划，已落档）
+
+以下两项为架构性改动，**已写实现级深度设计文档**，后期立项时直接参考：
+
+| 项 | 说明 | 深度设计 |
+|---|------|---------|
+| **跨次 per-agent 记忆（P3）** | 每次"情境→决策→结果"存档，下次检索相关历史经验注入 prompt，形成跨次学习闭环 | [design/deferred-memory-and-reflection.zh.md](design/deferred-memory-and-reflection.zh.md) §3 |
+| **自我反思（P2-a）** | 两种形态：in-run 决策一致性校验（可先做，不依赖记忆）+ cross-run 复盘（依赖 P3 记忆） | [design/deferred-memory-and-reflection.zh.md](design/deferred-memory-and-reflection.zh.md) §4 |
+
+> 这两项与上面 Phase 5 的"历史回测""多模型策略"互补：记忆需要 outcome 回录（≈历史回测），反思的跨次复盘以记忆为落点。
+
+---
+
 ## 快速参考
 
 | 变什么 | 改哪里 |
