@@ -324,6 +324,18 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
     expect(existsSync(join(detailDir, '04_trading_plan.json'))).toBe(true);
     expect(existsSync(join(detailDir, '05_risk', 'risk_manager.json'))).toBe(true);
 
+    // Verify quality-gate output persisted (Layer-1 grades + Layer-2 review).
+    // Previously this data was computed, injected into prompts, then discarded —
+    // the only way to review it post-run was grepping trace prompt inputs.
+    const qualityFile = join(detailDir, '00_quality.json');
+    expect(existsSync(qualityFile)).toBe(true);
+    const qualityData = JSON.parse(await readFile(qualityFile, 'utf-8'));
+    expect(qualityData.layer1.grades).toHaveLength(7);  // 7 analysts graded
+    expect(qualityData.layer1.summary_text).toBeTruthy();  // text injected into downstream prompts
+    // layer2 is null when the mock LLM doesn't emit a QUALITY_REVIEW block, or a
+    // review object when it does — either is valid, just check the field exists.
+    expect(qualityData.layer2 === null || typeof qualityData.layer2 === 'object').toBe(true);
+
     // Verify traces in report directory
     const fullTraceDir = join(detailDir, '06_traces');
     expect(existsSync(fullTraceDir)).toBe(true);

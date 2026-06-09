@@ -517,6 +517,11 @@ export async function runQuickAnalysis(
   if (qualityReview) quality.summary_text += formatQualityReview(qualityReview);
   logProgress(runId, `[2/4] 质量门控: ${quality.grades.map(g => `${g.role}=${g.grade}`).join(", ")}${qualityReview ? ` (可信度 ${qualityReview.credibility})` : ""}`);
 
+  // Persist the quality-gate output BEFORE downstream phases so a mid-run crash
+  // still leaves the audit on disk. Previously this was only injected into
+  // prompts (transient) — unrecoverable without grepping trace inputs after.
+  reportStore.saveQualitySummary(ticker, date, "quick", quality, qualityReview);
+
   // ── Portfolio Manager ────────────────────────────────────────────
   logProgress(runId, "[3/4] 投资组合经理决策...");
   const promptsBaseDir = path.join(SKILLS_DIR, "trading-analysis", "prompts");
@@ -638,6 +643,11 @@ export async function runFullAnalysis(
   const qualityReview = await runQualityReview(analystReports, quality, ticker, date, config, openaiClient, traceLogger);
   if (qualityReview) quality.summary_text += formatQualityReview(qualityReview);
   logProgress(runId, `质量门控: ${quality.grades.map(g => `${g.role}=${g.grade}`).join(", ")}${qualityReview ? ` (可信度 ${qualityReview.credibility})` : ""}`);
+
+  // Persist the quality-gate output BEFORE downstream phases so a mid-run crash
+  // still leaves the audit on disk. Previously this was only injected into
+  // prompts (transient) — unrecoverable without grepping trace inputs after.
+  reportStore.saveQualitySummary(ticker, date, "full", quality, qualityReview);
 
   // Phase 3: Bull↔Bear Debate
   logProgress(runId, `[3/7] 多空辩论 (${config.debate_rounds} 轮)...`);

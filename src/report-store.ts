@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { QuickAnalysisResult, FullAnalysisResult, AnalysisReport } from "./types";
+import { QuickAnalysisResult, FullAnalysisResult, AnalysisReport, QualitySummary, QualityReview } from "./types";
 
 export class ReportStore {
   private baseDir: string;
@@ -142,5 +142,40 @@ export class ReportStore {
     };
 
     this.writeJson(path.join(tickerDir, `${date}_full.json`), summary);
+  }
+
+  /**
+   * Persist the quality-gate output (Layer-1 grades + Layer-2 LLM review) to
+   * `{detailDir}/00_quality.json`. The `00_` prefix places it ahead of the
+   * phase outputs (01_analysts…) to signal it's a cross-cutting meta layer.
+   *
+   * Call this RIGHT AFTER the quality gate computes — before the expensive
+   * debate/research/trader/risk phases — so a mid-run crash still leaves the
+   * quality audit on disk. Previously this data was only injected into
+   * downstream prompts (transient) and logged to progress; after the run it
+   * was unrecoverable without grepping trace prompt inputs.
+   *
+   * `qualityReview` is null when Layer-2 is skipped (≥4 Layer-1 hard-fails)
+   * or its LLM call fails — in that case layer2 is persisted as null so
+   * consumers can distinguish "ran and found nothing" from "didn't run".
+   */
+  saveQualitySummary(
+    ticker: string,
+    date: string,
+    mode: "quick" | "full",
+    quality: QualitySummary,
+    qualityReview: QualityReview | null
+  ): void {
+    const detailDir = path.join(this.baseDir, ticker, `${date}_${mode}`);
+    this.mkdir(detailDir);
+    this.writeJson(path.join(detailDir, "00_quality.json"), {
+      layer1: {
+        grades: quality.grades,
+        failed_count: quality.failed_count,
+        warn_count: quality.warn_count,
+        summary_text: quality.summary_text,
+      },
+      layer2: qualityReview,
+    });
   }
 }
