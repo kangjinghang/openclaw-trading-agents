@@ -241,6 +241,15 @@ export interface RiskAssessment {
   reasoning: string;
   risk_score: number;
   max_position_override?: number;
+  /**
+   * True when the revise loop exited because max_risk_retries was hit while
+   * risk_manager kept returning "revise". The status field is left honest
+   * ("revise") rather than silently flipped to "pass" — downstream consumers
+   * (dashboard badge, report formatter) already handle the revise state, and
+   * `final.risk_assessment` propagates it. The flag lets audits distinguish
+   * "clean pass" from "gave up revising".
+   */
+  retries_exhausted?: boolean;
 }
 
 /** Full analysis result with debate and risk layers. */

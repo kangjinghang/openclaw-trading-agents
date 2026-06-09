@@ -337,6 +337,79 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
     expect(fullDataFiles.length).toBe(7);
   });
 
+  it('should keep status=revise and flag retries_exhausted when risk revise loop hits max retries', async () => {
+    // Regression test for the force-pass-after-retries contradiction: previously
+    // when risk_manager kept returning "revise" past max_risk_retries, the
+    // orchestrator silently overrode status to "pass" while leaving the nested
+    // judge object (still saying revise) and reasoning ("禁止当日建仓...")
+    // untouched — producing a self-contradictory report. Fix: keep status
+    // honest ("revise") and set a retries_exhausted flag.
+    vi.mocked(execPython).mockResolvedValue({
+      success: true,
+      data: { ticker: '600519', data: [] }
+    });
+
+    const mockCreate = vi.fn();
+    let debateCallIdx = 0;
+
+    mockCreate.mockImplementation(async (params: any) => {
+      const systemPrompt = params.messages?.[0]?.content || '';
+
+      // Analysts (7 calls, parallel)
+      if (!systemPrompt.includes('portfolio') && !systemPrompt.includes('manager') && !systemPrompt.includes('bullish') && !systemPrompt.includes('bearish') && !systemPrompt.includes('research') && !systemPrompt.includes('trader') && !systemPrompt.includes('risk')) {
+        return mockAnalystResponse('market', '看多', 'market reason');
+      }
+
+      if (systemPrompt.includes('bullish')) {
+        debateCallIdx++;
+        return { choices: [{ message: { content: `BULL-${Math.ceil(debateCallIdx/2)} claim.\n\n### 论据总结\nBull summary\n\n<!-- VERDICT: {"direction": "看多", "reason": "bull"} -->` } }], usage: { prompt_tokens: 600, completion_tokens: 300, total_tokens: 900 } };
+      }
+      if (systemPrompt.includes('bearish')) {
+        return { choices: [{ message: { content: `BEAR claim.\n\n### 风险总结\nBear summary\n\n<!-- VERDICT: {"direction": "看空", "reason": "bear"} -->` } }], usage: { prompt_tokens: 600, completion_tokens: 300, total_tokens: 900 } };
+      }
+
+      if (systemPrompt.includes('research') && !systemPrompt.includes('trader')) {
+        return { choices: [{ message: { content: `### 评分\n- **多头得分**：70\n- **空头得分**：40\n\n### 关键辩论焦点\n1. 政策利好\n\n### 最终决策\n- **方向**：Overweight\n- **信心水平**：0.75\n\n<!-- VERDICT: {"direction": "Overweight", "reason": "bull wins"} -->` } }], usage: { prompt_tokens: 1000, completion_tokens: 400, total_tokens: 1400 } };
+      }
+
+      if (systemPrompt.includes('trader')) {
+        return { choices: [{ message: { content: `### 交易方向与仓位\n- **建议仓位**：25%\n\n### 价格区间\n- **目标价格**：1400 元\n- **止损价格**：1200 元\n\n<!-- VERDICT: {"direction": "Buy", "reason": "分批建仓"} -->` } }], usage: { prompt_tokens: 800, completion_tokens: 400, total_tokens: 1200 } };
+      }
+
+      if (systemPrompt.includes('risk assessor')) {
+        return { choices: [{ message: { content: `### 1. 立场声明\n支持\n\n### 2. 证据支撑\n- 证据1\n\n### 3. 风险评估结论\n- **verdict**：pass\n\n<!-- VERDICT: {"direction": "pass", "reason": "ok"} -->` } }], usage: { prompt_tokens: 500, completion_tokens: 200, total_tokens: 700 } };
+      }
+
+      // Risk Manager — ALWAYS returns revise to drive the loop into the
+      // retries-exhausted exit branch.
+      if (systemPrompt.includes('risk manager')) {
+        return { choices: [{ message: { content: `### 1. 风险评分（0-100）\n55\n\n### 2. 风控决策\n- **status**：revise\n\n<!-- VERDICT: {"direction": "revise", "reason": "仓位过高"} -->` } }], usage: { prompt_tokens: 600, completion_tokens: 200, total_tokens: 800 } };
+      }
+
+      return { choices: [{ message: { content: `<!-- VERDICT: {"direction": "Hold", "reason": "fallback"} -->` } }], usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 } };
+    });
+
+    mockClient.chat.completions.create = mockCreate;
+
+    const [result] = await runFullAnalysis('600519', '2026-06-05', config, mockClient);
+
+    // After max_risk_retries (=1) the loop exits with status STILL revise.
+    // The fix must NOT silently flip this to "pass" — that produced a
+    // self-contradictory report (status=pass but judge.verdict=revise and
+    // reasoning="禁止当日建仓..."). Keep the honest verdict.
+    expect(result.risk_assessment.status).toBe('revise');
+    // And flag that we gave up revising, so consumers can render this
+    // distinctly from a clean pass.
+    expect(result.risk_assessment.retries_exhausted).toBe(true);
+    // final.risk_assessment propagates from riskAssessment.status — must
+    // also stay revise so the dashboard badge reflects the real verdict.
+    expect(result.final.risk_assessment).toBe('revise');
+
+    // Call count: 18 (first pass) + 5 (1 trader + 3 risk_debate + 1 risk_mgr
+    // on the single revise retry) = 23.
+    expect(mockCreate).toHaveBeenCalledTimes(23);
+  }, 15000);
+
   it('should handle pipe-separated VERDICT direction by taking first option', async () => {
     vi.mocked(execPython).mockResolvedValue({
       success: true,

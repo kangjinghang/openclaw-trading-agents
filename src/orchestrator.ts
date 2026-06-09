@@ -683,10 +683,14 @@ export async function runFullAnalysis(
     riskAssessment = await runRiskManager(riskDebate, tradingPlan, config, openaiClient, traceLogger);
   }
 
-  // If still revise after max retries, treat as pass
+  // If still revise after max retries, keep the honest verdict and flag it.
+  // Previously this silently flipped status to "pass" while leaving the nested
+  // judge object (still "revise") and reasoning ("禁止当日建仓...") untouched,
+  // producing a self-contradictory report. Consumers (dashboard badge, report
+  // formatter, final.risk_assessment propagation) already handle "revise".
   if (riskAssessment.status === "revise") {
-    logProgress(runId, `  风控修订次数已达上限，视为通过`);
-    riskAssessment = { ...riskAssessment, status: "pass" };
+    logProgress(runId, `  风控修订次数已达上限，保留 revise（已耗尽重试）`);
+    riskAssessment = { ...riskAssessment, retries_exhausted: true };
   }
 
   logProgress(runId, `[7/7] 风控评估: ${riskAssessment.status} (风险评分 ${riskAssessment.risk_score})`);
