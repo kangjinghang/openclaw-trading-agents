@@ -53,4 +53,26 @@ describe("prompt contracts", () => {
     expect(md).toContain("量能");
     expect(md).toContain("价格");
   });
+
+  it("every analyst prompt mandates the [数据缺失] sentinel for missing data", () => {
+    const files = [
+      "market",
+      "fundamentals",
+      "news",
+      "sentiment",
+      "policy",
+      "hot_money",
+      "lockup",
+    ];
+    for (const f of files) {
+      const md = fs.readFileSync(
+        path.join(PROMPTS, `analysts/${f}.md`),
+        "utf-8"
+      );
+      // the mandated sentinel format analysts must use inline
+      expect(md).toContain("[数据缺失: 指标名]");
+      // anti-skip / anti-fabricate rule
+      expect(md).toContain("严禁跳过");
+    }
+  });
 });
