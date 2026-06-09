@@ -40,4 +40,17 @@ describe("prompt contracts", () => {
     expect(md).toContain("goodwill_to_equity_pct");
     expect(md).toContain("ocf_to_ni_ratio");
   });
+
+  it("market.md requires cross-dimension technical-indicator coverage", () => {
+    const md = fs.readFileSync(
+      path.join(PROMPTS, "analysts/market.md"),
+      "utf-8"
+    );
+    expect(md).toContain("跨维度");
+    // all four dimensions must appear in the discipline rule
+    expect(md).toContain("趋势");
+    expect(md).toContain("动量");
+    expect(md).toContain("量能");
+    expect(md).toContain("价格");
+  });
 });
