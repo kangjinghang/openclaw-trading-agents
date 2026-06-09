@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 import sys
 import os
 
@@ -129,6 +130,17 @@ def fetch_fundamentals(ticker, date):
         # PEG is only meaningful for positive earnings growth.
         if pe_ttm and growth and growth > 0:
             consensus["peg"] = round(pe_ttm / growth, 2)
+
+    # 7. Three-statement derived financial-health ratios (akshare sina).
+    #    Fills gaps the snapshot/quarterly don't cover: 商誉占比 (goodwill
+    #    exposure), OCF/归母净利 (earnings quality), leverage & liquidity
+    #    trend, capex/FCF. Pre-computed and lean (~4 periods × ~10 numbers)
+    #    rather than dumping raw statements — avoids LLM arithmetic errors
+    #    and saves context vs TradingAgents' raw-table approach.
+    try:
+        data["financial_health"] = _fetch_financial_health(code)
+    except Exception as e:
+        data["financial_health_error"] = str(e)
 
     return data
 
@@ -277,6 +289,145 @@ def _fetch_consensus_eps(code):
     return result if result else None
 
 
+def _fetch_financial_health(code, periods=4):
+    """Derive a lean financial-health ratio block from the three statements.
+
+    Fetches 资产负债表 / 现金流量表 / 利润表 via akshare (sina) and computes
+    pre-derived ratios over the last N common reporting periods:
+
+      - goodwill_yi / goodwill_to_equity_pct   (商誉占比 — impairment exposure)
+      - debt_ratio_pct                          (资产负债率 trend)
+      - current_ratio / quick_ratio             (流动性)
+      - ocf_yi / capex_yi / fcf_yi              (现金流与资本开支)
+      - net_profit_parent_yi / ocf_to_ni_ratio  (归母净利 + 盈利质量)
+
+    Returns None on structural failure (akshare missing / fetch error / no
+    overlapping periods); per-field gaps degrade to null. Note: sina 利润表
+    does not expose 扣非净利润 (reported only in the notes), so 扣非 is not
+    derivable here.
+    """
+    try:
+        import akshare as ak
+    except Exception:
+        return None
+
+    # Exchange prefix: 6/9→sh, 8→bj, else sz (mirrors http_helpers tencent logic)
+    prefix = "bj" if code.startswith("8") else ("sh" if code.startswith(("6", "9")) else "sz")
+    sym = f"{prefix}{code}"
+
+    BS_COLS = ["报告日", "商誉", "资产总计", "负债合计", "归属于母公司股东权益合计",
+               "流动资产合计", "流动负债合计", "存货"]
+    CF_COLS = ["报告日", "经营活动产生的现金流量净额",
+               "购建固定资产、无形资产和其他长期资产所支付的现金"]
+    IS_COLS = ["报告日", "归属于母公司所有者的净利润"]
+
+    def load(statement, want):
+        """Return {报告日(YYYYMMDD): {col: float|None}} for present columns."""
+        try:
+            df = ak.stock_financial_report_sina(stock=sym, symbol=statement)
+        except Exception:
+            return {}
+        if df is None or getattr(df, "empty", True):
+            return {}
+        # Defend against duplicate column labels (sina occasionally repeats).
+        df = df.loc[:, ~df.columns.duplicated()]
+        if "报告日" not in df.columns:
+            return {}
+        out = {}
+        for _, row in df.iterrows():
+            d = str(row["报告日"]).strip()[:8]
+            if not (d.isdigit() and len(d) == 8):
+                continue
+            rec = {}
+            for c in want[1:]:  # skip 报告日
+                if c not in df.columns:
+                    continue
+                v = row[c]
+                try:
+                    fv = float(v)
+                    # Coerce NaN/inf (pandas missing → NaN) to None so the
+                    # emitted JSON stays valid (json.dumps emits bare NaN).
+                    rec[c] = fv if math.isfinite(fv) else None
+                except (TypeError, ValueError):
+                    rec[c] = None
+            out[d] = rec
+        return out
+
+    bs_map = load("资产负债表", BS_COLS)
+    cf_map = load("现金流量表", CF_COLS)
+    is_map = load("利润表", IS_COLS)
+    if not (bs_map and cf_map and is_map):
+        return None
+    return _derive_financial_health(bs_map, cf_map, is_map, periods)
+
+
+def _derive_financial_health(bs_map, cf_map, is_map, periods=4):
+    """Pure derivation: parsed statement maps → financial_health block.
+
+    Maps are {报告日(YYYYMMDD): {col: float|None}}. Returns None when no
+    period is common to all three statements; per-field gaps degrade to
+    None. Separated from the network fetch so the ratio math is unit-testable.
+    """
+    # Most-recent periods present in ALL three statements.
+    common = sorted(set(bs_map) & set(cf_map) & set(is_map), reverse=True)[:periods]
+    if not common:
+        return None
+
+    _PTYPE = {"0331": "Q1", "0630": "H1", "0930": "Q3", "1231": "FY"}
+
+    def ratio(num, den, scale=1.0):
+        if num is None or den is None or den == 0:
+            return None
+        return round(num / den * scale, 2)
+
+    YI = 1e8
+    rows = []
+    for d in common:
+        b, c, i = bs_map[d], cf_map[d], is_map[d]
+        goodwill = b.get("商誉")
+        equity = b.get("归属于母公司股东权益合计")
+        tot_a = b.get("资产总计")
+        tot_l = b.get("负债合计")
+        cur_a = b.get("流动资产合计")
+        cur_l = b.get("流动负债合计")
+        inv = b.get("存货")
+        ocf = c.get("经营活动产生的现金流量净额")
+        capex = c.get("购建固定资产、无形资产和其他长期资产所支付的现金")
+        npp = i.get("归属于母公司所有者的净利润")
+        inv_eff = inv if inv is not None else 0.0
+
+        rows.append({
+            "date": f"{d[:4]}-{d[4:6]}-{d[6:]}",
+            "period_type": _PTYPE.get(d[4:], "?"),
+            "goodwill_yi": round(goodwill / YI, 2) if goodwill is not None else None,
+            "goodwill_to_equity_pct": ratio(goodwill, equity, 100),
+            "debt_ratio_pct": ratio(tot_l, tot_a, 100),
+            "current_ratio": ratio(cur_a, cur_l),
+            "quick_ratio": ratio(cur_a - inv_eff if cur_a is not None else None, cur_l),
+            "ocf_yi": round(ocf / YI, 2) if ocf is not None else None,
+            "capex_yi": round(capex / YI, 2) if capex is not None else None,
+            "fcf_yi": round((ocf - capex) / YI, 2) if (ocf is not None and capex is not None) else None,
+            "net_profit_parent_yi": round(npp / YI, 2) if npp is not None else None,
+            "ocf_to_ni_ratio": ratio(ocf, npp),
+        })
+
+    latest = rows[0]
+    gw = latest.get("goodwill_to_equity_pct")
+    ocfni = latest.get("ocf_to_ni_ratio")
+    return {
+        "periods": rows,
+        "latest": latest,
+        "goodwill_impairment_risk": gw is not None and gw > 30,
+        "ocf_quality": ("good" if ocfni is not None and ocfni >= 1
+                        else "ok" if ocfni is not None and ocfni >= 0.5
+                        else "weak"),
+        "notes": [
+            "扣非净利润: sina 利润表未提供，无法计算扣非/归母比",
+            "OCF/净利/资本开支为累计值，跨期比较须注意期间长度 (period_type)",
+        ],
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Fetch fundamental data for A-share stocks")
     parser.add_argument("--ticker", required=True, help="Stock ticker code (e.g., 600519)")
@@ -285,7 +436,7 @@ def main():
 
     try:
         data = fetch_fundamentals(args.ticker, args.date)
-        output_json(True, data=data, source="tencent+mootdx+eastmoney")
+        output_json(True, data=data, source="tencent+mootdx+eastmoney+akshare")
     except Exception as e:
         output_json(False, error=str(e))
 

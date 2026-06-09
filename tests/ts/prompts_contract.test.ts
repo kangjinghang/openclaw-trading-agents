@@ -30,4 +30,14 @@ describe("prompt contracts", () => {
     expect(md).toContain("## 方向锚定规则");
     expect(md).toContain("必须与研究经理的决策一致");
   });
+
+  it("fundamentals.md exposes the derived financial_health field", () => {
+    const md = fs.readFileSync(
+      path.join(PROMPTS, "analysts/fundamentals.md"),
+      "utf-8"
+    );
+    expect(md).toContain("financial_health");
+    expect(md).toContain("goodwill_to_equity_pct");
+    expect(md).toContain("ocf_to_ni_ratio");
+  });
 });
