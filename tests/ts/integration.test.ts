@@ -336,6 +336,18 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
     // review object when it does — either is valid, just check the field exists.
     expect(qualityData.layer2 === null || typeof qualityData.layer2 === 'object').toBe(true);
 
+    // Verify human-readable report files auto-saved (review gap #2): the JSON
+    // artifacts are for machines; report.md / report.html give a ready-to-read
+    // narrative without re-running the CLI formatter.
+    const reportMd = join(detailDir, 'report.md');
+    const reportHtml = join(detailDir, 'report.html');
+    expect(existsSync(reportMd)).toBe(true);
+    expect(existsSync(reportHtml)).toBe(true);
+    const mdContent = await readFile(reportMd, 'utf-8');
+    expect(mdContent).toContain('#');  // has markdown headings
+    const htmlContent = await readFile(reportHtml, 'utf-8');
+    expect(htmlContent).toContain('<html');
+
     // Verify traces in report directory
     const fullTraceDir = join(detailDir, '06_traces');
     expect(existsSync(fullTraceDir)).toBe(true);

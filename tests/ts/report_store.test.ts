@@ -207,3 +207,58 @@ describe("ReportStore.saveQualitySummary", () => {
     expect(tmpFiles).toHaveLength(0);
   });
 });
+
+describe("ReportStore formatted-report files (review gap #2)", () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    if (tmpDir && fs.existsSync(tmpDir)) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  function quickResult(): QuickAnalysisResult {
+    return {
+      ticker: "600519",
+      date: "2026-06-05",
+      mode: "quick",
+      analysts: [{
+        role: "market",
+        content: "Strong technical indicators.",
+        verdict: { direction: "Buy", reason: "Momentum" },
+        data_sources_used: ["market_data"],
+      }],
+      final: {
+        ticker: "600519", company_name: "Kweichow Moutai", date: "2026-06-05",
+        direction: "Buy", confidence: 0.85, target_price: 1850.0, stop_loss: 1650.0,
+        position_pct: 5.0, reasoning: "Strong brand", key_risks: ["Regulatory"],
+        analyst_verdicts: { market: "Buy" }, bull_bear_summary: "",
+        risk_assessment: "pass", execution_plan: "Accumulate on dips", next_review_trigger: "",
+      },
+    };
+  }
+
+  it("Should auto-write report.md alongside the JSON artifacts", () => {
+    tmpDir = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "report-fmt-test-"));
+    const store = new ReportStore(tmpDir);
+    store.save("600519", "2026-06-05", "quick", quickResult(), 15000, 2500, 0.012);
+
+    const mdPath = path.join(tmpDir, "600519", "2026-06-05_quick", "report.md");
+    expect(fs.existsSync(mdPath)).toBe(true);
+    const md = fs.readFileSync(mdPath, "utf-8");
+    expect(md).toContain("600519");
+    expect(md).toContain("买入");  // directionLabel("Buy") = "买入 Buy"
+  });
+
+  it("Should auto-write report.html alongside the JSON artifacts", () => {
+    tmpDir = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "report-fmt-test-"));
+    const store = new ReportStore(tmpDir);
+    store.save("600519", "2026-06-05", "quick", quickResult(), 15000, 2500, 0.012);
+
+    const htmlPath = path.join(tmpDir, "600519", "2026-06-05_quick", "report.html");
+    expect(fs.existsSync(htmlPath)).toBe(true);
+    const html = fs.readFileSync(htmlPath, "utf-8");
+    expect(html).toContain("<html");
+    expect(html).toContain("600519");
+  });
+});

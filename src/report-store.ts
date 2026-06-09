@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { QuickAnalysisResult, FullAnalysisResult, AnalysisReport, QualitySummary, QualityReview } from "./types";
+import { toMarkdown, toHtml } from "./report-formatter";
 
 export class ReportStore {
   private baseDir: string;
@@ -12,9 +13,14 @@ export class ReportStore {
 
   /** Write JSON to file atomically (write .tmp then rename), logging errors instead of crashing */
   private writeJson(filePath: string, data: unknown): void {
+    this.writeText(filePath, JSON.stringify(data, null, 2));
+  }
+
+  /** Write plain text to file atomically (write .tmp then rename), logging errors instead of crashing */
+  private writeText(filePath: string, content: string): void {
     const tmpPath = filePath + ".tmp";
     try {
-      fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), "utf-8");
+      fs.writeFileSync(tmpPath, content, "utf-8");
       fs.renameSync(tmpPath, filePath);
     } catch (err) {
       console.error(`[ReportStore] Failed to write ${filePath}: ${err instanceof Error ? err.message : err}`);
@@ -80,6 +86,12 @@ export class ReportStore {
     };
 
     this.writeJson(path.join(tickerDir, `${date}_${mode}.json`), summary);
+
+    // Human-readable report (review gap #2): the JSON artifacts are for machines
+    // and dashboards; report.md / report.html give a ready-to-read narrative
+    // without re-running the CLI formatter.
+    this.writeText(path.join(detailDir, "report.md"), toMarkdown(result));
+    this.writeText(path.join(detailDir, "report.html"), toHtml(result));
   }
 
   /**
@@ -142,6 +154,12 @@ export class ReportStore {
     };
 
     this.writeJson(path.join(tickerDir, `${date}_full.json`), summary);
+
+    // Human-readable report (review gap #2): the JSON artifacts are for machines
+    // and dashboards; report.md / report.html give a ready-to-read narrative
+    // covering the full debate → research → trader → risk pipeline.
+    this.writeText(path.join(detailDir, "report.md"), toMarkdown(result));
+    this.writeText(path.join(detailDir, "report.html"), toHtml(result));
   }
 
   /**

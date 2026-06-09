@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 数据抓取 retry/backoff（`http_helpers.py`）：`_with_retry` 指数退避（默认只重试 ConnectionError，不重试 Timeout，防撞爆 30s 脚本预算）+ `http_get` drop-in 替换裸 requests.get
 - market 数据完整性检查（`src/orchestrator.ts`）：K 线 ≥50 行下限 + 日期新鲜度（gap>7 天），仅 market role，抓"看起来有数据实际是坏数据"
 - 质量门输出持久化（`src/report-store.ts`）：`saveQualitySummary` 把 Layer-1 grades + Layer-2 review 落盘到 `{detailDir}/00_quality.json`，在质量门算完立即写（不等后续阶段），mid-run 崩了也留审计。此前这块数据算完只注入 prompt 就丢，post-run 只能去 trace 里翻 prompt 输入
+- 格式化报告自动落盘（`src/report-store.ts`）：`save` / `saveFull` 末尾调 `toMarkdown` / `toHtml` 写 `{detailDir}/report.md` + `report.html`，与 JSON 产物并列。此前 `report-formatter.ts` 写得很完整但只在 `cli.ts` 里 stdout，`run-full-analysis.js` 不调它，每次看干净报告得重跑 CLI 重定向
 
 **文档**
 - `docs/pipeline-deep-dive.zh.md`：流程深度解读（~1000 行），面向初学者的通俗 + 深度讲解。10 章 + 术语表，覆盖公共底座、数据层、双层质量门、Quick 终点、多空辩论状态机、研究经理、交易员、风控辩论 + revise 循环、设计哲学。每章用生活比喻引入，再讲实现细节与设计权衡
