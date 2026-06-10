@@ -21,6 +21,7 @@ export interface ReportSummary {
   trace_count: number;
   risk_assessment?: string;
   warnings?: Array<{ phase: string; fn: string; detail: string; severity: "warn" | "error" }>;
+  cross_stage_issues?: Array<{ severity: "warn" | "error"; check: string; message: string }>;
 }
 
 /** Scan report directory and return all report summaries */
@@ -230,6 +231,7 @@ function toSummary(raw: any): ReportSummary {
     trace_count: raw.trace_count || 0,
     risk_assessment: raw.final?.risk_assessment,
     warnings: raw.warnings || [],
+    cross_stage_issues: raw.cross_stage_issues || [],
   };
 }
 

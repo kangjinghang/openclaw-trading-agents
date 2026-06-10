@@ -150,6 +150,15 @@ tbody td{padding:8px 12px;font-size:13px;white-space:nowrap}
 .constraint-hard li{color:var(--red)}
 .constraint-derisk li{color:#fb923c}
 .warn-badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;background:var(--red20);color:var(--red);margin-left:6px}
+/* Review flags — silent-fallback warnings + cross-stage anomalies, shown at
+   the top of the detail panel so a reviewer sees where the run degraded. */
+.review-flags{background:var(--surface2);border:1px solid var(--red);border-radius:8px;padding:12px 14px;margin-bottom:16px}
+.flag-list{list-style:none;padding:0;margin:0}
+.flag-list li{padding:5px 0;font-size:12.5px;line-height:1.5;color:var(--text2);border-bottom:1px solid var(--border)}
+.flag-list li:last-child{border-bottom:none}
+.flag-list b{color:var(--text)}
+.flag-err{color:var(--red);font-weight:700;margin-right:6px}
+.flag-warn{color:#fbbf24;font-weight:700;margin-right:6px}
 /* Debate */
 .debate-round{margin-bottom:12px}
 .debate-round h4{font-size:13px;font-weight:600;margin-bottom:8px;color:var(--text2)}
@@ -541,6 +550,9 @@ function renderTable() {
     const cost = r.total_cost_usd < 0.01 ? '<$0.01' : '$' + r.total_cost_usd.toFixed(2);
     const dur = r.duration_ms < 1000 ? r.duration_ms + 'ms' : (r.duration_ms / 1000).toFixed(1) + 's';
     const riskBadge = r.risk_assessment ? badgeHtml(r.risk_assessment, 'badge-' + r.risk_assessment) : '<span style="color:var(--text3)">—</span>';
+    const flagCount = (r.warnings || []).length + (r.cross_stage_issues || []).length;
+    const flagErrs = (r.warnings || []).filter(w => w.severity === 'error').length + (r.cross_stage_issues || []).filter(i => i.severity === 'error').length;
+    const flagBadge = flagCount ? `<span class="warn-badge" title="${flagCount} 条 review 告警${flagErrs ? `（${flagErrs} error）` : ''}">⚠ ${flagCount}</span>` : '';
 
     return `<tr data-id="${r.id}">
       <td style="font-weight:500">${r.ticker}</td>
@@ -551,7 +563,7 @@ function renderTable() {
       <td>${dots}</td>
       <td style="color:var(--text2);font-size:12px">${cost}</td>
       <td style="color:var(--text2);font-size:12px">${dur}</td>
-      <td>${riskBadge}</td>
+      <td>${riskBadge}${flagBadge}</td>
     </tr>`;
   }).join('');
 
@@ -804,6 +816,10 @@ async function loadFullDetail(report) {
     ]);
 
     let html = '';
+
+    // Review flags banner (silent-fallback warnings + cross-stage anomalies):
+    // shown FIRST so a reviewer sees where the run degraded before anything else.
+    html += renderReviewFlags(report);
 
     // Quality gate card (review gap #3): Layer-1 grades + Layer-2 credibility.
     // Rendered BEFORE research — if the data is garbage, the analysis is garbage.
@@ -1234,6 +1250,22 @@ function credClass(cred) {
   if (cred === '中' || cred === 'mid' || cred === 'medium') return 'cred-mid';
   if (cred === '低' || cred === 'low') return 'cred-low';
   return 'cred-mid';
+}
+function renderReviewFlags(report) {
+  if (!report) return '';
+  const issues = report.cross_stage_issues || [];
+  const warns = report.warnings || [];
+  if (!issues.length && !warns.length) return '';
+  const rows = [];
+  // Cross-stage anomalies first (structural), then per-step fallback warnings.
+  for (const i of issues) {
+    rows.push(`<li><span class="${i.severity === 'error' ? 'flag-err' : 'flag-warn'}">${i.severity === 'error' ? '⛔' : '⚠'}</span><b>${escapeHtml(i.check)}</b>：${escapeHtml(i.message)}</li>`);
+  }
+  for (const w of warns) {
+    rows.push(`<li><span class="${w.severity === 'error' ? 'flag-err' : 'flag-warn'}">${w.severity === 'error' ? '⛔' : '⚠'}</span><b>${escapeHtml(w.phase)}.${escapeHtml(w.fn)}</b>：${escapeHtml(w.detail)}</li>`);
+  }
+  const errs = issues.filter(i => i.severity === 'error').length + warns.filter(w => w.severity === 'error').length;
+  return `<div class="review-flags"><h4 style="color:var(--red);margin:0 0 8px">⚠ Review 告警（${rows.length}${errs ? `，含 ${errs} 个 error` : ''}）</h4><ul class="flag-list">${rows.join('')}</ul></div>`;
 }
 function renderQualityGate(quality) {
   const layer1 = quality.layer1;

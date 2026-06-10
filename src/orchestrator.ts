@@ -616,6 +616,23 @@ export async function runQuickAnalysis(
 }
 
 /**
+ * Extract the most recent daily close from the market data script result, for
+ * use as the market reference in cross-stage checks (target/stop on wrong side
+ * of current price). Returns undefined when market data is missing/failed or
+ * has no bars — callers skip the market-dependent checks in that case.
+ */
+export function extractLatestClose(
+  dataResults: Array<{ role: string; result: ScriptResult }>
+): number | undefined {
+  const market = dataResults.find((d) => d.role === "market");
+  if (!market || !market.result.success || !market.result.data) return undefined;
+  const arr = (market.result.data as any).data;
+  if (!Array.isArray(arr) || arr.length === 0) return undefined;
+  const close = (arr[arr.length - 1] as any)?.close;
+  return typeof close === "number" && close > 0 ? close : undefined;
+}
+
+/**
  * Run full analysis with debate and risk layers:
  * 1. 7 analysts (parallel) → 2. Bull↔Bear debate → 3. Research Manager
  * 4. Trader → 5. Risk Debate (3-way parallel) → 6. Risk Manager (with revise loop)
