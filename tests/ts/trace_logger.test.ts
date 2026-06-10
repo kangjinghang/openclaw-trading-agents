@@ -58,7 +58,7 @@ describe("TraceLogger", () => {
     logger.record(trace);
 
     // Verify file exists
-    const traceFilePath = path.join(traceDir, "trace-test-123.json");
+    const traceFilePath = path.join(traceDir, "value_investor-trace-test-123.json");
     expect(fs.existsSync(traceFilePath)).toBe(true);
 
     // Verify file content
@@ -139,8 +139,8 @@ describe("TraceLogger", () => {
     logger.record(trace2);
 
     // Verify both files exist
-    const trace1Path = path.join(traceDir, "trace-001.json");
-    const trace2Path = path.join(traceDir, "trace-002.json");
+    const trace1Path = path.join(traceDir, "value_investor-trace-001.json");
+    const trace2Path = path.join(traceDir, "growth_investor-trace-002.json");
 
     expect(fs.existsSync(trace1Path)).toBe(true);
     expect(fs.existsSync(trace2Path)).toBe(true);
@@ -156,5 +156,46 @@ describe("TraceLogger", () => {
     expect(content1.phase).toBe("analyst");
     expect(content2.trace_id).toBe("trace-002");
     expect(content2.phase).toBe("debate");
+  });
+
+  it("Should encode the role in the filename and stay unique when role+index collide", () => {
+    // The filename leads with the role so the 06_traces dir is browsable
+    // ("which file is the trader?"). call_index is NOT unique within a run
+    // (parallel calls read traceLogger.count before record() increments it),
+    // so uniqueness must come from trace_id — two traces sharing both role
+    // AND call_index must still produce two distinct files, never an overwrite.
+    traceDir = fs.mkdtempSync(path.join(os.tmpdir(), "trace-test-"));
+    const logger = new TraceLogger(traceDir, "run-dup");
+
+    const make = (trace_id: string): LLMCallTrace => ({
+      trace_id,
+      call_index: 5,           // identical index for both — must NOT cause a collision
+      phase: "debate",
+      role: "bull",            // identical role for both
+      request: {
+        model: "gpt-4o",
+        system_prompt: "Bull debater.",
+        user_message: "Argue bullish.",
+        temperature: 0.4,
+        max_tokens: 4000,
+      },
+      response: { raw_content: "Bull case" },
+      meta: {
+        timestamp: "2024-01-01T12:00:00.000Z",
+        duration_ms: 1000,
+        usage: { prompt_tokens: 1000, completion_tokens: 500, total_tokens: 1500 },
+        cost_usd: 0.0075,
+      },
+    });
+
+    logger.record(make("bull-aaa"));
+    logger.record(make("bull-bbb"));
+
+    expect(fs.existsSync(path.join(traceDir, "bull-bull-aaa.json"))).toBe(true);
+    expect(fs.existsSync(path.join(traceDir, "bull-bull-bbb.json"))).toBe(true);
+
+    // The first trace was NOT overwritten by the second.
+    const first = JSON.parse(fs.readFileSync(path.join(traceDir, "bull-bull-aaa.json"), "utf-8"));
+    expect(first.trace_id).toBe("bull-aaa");
   });
 });

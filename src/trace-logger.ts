@@ -20,7 +20,12 @@ export class TraceLogger {
   /** Record a single LLM call trace to disk as JSON, enriching with run_id */
   record(trace: LLMCallTrace): void {
     const enriched = { ...trace, run_id: this._runId };
-    const filePath = path.join(this.traceDir, `${trace.trace_id}.json`);
+    // Lead the filename with the role so the trace dir is browsable
+    // ("which file is the trader?" → scan the prefix). call_index is NOT
+    // unique within a run (parallel calls read traceLogger.count before
+    // record() increments it), so uniqueness comes from trace_id, never
+    // from index — two traces sharing role+index still get distinct files.
+    const filePath = path.join(this.traceDir, `${trace.role}-${trace.trace_id}.json`);
     fs.writeFileSync(filePath, JSON.stringify(enriched, null, 2), "utf-8");
     this.counter++;
     this._totalTokens += trace.meta.usage.total_tokens;
