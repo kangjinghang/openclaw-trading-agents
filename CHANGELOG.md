@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 格式化报告自动落盘（`src/report-store.ts`）：`save` / `saveFull` 末尾调 `toMarkdown` / `toHtml` 写 `{detailDir}/report.md` + `report.html`，与 JSON 产物并列。此前 `report-formatter.ts` 写得很完整但只在 `cli.ts` 里 stdout，`run-full-analysis.js` 不调它，每次看干净报告得重跑 CLI 重定向
 - dashboard 渲染结构化字段（`dashboard/index.html`）：详情 tab 新增数据质量门控卡片（Layer-1 A-F 等级 badge 网格 + Layer-2 可信度 badge + 陈旧/可疑捏造 chip）、风控 RISK_JUDGE 4 类约束（硬约束/软建议/进场前提/降风险触发，颜色区分）、trader invalidations、retries_exhausted 警示 badge。此前这些字段只存 JSON 不显示，dashboard 只 grep 到 entry_signals
 - trace 文件名加 role 前缀（`src/trace-logger.ts`，commit `b033907`）：`${trace_id}.json` → `${role}-${trace_id}.json`（如 `trader-*.json`），`06_traces` 目录一眼可辨角色，不必逐个开文件 grep role。唯一性靠 trace_id 而非 call_index——后者 run 内非唯一（并行调用在 `record()` 自增前读 `traceLogger.count`，同 index+role 会撞名覆盖丢数据）
+- trace 按 runId 物理隔离 + 按时间排序（`src/orchestrator.ts` + `src/dashboard-api.ts`，commit `fb5ccd3`）：traceDir 加 `/{runId}` 子目录，每次 run 的 trace + `run_summary.json` 隔离到 `06_traces/{runId}/`，不再与历史 run 混在同一目录（实跑 600600 同目录混了 3 个 run 共 70 个 trace、最终报告只对应 23 个，调用列表混入 47 个残留）。`readTraces` 优先读子目录、旧根目录布局 fallback 按 run_id 过滤——历史报告不被孤立；trace 排序从不可靠的 call_index 改 `meta.timestamp`（call_index run 内非唯一，#6 根因），Gantt/调用列表按真实时间序
 
 **文档**
 - `docs/pipeline-deep-dive.zh.md`：流程深度解读（~1000 行），面向初学者的通俗 + 深度讲解。10 章 + 术语表，覆盖公共底座、数据层、双层质量门、Quick 终点、多空辩论状态机、研究经理、交易员、风控辩论 + revise 循环、设计哲学。每章用生活比喻引入，再讲实现细节与设计权衡
