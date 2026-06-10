@@ -82,6 +82,32 @@ function parseNumericField(content: string, fieldPattern: string, isPercent: boo
   return 0;
 }
 
+/**
+ * Parse the total position size (%) from a trader plan.
+ *
+ * The prompt labels this field "建议仓位" (a Buy-view phrase), so for
+ * Sell/Underweight and Hold plans the LLM often emits a direction-appropriate
+ * synonym instead — "减仓总量", "减仓比例", "总仓位", "建仓总量". The single-
+ * label parser missed those → position_pct fell back to 0, which also silently
+ * defeated the risk cap-binding downstream (a cap of N% is never < 0).
+ * Regression: the 600600 Sell run wrote "减仓总量 ... 30%" yet stored
+ * position_pct=0.
+ *
+ * Tries the canonical label first; if that yields nothing, falls back through
+ * the synonyms. Returns 0 only when no total-position value is present
+ * anywhere. Sub-batch tranche labels (第一批/第二批/分批/加仓) are never
+ * synonyms, so a per-tranche number is never mistaken for the total.
+ */
+export function parsePositionPct(content: string): number {
+  let v = parseNumericField(content, "建议仓位", true);
+  if (v > 0) return v;
+  for (const label of ["减仓总量", "减仓比例", "总仓位", "建仓总量"]) {
+    v = parseNumericField(content, label, true);
+    if (v > 0) return v;
+  }
+  return 0;
+}
+
 function parseListSection(content: string, header: string): string[] {
   // Allow an optional numeric prefix ("### 3.") and trailing parenthetical
   // ("（triggers — …）") on the header so real LLM output (which numbers
@@ -199,7 +225,7 @@ export async function runTrader(
         : direction,
     target_price: parseNumericField(result.content, "目标价格", false),
     stop_loss: parseNumericField(result.content, "止损价格", false),
-    position_pct: parseNumericField(result.content, "建议仓位", true),
+    position_pct: parsePositionPct(result.content),
     execution_plan: result.content.slice(0, 3000),
     entry_signals: plan?.entry_signals.length ? plan.entry_signals : parseListSection(result.content, "入场信号"),
     exit_signals: plan?.exit_signals.length ? plan.exit_signals : parseListSection(result.content, "退出信号"),

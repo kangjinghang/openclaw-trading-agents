@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { runTrader, parseTraderPlan } from "../../src/trader";
+import { runTrader, parseTraderPlan, parsePositionPct } from "../../src/trader";
 import { loadAndRender } from "../../src/prompt-loader";
 import {
   TradingAgentsConfig,
@@ -749,5 +749,80 @@ trailing text`;
       '<!-- TRADER_PLAN: {"entry_signals": ["ok", 123, true, "ok2"]} -->'
     );
     expect(plan!.entry_signals).toEqual(["ok", "ok2"]);
+  });
+});
+
+describe("parsePositionPct", () => {
+  it("returns the canonical 建议仓位 value when the label is present", () => {
+    const content = `### 交易方向与仓位
+- **建议仓位**：30%
+`;
+    expect(parsePositionPct(content)).toBe(30);
+  });
+
+  it("keeps an explicit 0% (Hold) — does not fall back to a synonym", () => {
+    // A Hold plan may legitimately say 建议仓位 0% ("flat / no new position").
+    // The label IS present, so 0 must stand even if a synonym appears nearby.
+    const content = `### 交易方向与仓位
+- **建议仓位**：0%
+### T+1
+维持现有仓位，总仓位约 20%。
+`;
+    expect(parsePositionPct(content)).toBe(0);
+  });
+
+  it("falls back to 减仓总量 when 建议仓位 is absent (real 600600 Sell output)", () => {
+    // Verbatim shape from the 600600 trace: a Sell plan phrased the total as
+    // "减仓总量 ... 30%" in a table cell, with NO 建议仓位 line. Previously
+    // this parsed as position_pct=0.
+    const content = `### 1. 交易方向与仓位
+| **建议方向** | **卖出（Underweight）** — 与研究经理决策一致 |
+| **减仓总量** | 不超过总资金的 **30%** |
+| **建仓方式** | 分 **2 批**执行，比例 **60:40** |
+`;
+    expect(parsePositionPct(content)).toBe(30);
+  });
+
+  it("falls back to the 减仓比例 synonym", () => {
+    const content = `### 交易方向与仓位
+- **减仓比例**：不超过 25%
+`;
+    expect(parsePositionPct(content)).toBe(25);
+  });
+
+  it("falls back to the 总仓位 synonym", () => {
+    const content = `### 交易方向与仓位
+- **总仓位**：上限 40%
+`;
+    expect(parsePositionPct(content)).toBe(40);
+  });
+
+  it("returns 0 when no position label is present anywhere", () => {
+    const content = `### 交易方向与仓位
+- **建议方向**：买入
+### 价格区间
+- **目标价格**：1300 元
+`;
+    expect(parsePositionPct(content)).toBe(0);
+  });
+
+  it("never mistakes a sub-batch tranche for the total", () => {
+    // Only a per-tranche label is present (no total-position synonym). Must
+    // return 0 rather than grabbing the tranche's 18%.
+    const content = `### 交易方向与仓位
+- **建议方向**：卖出
+- **第一批**：总资金的 18%
+- **第二批**：总资金的 12%
+`;
+    expect(parsePositionPct(content)).toBe(0);
+  });
+
+  it("prefers the total over a sub-batch tranche when both are present", () => {
+    const content = `### 1. 交易方向与仓位
+| **减仓总量** | 不超过总资金的 **30%** |
+| **第一批** | 总资金的 **18%** |
+| **第二批** | 总资金的 **12%** |
+`;
+    expect(parsePositionPct(content)).toBe(30);
   });
 });
