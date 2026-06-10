@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 质量门输出持久化（`src/report-store.ts`）：`saveQualitySummary` 把 Layer-1 grades + Layer-2 review 落盘到 `{detailDir}/00_quality.json`，在质量门算完立即写（不等后续阶段），mid-run 崩了也留审计。此前这块数据算完只注入 prompt 就丢，post-run 只能去 trace 里翻 prompt 输入
 - 格式化报告自动落盘（`src/report-store.ts`）：`save` / `saveFull` 末尾调 `toMarkdown` / `toHtml` 写 `{detailDir}/report.md` + `report.html`，与 JSON 产物并列。此前 `report-formatter.ts` 写得很完整但只在 `cli.ts` 里 stdout，`run-full-analysis.js` 不调它，每次看干净报告得重跑 CLI 重定向
 - dashboard 渲染结构化字段（`dashboard/index.html`）：详情 tab 新增数据质量门控卡片（Layer-1 A-F 等级 badge 网格 + Layer-2 可信度 badge + 陈旧/可疑捏造 chip）、风控 RISK_JUDGE 4 类约束（硬约束/软建议/进场前提/降风险触发，颜色区分）、trader invalidations、retries_exhausted 警示 badge。此前这些字段只存 JSON 不显示，dashboard 只 grep 到 entry_signals
+- trace 文件名加 role 前缀（`src/trace-logger.ts`，commit `b033907`）：`${trace_id}.json` → `${role}-${trace_id}.json`（如 `trader-*.json`），`06_traces` 目录一眼可辨角色，不必逐个开文件 grep role。唯一性靠 trace_id 而非 call_index——后者 run 内非唯一（并行调用在 `record()` 自增前读 `traceLogger.count`，同 index+role 会撞名覆盖丢数据）
 
 **文档**
 - `docs/pipeline-deep-dive.zh.md`：流程深度解读（~1000 行），面向初学者的通俗 + 深度讲解。10 章 + 术语表，覆盖公共底座、数据层、双层质量门、Quick 终点、多空辩论状态机、研究经理、交易员、风控辩论 + revise 循环、设计哲学。每章用生活比喻引入，再讲实现细节与设计权衡
@@ -56,6 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 质量门 sentinel 双检查（`src/quality-gate.ts`，commit `0bb2b63`）：Check 4 只数**不同**失败短语的数量，13 个 `[数据缺失: 新闻]` 哨兵只算"1 种"漏网（实跑 600600 拿了 A 级）。加 Check 4b 数哨兵**出现次数** ≥3 触发；`checkFieldCitations` 先 strip 哨兵再查关键词，避免哨兵里的字段名（如"新闻"）被当成"引用了该数据"
 - 风控硬约束仓位 cap 未执行（`src/risk.ts` + `src/orchestrator.ts`）：`runRiskManager` 从未填 `max_position_override`（永远 undefined），orchestrator 只在 revise 回路内套 cap，回路外（一次通过 / 回路耗尽后）的最终 judge 不绑定最终计划——600600 看到 judge 说"总仓位≤10%"但 `position_pct` 仍为 15%。新增 `extractPositionCap` 从 `hard_constraints` 文本取最严 cap（跳过 `首批/首笔/分批/加仓` 子批次约束），回路外加一道 cap；零额外 LLM 成本，deterministic
 - `extractPositionCap` 正则补 `持仓` 同义词 + `%` 必填（`src/risk.ts`）：复跑 600600 发现 LLM 这次吐的是"最终持仓≤30%"（上次是"总仓位≤10%"），`仓位`-only 正则漏匹配，cap 靠 trader 碰巧填同值才"看上去对"。改为 `(?:仓位|持仓)` 别名 + `%` 必填（必填同时排除"持仓量≤100万手"这类绝对数量约束，不会误当百分比 cap）
+- trader position_pct 同义词兜底（`src/trader.ts`，commit `b45659f`）：提示词用 Buy 视角标签「建议仓位」，Sell/Hold 方向 LLM 改写为「减仓总量/减仓比例/总仓位」等，单标签 parser 匹配不到 → position_pct 落 0，同时让仓位 cap 绑定静默失效（cap < 0 永假）。新增 `parsePositionPct` 先试规范标签、为 0 则回退同义词；子批次标签（第一批/分批/加仓）不在表内不被误取。实跑 600600 完整 trader trace 验证 0→30
+- saveFull 摘要 token/cost 写死 0（`src/report-store.ts` + `src/orchestrator.ts`，commit `e17f2a8`）：`saveQuick` 用 `totalTokens/totalCostUsd` 真值，`saveFull` 却硬编码 0，每个 full-mode 摘要 JSON 的 token/cost 都是假 0。数据本已算好（`traceLogger.totalTokens/.totalCostUsd` 跨所有 trace 累计，进度日志与 `run_summary.json` 已在用）。saveFull 签名加两参数对齐 saveQuick，调用点传 traceLogger 真值
 
 ## [0.1.0] - 2026-06-06
 
