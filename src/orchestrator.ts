@@ -625,6 +625,23 @@ export async function runQuickAnalysis(
   if (qualityReview) quality.summary_text += formatQualityReview(qualityReview);
   logProgress(runId, `[2/4] 质量门控: ${quality.grades.map(g => `${g.role}=${g.grade}`).join(", ")}${qualityReview ? ` (可信度 ${qualityReview.credibility})` : ""}`);
 
+  // CP4: Quality gate — register layer-1 grades
+  for (const g of quality.grades) {
+    if (g.grade === "D" || g.grade === "F") {
+      health.add({ stage: "quality_gate", severity: "warn", check: "layer1_grade",
+        message: `${g.role} 质量门评级 ${g.grade}: ${(g.issues || []).join("; ")}`,
+        context: { role: g.role, grade: g.grade } });
+    }
+  }
+
+  // CP5: Quality review — register layer-2 findings
+  if (qualityReview) {
+    for (const suspect of qualityReview.fabrication_suspects || []) {
+      health.add({ stage: "quality_review", severity: "warn", check: "fabrication_suspect",
+        message: `${suspect} 疑似编造数据`, context: { role: suspect } });
+    }
+  }
+
   // Persist the quality-gate output BEFORE downstream phases so a mid-run crash
   // still leaves the audit on disk. Previously this was only injected into
   // prompts (transient) — unrecoverable without grepping trace inputs after.
@@ -700,7 +717,7 @@ export async function runQuickAnalysis(
   const durationMs = Date.now() - startTime;
 
   logProgress(runId, `[4/4] 保存报告...`);
-  reportStore.save(ticker, date, "quick", result, durationMs, allTokens, allCost, runId, traceLogger.warnings);
+  reportStore.save(ticker, date, "quick", result, durationMs, allTokens, allCost, runId, traceLogger.warnings, health.toJSON());
   saveRawData(detailDir, dataResults, "03_data");
   logProgress(runId, `完成 (${(durationMs / 1000).toFixed(1)}s)`, allTokens, allCost);
 
@@ -713,6 +730,7 @@ export async function runQuickAnalysis(
     total_cost_usd: allCost,
     llm_call_count: traceLogger.count,
     warnings: traceLogger.warnings,
+    pipeline_health: health.toJSON(),
   };
   fs.writeFileSync(path.join(traceDir, "run_summary.json"), JSON.stringify({ ...meta, ticker, date, mode: "quick", direction }, null, 2), "utf-8");
 
@@ -771,6 +789,23 @@ export async function runFullAnalysis(
   const qualityReview = await runQualityReview(analystReports, quality, ticker, date, config, openaiClient, traceLogger);
   if (qualityReview) quality.summary_text += formatQualityReview(qualityReview);
   logProgress(runId, `质量门控: ${quality.grades.map(g => `${g.role}=${g.grade}`).join(", ")}${qualityReview ? ` (可信度 ${qualityReview.credibility})` : ""}`);
+
+  // CP4: Quality gate — register layer-1 grades
+  for (const g of quality.grades) {
+    if (g.grade === "D" || g.grade === "F") {
+      health.add({ stage: "quality_gate", severity: "warn", check: "layer1_grade",
+        message: `${g.role} 质量门评级 ${g.grade}: ${(g.issues || []).join("; ")}`,
+        context: { role: g.role, grade: g.grade } });
+    }
+  }
+
+  // CP5: Quality review — register layer-2 findings
+  if (qualityReview) {
+    for (const suspect of qualityReview.fabrication_suspects || []) {
+      health.add({ stage: "quality_review", severity: "warn", check: "fabrication_suspect",
+        message: `${suspect} 疑似编造数据`, context: { role: suspect } });
+    }
+  }
 
   // Persist the quality-gate output BEFORE downstream phases so a mid-run crash
   // still leaves the audit on disk. Previously this was only injected into
@@ -887,7 +922,14 @@ export async function runFullAnalysis(
   // conservative-reject overruled, retries exhausted, …) at a glance.
   const latestClose = extractLatestClose(dataResults);
   const crossIssues = crossStageChecks(result, latestClose);
-  reportStore.saveFull(ticker, date, result, durationMs, traceLogger.totalTokens, traceLogger.totalCostUsd, runId, traceLogger.warnings, crossIssues);
+
+  // CP6: Cross-stage — register all issues
+  for (const issue of crossIssues) {
+    health.add({ stage: "cross_stage", severity: issue.severity === "error" ? "warn" : "warn",
+      check: issue.check, message: issue.message });
+  }
+
+  reportStore.saveFull(ticker, date, result, durationMs, traceLogger.totalTokens, traceLogger.totalCostUsd, runId, traceLogger.warnings, crossIssues, health.toJSON());
   saveRawData(detailDir, dataResults, "07_data");
   logProgress(runId, `完成 (${(durationMs / 1000).toFixed(1)}s, ${traceLogger.count} LLM calls)`, traceLogger.totalTokens, traceLogger.totalCostUsd);
 
@@ -900,6 +942,7 @@ export async function runFullAnalysis(
     total_cost_usd: traceLogger.totalCostUsd,
     llm_call_count: traceLogger.count,
     warnings: traceLogger.warnings,
+    pipeline_health: health.toJSON(),
   };
   fs.writeFileSync(path.join(traceDir, "run_summary.json"), JSON.stringify({ ...meta, ticker, date, mode: "full", direction: tradingPlan.direction }, null, 2), "utf-8");
 

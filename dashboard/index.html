@@ -1256,6 +1256,7 @@ function renderReviewFlags(report) {
   const issues = report.cross_stage_issues || [];
   const warns = report.warnings || [];
   if (!issues.length && !warns.length) return '';
+  let html = '<div class="review-flags">';
   const rows = [];
   // Cross-stage anomalies first (structural), then per-step fallback warnings.
   for (const i of issues) {
@@ -1265,7 +1266,27 @@ function renderReviewFlags(report) {
     rows.push(`<li><span class="${w.severity === 'error' ? 'flag-err' : 'flag-warn'}">${w.severity === 'error' ? '⛔' : '⚠'}</span><b>${escapeHtml(w.phase)}.${escapeHtml(w.fn)}</b>：${escapeHtml(w.detail)}</li>`);
   }
   const errs = issues.filter(i => i.severity === 'error').length + warns.filter(w => w.severity === 'error').length;
-  return `<div class="review-flags"><h4 style="color:var(--red);margin:0 0 8px">⚠ Review 告警（${rows.length}${errs ? `，含 ${errs} 个 error` : ''}）</h4><ul class="flag-list">${rows.join('')}</ul></div>`;
+  html += `<h4 style="color:var(--red);margin:0 0 8px">⚠ Review 告警（${rows.length}${errs ? `，含 ${errs} 个 error` : ''}）</h4><ul class="flag-list">${rows.join('')}</ul>`;
+
+  // Pipeline health issues
+  const ph = report.pipeline_health || [];
+  if (ph.length > 0) {
+    const aborts = ph.filter(i => i.severity === "abort");
+    const skips = ph.filter(i => i.severity === "skip");
+    const phWarns = ph.filter(i => i.severity === "warn");
+    html += `<div class="flag-section"><strong>管道健康</strong> `;
+    if (aborts.length) html += `<span class="flag-err">${aborts.length} 中止</span> `;
+    if (skips.length) html += `<span style="color:#e67e22">${skips.length} 跳过</span> `;
+    if (phWarns.length) html += `<span class="flag-warn">${phWarns.length} 警告</span>`;
+    html += `</div>`;
+    for (const i of ph) {
+      const cls = i.severity === "abort" ? "flag-err" : i.severity === "skip" ? "" : "flag-warn";
+      html += `<div class="flag-item ${cls}">[${i.severity}] ${i.stage}.${i.check}: ${escapeHtml(i.message)}</div>`;
+    }
+  }
+
+  html += '</div>';
+  return html;
 }
 function renderQualityGate(quality) {
   const layer1 = quality.layer1;

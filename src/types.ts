@@ -353,4 +353,5 @@ export interface RunMeta {
   total_cost_usd: number;
   llm_call_count: number;
   warnings?: FallbackWarning[];
+  pipeline_health?: PipelineIssue[];
 }

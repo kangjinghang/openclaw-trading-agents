@@ -22,6 +22,7 @@ export interface ReportSummary {
   risk_assessment?: string;
   warnings?: Array<{ phase: string; fn: string; detail: string; severity: "warn" | "error" }>;
   cross_stage_issues?: Array<{ severity: "warn" | "error"; check: string; message: string }>;
+  pipeline_health?: Array<{ stage: string; severity: string; check: string; message: string; context?: Record<string, any> }>;
 }
 
 /** Scan report directory and return all report summaries */
@@ -232,6 +233,7 @@ function toSummary(raw: any): ReportSummary {
     risk_assessment: raw.final?.risk_assessment,
     warnings: raw.warnings || [],
     cross_stage_issues: raw.cross_stage_issues || [],
+    pipeline_health: raw.pipeline_health || [],
   };
 }
 
