@@ -20,9 +20,20 @@ export interface ReportSummary {
   analyst_verdicts: Record<string, { direction: string; reason: string }>;
   trace_count: number;
   risk_assessment?: string;
+  /** Full RiskAssessment object (review gap #4). Undefined in quick mode. */
+  risk_assessment_detail?: {
+    status: string;
+    judge?: { verdict: string; reason: string; hard_constraints: string[]; soft_constraints: string[]; execution_preconditions: string[]; de_risk_triggers: string[] };
+    reasoning: string;
+    risk_score: number;
+    retries_exhausted?: boolean;
+    max_position_override?: number;
+  };
   warnings?: Array<{ phase: string; fn: string; detail: string; severity: "warn" | "error" }>;
   cross_stage_issues?: Array<{ severity: "warn" | "error"; check: string; message: string }>;
   pipeline_health?: Array<{ stage: string; severity: string; check: string; message: string; context?: Record<string, any> }>;
+  /** Provenance chain — decision flow through pipeline stages (review gap #5). */
+  provenance: Array<{ stage: string; key_decision: string; detail_ref?: string }>;
 }
 
 /** Scan report directory and return all report summaries */
@@ -231,9 +242,11 @@ function toSummary(raw: any): ReportSummary {
     analyst_verdicts: raw.analyst_verdicts || {},
     trace_count: raw.trace_count || 0,
     risk_assessment: raw.final?.risk_assessment,
+    risk_assessment_detail: raw.risk_assessment_detail,
     warnings: raw.warnings || [],
     cross_stage_issues: raw.cross_stage_issues || [],
     pipeline_health: raw.pipeline_health || [],
+    provenance: raw.provenance || [],
   };
 }
 

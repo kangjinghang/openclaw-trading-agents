@@ -86,6 +86,21 @@ export interface AnalysisReport {
   cross_stage_issues?: CrossStageIssue[];
   /** Pipeline health issues collected at each checkpoint. */
   pipeline_health?: PipelineIssue[];
+  /**
+   * Full RiskAssessment object (review gap #4). `final.risk_assessment` is the
+   * string status for backward compatibility; this field carries the complete
+   * object (judge constraints, risk_score, retries_exhausted) so dashboard and
+   * external consumers can access risk details without reading detail files.
+   * Undefined in quick mode (no risk phase).
+   */
+  risk_assessment_detail?: RiskAssessment;
+  /**
+   * Provenance chain recording the decision flow through pipeline stages
+   * (review gap #5). Each entry captures the key decision and a reference
+   * to the detail file, so a reviewer can trace how the final decision was
+   * derived without reading through all detail files.
+   */
+  provenance: ProvenanceStage[];
 }
 
 /**
@@ -342,6 +357,25 @@ export interface QualityReview {
   note: string;
   stale_reports: string[];          // roles whose data looks stale/outdated
   fabrication_suspects: string[];   // roles with suspicious/unsupported numbers
+}
+
+/**
+ * A single stage in the provenance chain — records the decision flow through
+ * the pipeline so a reviewer can trace how the final decision was derived
+ * without reading through all detail files. Deterministic (built from pipeline
+ * data, not LLM output).
+ */
+export interface ProvenanceStage {
+  /** Pipeline stage name */
+  stage: "analysts" | "portfolio_manager" | "debate" | "research" | "trader" | "risk";
+  /**
+   * Human-readable summary of the key decision from this stage.
+   * e.g. "2看多/0看空/1中性", "Buy (80%)", "Bull 70 vs Bear 40",
+   * "Overweight (75%)", "Buy target=1400 stop=1200 pos=25%", "pass (35/100)"
+   */
+  key_decision: string;
+  /** Relative path to detail file(s) within the detail directory. */
+  detail_ref?: string;
 }
 
 /** Metadata about an analysis run for auditing */

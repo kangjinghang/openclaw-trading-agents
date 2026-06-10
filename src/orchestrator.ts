@@ -23,6 +23,7 @@ import {
   ScriptResult,
   RunMeta,
   QualitySummary,
+  ProvenanceStage,
 } from "./types";
 import { AbortError, ParseError, EnvironmentError } from "./errors";
 import { DATA_FETCH_STAGGER_MS, LLM_CALL_STAGGER_MS, DEFAULT_CONCURRENCY } from "./constants";
@@ -307,6 +308,18 @@ async function pool<T>(
  * Parse a direction string into a valid FinalDecision direction.
  * Supports Chinese and English direction names.
  */
+/** Build a human-readable verdict summary for the analysts provenance stage */
+function analystVerdictSummary(reports: AnalystReport[]): string {
+  let bull = 0, bear = 0, neutral = 0;
+  for (const r of reports) {
+    const d = r.verdict.direction;
+    if (d === "看多" || d === "Buy" || d === "Overweight" || d === "买入" || d === "增持") bull++;
+    else if (d === "看空" || d === "Sell" || d === "Underweight" || d === "卖出" || d === "减持") bear++;
+    else neutral++;
+  }
+  return `${bull}看多/${bear}看空/${neutral}中性`;
+}
+
 function parseDirection(raw?: string): FinalDecision["direction"] {
   if (!raw) return "Hold";
 
@@ -717,7 +730,11 @@ export async function runQuickAnalysis(
   const durationMs = Date.now() - startTime;
 
   logProgress(runId, `[4/4] 保存报告...`);
-  reportStore.save(ticker, date, "quick", result, durationMs, allTokens, allCost, runId, traceLogger.warnings, health.toJSON());
+  const provenance: ProvenanceStage[] = [
+    { stage: "analysts", key_decision: analystVerdictSummary(analystReports), detail_ref: "01_analysts/" },
+    { stage: "portfolio_manager", key_decision: `${finalDecision.direction} (${(finalDecision.confidence * 100).toFixed(0)}%)` },
+  ];
+  reportStore.save(ticker, date, "quick", result, durationMs, allTokens, allCost, runId, traceLogger.warnings, health.toJSON(), provenance);
   saveRawData(detailDir, dataResults, "03_data");
   logProgress(runId, `完成 (${(durationMs / 1000).toFixed(1)}s)`, allTokens, allCost);
 
@@ -929,7 +946,14 @@ export async function runFullAnalysis(
       check: issue.check, message: issue.message });
   }
 
-  reportStore.saveFull(ticker, date, result, durationMs, traceLogger.totalTokens, traceLogger.totalCostUsd, runId, traceLogger.warnings, crossIssues, health.toJSON());
+  const fullProvenance: ProvenanceStage[] = [
+    { stage: "analysts", key_decision: analystVerdictSummary(analystReports), detail_ref: "01_analysts/" },
+    { stage: "debate", key_decision: `Bull ${researchDecision.bull_score} vs Bear ${researchDecision.bear_score}`, detail_ref: "02_debate/" },
+    { stage: "research", key_decision: `${researchDecision.direction} (${(researchDecision.confidence * 100).toFixed(0)}%)`, detail_ref: "03_research.json" },
+    { stage: "trader", key_decision: `${tradingPlan.direction} target=${tradingPlan.target_price} stop=${tradingPlan.stop_loss} pos=${tradingPlan.position_pct}%`, detail_ref: "04_trading_plan.json" },
+    { stage: "risk", key_decision: `${riskAssessment.status} (${riskAssessment.risk_score}/100)`, detail_ref: "05_risk/" },
+  ];
+  reportStore.saveFull(ticker, date, result, durationMs, traceLogger.totalTokens, traceLogger.totalCostUsd, runId, traceLogger.warnings, crossIssues, health.toJSON(), fullProvenance);
   saveRawData(detailDir, dataResults, "07_data");
   logProgress(runId, `完成 (${(durationMs / 1000).toFixed(1)}s, ${traceLogger.count} LLM calls)`, traceLogger.totalTokens, traceLogger.totalCostUsd);
 

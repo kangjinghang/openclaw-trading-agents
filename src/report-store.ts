@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { QuickAnalysisResult, FullAnalysisResult, AnalysisReport, QualitySummary, QualityReview, FallbackWarning, CrossStageIssue, PipelineIssue } from "./types";
+import { QuickAnalysisResult, FullAnalysisResult, AnalysisReport, QualitySummary, QualityReview, FallbackWarning, CrossStageIssue, PipelineIssue, ProvenanceStage } from "./types";
 import { toMarkdown, toHtml } from "./report-formatter";
 
 export class ReportStore {
@@ -52,7 +52,8 @@ export class ReportStore {
     totalCostUsd: number,
     runId?: string,
     warnings: FallbackWarning[] = [],
-    pipelineHealth: PipelineIssue[] = []
+    pipelineHealth: PipelineIssue[] = [],
+    provenance: ProvenanceStage[] = []
   ): void {
     const tickerDir = path.join(this.baseDir, ticker);
     const detailDir = path.join(tickerDir, `${date}_${mode}`);
@@ -87,6 +88,7 @@ export class ReportStore {
       trace_count: result.analysts.length + 1,
       warnings,
       pipeline_health: pipelineHealth,
+      provenance,
     };
 
     this.writeJson(path.join(tickerDir, `${date}_${mode}.json`), summary);
@@ -111,7 +113,8 @@ export class ReportStore {
     runId?: string,
     warnings: FallbackWarning[] = [],
     crossStageIssues: CrossStageIssue[] = [],
-    pipelineHealth: PipelineIssue[] = []
+    pipelineHealth: PipelineIssue[] = [],
+    provenance: ProvenanceStage[] = []
   ): void {
     const tickerDir = path.join(this.baseDir, ticker);
     const detailDir = path.join(tickerDir, `${date}_full`);
@@ -163,6 +166,8 @@ export class ReportStore {
       warnings,
       cross_stage_issues: crossStageIssues,
       pipeline_health: pipelineHealth,
+      risk_assessment_detail: result.risk_assessment,
+      provenance,
     };
 
     this.writeJson(path.join(tickerDir, `${date}_full.json`), summary);

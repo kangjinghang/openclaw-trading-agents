@@ -150,6 +150,11 @@ tbody td{padding:8px 12px;font-size:13px;white-space:nowrap}
 .constraint-hard li{color:var(--red)}
 .constraint-derisk li{color:#fb923c}
 .warn-badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;background:var(--red20);color:var(--red);margin-left:6px}
+.prov-chain{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:8px 0 16px}
+.prov-step{display:inline-flex;flex-direction:column;align-items:center;padding:6px 10px;border-radius:6px;background:var(--bg2);border:1px solid var(--border);min-width:70px;font-size:12px}
+.prov-step .prov-label{font-weight:600;color:var(--text1);margin-bottom:2px}
+.prov-step .prov-decision{color:var(--text2);font-size:11px}
+.prov-arrow{color:var(--text3);font-size:16px}
 /* Review flags — silent-fallback warnings + cross-stage anomalies, shown at
    the top of the detail panel so a reviewer sees where the run degraded. */
 .review-flags{background:var(--surface2);border:1px solid var(--red);border-radius:8px;padding:12px 14px;margin-bottom:16px}
@@ -424,6 +429,7 @@ const I18N = {
     qualityGate: '数据质量门控', credibility: '可信度',
     hardConstraints: '硬约束', softConstraints: '软建议', preconditions: '进场前提', deRiskTriggers: '降风险触发',
     retriesExhausted: '重试耗尽', invalidations: '失效条件',
+    provenance: '决策溯源',
     staleReports: '陈旧', fabricationSuspects: '可疑捏造',
     systemPrompt: '系统提示', response: '模型回复',
     errorPrefix: '错误：',
@@ -452,6 +458,7 @@ const I18N = {
     qualityGate: 'Quality Gate', credibility: 'Credibility',
     hardConstraints: 'Hard Constraints', softConstraints: 'Soft', preconditions: 'Preconditions', deRiskTriggers: 'De-risk Triggers',
     retriesExhausted: 'Retries Exhausted', invalidations: 'Invalidations',
+    provenance: 'Decision Provenance',
     staleReports: 'Stale', fabricationSuspects: 'Fabrication Suspects',
     systemPrompt: 'System prompt', response: 'Response',
     errorPrefix: 'Error: ',
@@ -550,6 +557,8 @@ function renderTable() {
     const cost = r.total_cost_usd < 0.01 ? '<$0.01' : '$' + r.total_cost_usd.toFixed(2);
     const dur = r.duration_ms < 1000 ? r.duration_ms + 'ms' : (r.duration_ms / 1000).toFixed(1) + 's';
     const riskBadge = r.risk_assessment ? badgeHtml(r.risk_assessment, 'badge-' + r.risk_assessment) : '<span style="color:var(--text3)">—</span>';
+    const riskDetail = r.risk_assessment_detail;
+    const riskExtra = riskDetail ? (riskDetail.retries_exhausted ? `<span class="warn-badge">⚠ ${t('retriesExhausted')}</span>` : '') : '';
     const flagCount = (r.warnings || []).length + (r.cross_stage_issues || []).length;
     const flagErrs = (r.warnings || []).filter(w => w.severity === 'error').length + (r.cross_stage_issues || []).filter(i => i.severity === 'error').length;
     const flagBadge = flagCount ? `<span class="warn-badge" title="${flagCount} 条 review 告警${flagErrs ? `（${flagErrs} error）` : ''}">⚠ ${flagCount}</span>` : '';
@@ -563,7 +572,7 @@ function renderTable() {
       <td>${dots}</td>
       <td style="color:var(--text2);font-size:12px">${cost}</td>
       <td style="color:var(--text2);font-size:12px">${dur}</td>
-      <td>${riskBadge}${flagBadge}</td>
+      <td>${riskBadge}${riskExtra}${flagBadge}</td>
     </tr>`;
   }).join('');
 
@@ -820,6 +829,9 @@ async function loadFullDetail(report) {
     // Review flags banner (silent-fallback warnings + cross-stage anomalies):
     // shown FIRST so a reviewer sees where the run degraded before anything else.
     html += renderReviewFlags(report);
+
+    // Provenance chain (review gap #5): decision flow through pipeline stages.
+    html += renderProvenance(report.provenance);
 
     // Quality gate card (review gap #3): Layer-1 grades + Layer-2 credibility.
     // Rendered BEFORE research — if the data is garbage, the analysis is garbage.
@@ -1229,8 +1241,10 @@ function renderPriceLevels(trading) {
       <h5>${lang === 'zh' ? '价格区间' : 'Price Levels'}</h5>
       <div class="price-level-chart">
         ${prices.map(p => {
-          const pct = ((p.val - minP) / range * 100).toFixed(0);
-          return `<div class="pl-line ${p.cls}" style="margin-left:${Math.max(pct - 10, 0)}%;width:${Math.min(pct + 20, 100)}%">
+          const pct = ((p.val - minP) / range * 100);
+          const ml = Math.max(pct - 12, 0);
+          const w = Math.min(100 - ml, 40);
+          return `<div class="pl-line ${p.cls}" style="margin-left:${ml.toFixed(0)}%;width:${w.toFixed(0)}%">
             <span class="pl-label">${p.label}</span>
             <span class="pl-val">¥${formatNum(p.val)}</span>
           </div>`;
@@ -1372,6 +1386,25 @@ function renderRiskGauge(riskMgr) {
         <text x="100" y="100" class="risk-gauge-sub">${statusLabel}</text>
       </svg>
     </div>`;
+}
+
+/** Render the provenance chain as a horizontal pipeline (review gap #5) */
+function renderProvenance(provenance) {
+  if (!provenance || !provenance.length) return '';
+  const stageLabels = {
+    analysts: { zh: '分析师', en: 'Analysts' },
+    portfolio_manager: { zh: '组合经理', en: 'Portfolio' },
+    debate: { zh: '辩论', en: 'Debate' },
+    research: { zh: '研究', en: 'Research' },
+    trader: { zh: '交易', en: 'Trader' },
+    risk: { zh: '风控', en: 'Risk' },
+  };
+  const arrow = '<span class="prov-arrow">→</span>';
+  const steps = provenance.map(p => {
+    const label = stageLabels[p.stage]?.[lang] || p.stage;
+    return `<span class="prov-step"><span class="prov-label">${label}</span><span class="prov-decision">${escapeHtml(p.key_decision)}</span></span>`;
+  });
+  return `<h4 style="margin-bottom:4px">${t('provenance')}</h4><div class="prov-chain">${steps.join(arrow)}</div>`;
 }
 
 // ── Fundamentals table ──
