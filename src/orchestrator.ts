@@ -499,7 +499,10 @@ export async function runQuickAnalysis(
   const startTime = Date.now();
   const runId = generateRunId();
   const detailDir = path.join(config.report_dir.replace("~", os.homedir()), ticker, `${date}_quick`);
-  const traceDir = path.join(detailDir, "02_traces");
+  // Isolate each run's traces under {traceDir}/{runId}/ so re-running the same
+  // ticker+date doesn't accumulate prior runs' traces in one flat dir (which
+  // made the call list unreadable and broke call_index ordering across runs).
+  const traceDir = path.join(detailDir, "02_traces", runId);
   const traceLogger = new TraceLogger(traceDir, runId);
   const reportStore = new ReportStore(config.report_dir);
 
@@ -625,7 +628,8 @@ export async function runFullAnalysis(
   const startTime = Date.now();
   const runId = generateRunId();
   const detailDir = path.join(config.report_dir.replace("~", os.homedir()), ticker, `${date}_full`);
-  const traceDir = path.join(detailDir, "06_traces");
+  // Isolate each run's traces under {traceDir}/{runId}/ (see runQuickAnalysis).
+  const traceDir = path.join(detailDir, "06_traces", runId);
   const traceLogger = new TraceLogger(traceDir, runId);
   const reportStore = new ReportStore(config.report_dir);
 

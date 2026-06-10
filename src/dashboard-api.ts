@@ -98,14 +98,19 @@ export function readTraces(reportDir: string, runId: string): any[] {
         const tracesDir = path.join(dmPath, traceSub);
         if (!fs.existsSync(tracesDir)) continue;
 
-        const files = safeReaddir(tracesDir);
-        for (const file of files) {
+        // New layout: each run physically isolated under {tracesDir}/{runId}/,
+        // so re-running the same ticker+date doesn't accumulate prior runs'
+        // traces in one flat dir. When the per-run subdir exists, read it
+        // directly (already isolated, no run_id filter needed). Otherwise fall
+        // back to the legacy flat layout, filtering by run_id (which mixes runs).
+        const runDir = path.join(tracesDir, runId);
+        const isolated = fs.existsSync(runDir) && fs.statSync(runDir).isDirectory();
+        const dir = isolated ? runDir : tracesDir;
+        for (const file of safeReaddir(dir)) {
           if (!file.endsWith(".json") || file === "run_summary.json") continue;
           try {
-            const raw = JSON.parse(fs.readFileSync(path.join(tracesDir, file), "utf-8"));
-            if (raw.run_id === runId) {
-              traces.push(raw);
-            }
+            const raw = JSON.parse(fs.readFileSync(path.join(dir, file), "utf-8"));
+            if (isolated || raw.run_id === runId) traces.push(raw);
           } catch {
             // skip malformed traces
           }
@@ -114,7 +119,16 @@ export function readTraces(reportDir: string, runId: string): any[] {
     }
   }
 
-  traces.sort((a, b) => (a.call_index ?? 0) - (b.call_index ?? 0));
+  traces.sort((a, b) => {
+    // call_index is NOT unique within a run (parallel calls read traceLogger.count
+    // before record() increments it), so it can't order the timeline. Sort by
+    // meta.timestamp first (ISO 8601 sorts lexicographically = chronologically);
+    // fall back to call_index only when a trace lacks a timestamp.
+    const ta = a.meta?.timestamp || '';
+    const tb = b.meta?.timestamp || '';
+    if (ta !== tb) return ta < tb ? -1 : 1;
+    return (a.call_index ?? 0) - (b.call_index ?? 0);
+  });
   return traces;
 }
 
@@ -131,19 +145,42 @@ export function readTracesByTickerDate(reportDir: string, ticker: string, date: 
       const tracesDir = path.join(reportDir, ticker, dm, traceSub);
       if (!fs.existsSync(tracesDir)) continue;
 
-      const files = safeReaddir(tracesDir);
-      for (const file of files) {
-        if (!file.endsWith(".json") || file === "run_summary.json") continue;
+      // Recurse one level: in the isolated layout each entry is a {runId}/
+      // subdir; in the legacy layout entries are flat .json files. This is the
+      // fallback path (no run_id), so it may still span runs — callers with a
+      // run_id use readTraces() which isolates cleanly.
+      for (const entry of safeReaddir(tracesDir)) {
+        const entryPath = path.join(tracesDir, entry);
+        let files: string[];
         try {
-          traces.push(JSON.parse(fs.readFileSync(path.join(tracesDir, file), "utf-8")));
+          files = fs.statSync(entryPath).isDirectory()
+            ? safeReaddir(entryPath).map((f) => path.join(entryPath, f))
+            : [entryPath];
         } catch {
-          // skip
+          continue;
+        }
+        for (const filePath of files) {
+          if (!filePath.endsWith(".json") || path.basename(filePath) === "run_summary.json") continue;
+          try {
+            traces.push(JSON.parse(fs.readFileSync(filePath, "utf-8")));
+          } catch {
+            // skip
+          }
         }
       }
     }
   }
 
-  traces.sort((a, b) => (a.call_index ?? 0) - (b.call_index ?? 0));
+  traces.sort((a, b) => {
+    // call_index is NOT unique within a run (parallel calls read traceLogger.count
+    // before record() increments it), so it can't order the timeline. Sort by
+    // meta.timestamp first (ISO 8601 sorts lexicographically = chronologically);
+    // fall back to call_index only when a trace lacks a timestamp.
+    const ta = a.meta?.timestamp || '';
+    const tb = b.meta?.timestamp || '';
+    if (ta !== tb) return ta < tb ? -1 : 1;
+    return (a.call_index ?? 0) - (b.call_index ?? 0);
+  });
   return traces;
 }
 

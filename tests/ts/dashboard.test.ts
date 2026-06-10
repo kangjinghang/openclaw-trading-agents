@@ -2,7 +2,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as http from 'http';
-import { listReports, readReport, readDetail, readTracesByTickerDate, readDataSources } from '../../src/dashboard-api';
+import { listReports, readReport, readDetail, readTraces, readTracesByTickerDate, readDataSources } from '../../src/dashboard-api';
 import { startServer, parseDashboardArgs } from '../../src/dashboard';
 import { mkdir, writeFile, rm } from 'fs/promises';
 import { join } from 'path';
@@ -128,6 +128,80 @@ describe('dashboard-api', () => {
     const result = readTracesByTickerDate(tmpReportDir, '600519', '2026-06-05');
     expect(result).toHaveLength(1);
     expect(result[0].trace_id).toBe('trace-test-1');
+  });
+
+  it('readTracesByTickerDate sorts by meta.timestamp, not unreliable call_index', async () => {
+    // call_index is NOT unique within a run (parallel calls read traceLogger.count
+    // before record() increments it), so it cannot order the timeline. The sort
+    // key must be meta.timestamp. Here call_index is intentionally INVERTED vs
+    // time: the earlier call has the LARGER call_index.
+    const tracesDir = join(tmpReportDir, '600519', '2026-06-05_quick', '02_traces');
+    await mkdir(tracesDir, { recursive: true });
+    const mk = (id, role, callIndex, ts) => ({
+      trace_id: id, run_id: 'run-1', call_index: callIndex, phase: 'analyst', role,
+      request: { model: 'gpt-4o' }, response: { raw_content: 'x' },
+      meta: { timestamp: ts, duration_ms: 1000, usage: { total_tokens: 500 }, cost_usd: 0.01 },
+    });
+    await writeFile(join(tracesDir, 'market-t-early.json'), JSON.stringify(mk('t-early', 'market', 5, '2026-06-05T10:00:00.000Z')));
+    await writeFile(join(tracesDir, 'trader-t-late.json'), JSON.stringify(mk('t-late', 'trader', 2, '2026-06-05T10:05:00.000Z')));
+
+    const result = readTracesByTickerDate(tmpReportDir, '600519', '2026-06-05');
+    expect(result).toHaveLength(2);
+    expect(result[0].trace_id).toBe('t-early'); // earlier timestamp first, despite call_index 5 > 2
+    expect(result[1].trace_id).toBe('t-late');
+  });
+
+  it('readTraces reads traces from the per-run {runId}/ subdir (run isolation)', async () => {
+    // New layout: {date}_full/06_traces/{runId}/*.json — each run physically
+    // isolated so re-running the same ticker+date doesn't accumulate traces
+    // from prior runs in one flat dir.
+    const runDir = join(tmpReportDir, '600519', '2026-06-05_full', '06_traces', 'run-isolated');
+    await mkdir(runDir, { recursive: true });
+    const t = {
+      trace_id: 't1', run_id: 'run-isolated', call_index: 0, phase: 'trader', role: 'trader',
+      request: { model: 'gpt-4o' }, response: { raw_content: 'x' },
+      meta: { timestamp: '2026-06-05T10:00:00.000Z', duration_ms: 1000, usage: { total_tokens: 500 }, cost_usd: 0.01 },
+    };
+    await writeFile(join(runDir, 'trader-t1.json'), JSON.stringify(t), 'utf-8');
+
+    const result = readTraces(tmpReportDir, 'run-isolated');
+    expect(result).toHaveLength(1);
+    expect(result[0].trace_id).toBe('t1');
+  });
+
+  it('readTraces isolates by runId — ignores other runs in sibling subdirs', async () => {
+    const base = join(tmpReportDir, '600519', '2026-06-05_full', '06_traces');
+    await mkdir(join(base, 'run-a'), { recursive: true });
+    await mkdir(join(base, 'run-b'), { recursive: true });
+    const mk = (id, run) => ({
+      trace_id: id, run_id: run, call_index: 0, phase: 'analyst', role: 'market',
+      request: { model: 'gpt-4o' }, response: { raw_content: 'x' },
+      meta: { timestamp: '2026-06-05T10:00:00.000Z', duration_ms: 1000, usage: { total_tokens: 500 }, cost_usd: 0.01 },
+    });
+    await writeFile(join(base, 'run-a', 'market-a.json'), JSON.stringify(mk('a', 'run-a')), 'utf-8');
+    await writeFile(join(base, 'run-b', 'market-b.json'), JSON.stringify(mk('b', 'run-b')), 'utf-8');
+
+    const result = readTraces(tmpReportDir, 'run-a');
+    expect(result).toHaveLength(1);
+    expect(result[0].trace_id).toBe('a'); // only run-a, never run-b
+  });
+
+  it('readTraces falls back to the flat trace dir for legacy (pre-isolation) layout', async () => {
+    // Old runs wrote traces directly under 06_traces/ (no runId subdir). Those
+    // must still be readable, filtered by run_id, so historical reports aren't
+    // orphaned by the isolation change.
+    const tracesDir = join(tmpReportDir, '600519', '2026-06-05_full', '06_traces');
+    await mkdir(tracesDir, { recursive: true });
+    const t = {
+      trace_id: 'leg', run_id: 'run-leg', call_index: 0, phase: 'analyst', role: 'market',
+      request: { model: 'gpt-4o' }, response: { raw_content: 'x' },
+      meta: { timestamp: '2026-06-05T10:00:00.000Z', duration_ms: 1000, usage: { total_tokens: 500 }, cost_usd: 0.01 },
+    };
+    await writeFile(join(tracesDir, 'market-leg.json'), JSON.stringify(t), 'utf-8');
+
+    const result = readTraces(tmpReportDir, 'run-leg');
+    expect(result).toHaveLength(1);
+    expect(result[0].trace_id).toBe('leg');
   });
 
   it('readDataSources returns raw data from report dir', async () => {
