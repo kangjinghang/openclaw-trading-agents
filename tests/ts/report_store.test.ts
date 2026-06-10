@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import { ReportStore } from "../../src/report-store";
-import { QuickAnalysisResult, QualitySummary, QualityReview } from "../../src/types";
+import { QuickAnalysisResult, FullAnalysisResult, QualitySummary, QualityReview } from "../../src/types";
 
 describe("ReportStore", () => {
   let tmpDir: string;
@@ -260,5 +260,62 @@ describe("ReportStore formatted-report files (review gap #2)", () => {
     const html = fs.readFileSync(htmlPath, "utf-8");
     expect(html).toContain("<html");
     expect(html).toContain("600519");
+  });
+});
+
+describe("ReportStore.saveFull token/cost (review gap #7)", () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    if (tmpDir && fs.existsSync(tmpDir)) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  function fullResult(): FullAnalysisResult {
+    return {
+      ticker: "600519",
+      date: "2026-06-05",
+      mode: "full",
+      analysts: [{
+        role: "market",
+        content: "Strong technical indicators.",
+        verdict: { direction: "Buy", reason: "Momentum" },
+        data_sources_used: ["market_data"],
+      }],
+      debate: { rounds: [], bull_summary: "", bear_summary: "", total_tokens: 0, total_cost_usd: 0 },
+      research_decision: {
+        direction: "Overweight", confidence: 0.75, bull_score: 70, bear_score: 40,
+        reasoning: "bull wins", key_debate_points: ["政策利好"],
+        verdict: { direction: "Overweight", reason: "bull wins" },
+      },
+      trading_plan: {
+        direction: "Buy", target_price: 1400, stop_loss: 1200, position_pct: 25,
+        execution_plan: "分批建仓", entry_signals: ["回调到1280"], exit_signals: ["跌破1200"],
+        invalidations: ["跌破1200"], key_risks: ["政策风险"], t_plus_1_note: "T+1制度",
+      },
+      risk_debate: { rounds: [], risk_arguments: [], total_tokens: 0, total_cost_usd: 0 },
+      risk_assessment: { status: "pass", reasoning: "ok", risk_score: 35 },
+      final: {
+        ticker: "600519", company_name: "Kweichow Moutai", date: "2026-06-05",
+        direction: "Buy", confidence: 0.85, target_price: 1850.0, stop_loss: 1650.0,
+        position_pct: 5.0, reasoning: "Strong brand", key_risks: ["Regulatory"],
+        analyst_verdicts: { market: "Buy" }, bull_bear_summary: "",
+        risk_assessment: "pass", execution_plan: "Accumulate on dips", next_review_trigger: "",
+      },
+    };
+  }
+
+  it("Should persist real total_tokens/cost in the full summary (not hardcoded 0)", () => {
+    tmpDir = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "report-full-test-"));
+    const store = new ReportStore(tmpDir);
+
+    store.saveFull("600519", "2026-06-05", fullResult(), 15000, 2500, 0.012, "run-x");
+
+    const summary = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "600519", "2026-06-05_full.json"), "utf-8")
+    );
+    expect(summary.total_tokens).toBe(2500);
+    expect(summary.total_cost_usd).toBe(0.012);
   });
 });

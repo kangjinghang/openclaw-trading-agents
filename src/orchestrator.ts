@@ -753,7 +753,7 @@ export async function runFullAnalysis(
   };
 
   const durationMs = Date.now() - startTime;
-  reportStore.saveFull(ticker, date, result, durationMs, runId);
+  reportStore.saveFull(ticker, date, result, durationMs, traceLogger.totalTokens, traceLogger.totalCostUsd, runId);
   saveRawData(detailDir, dataResults, "07_data");
   logProgress(runId, `完成 (${(durationMs / 1000).toFixed(1)}s, ${traceLogger.count} LLM calls)`, traceLogger.totalTokens, traceLogger.totalCostUsd);
 

@@ -102,6 +102,8 @@ export class ReportStore {
     date: string,
     result: FullAnalysisResult,
     durationMs: number,
+    totalTokens: number,
+    totalCostUsd: number,
     runId?: string
   ): void {
     const tickerDir = path.join(this.baseDir, ticker);
@@ -145,8 +147,8 @@ export class ReportStore {
       mode: "full",
       created_at: new Date().toISOString(),
       duration_ms: durationMs,
-      total_tokens: 0,
-      total_cost_usd: 0,
+      total_tokens: totalTokens,
+      total_cost_usd: totalCostUsd,
       final: result.final,
       analyst_verdicts: analystVerdicts,
       detail_dir: `${date}_full/`,
