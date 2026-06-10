@@ -13,6 +13,7 @@ import { runTrader } from "./trader";
 import { runRiskDebate, runRiskManager } from "./risk";
 import { validateAnalystReports } from "./quality-gate";
 import { runQualityReview, formatQualityReview } from "./quality-review";
+import { crossStageChecks } from "./cross-stage-checks";
 import {
   TradingAgentsConfig,
   QuickAnalysisResult,
@@ -595,7 +596,7 @@ export async function runQuickAnalysis(
   const durationMs = Date.now() - startTime;
 
   logProgress(runId, `[4/4] 保存报告...`);
-  reportStore.save(ticker, date, "quick", result, durationMs, allTokens, allCost, runId);
+  reportStore.save(ticker, date, "quick", result, durationMs, allTokens, allCost, runId, traceLogger.warnings);
   saveRawData(detailDir, dataResults, "03_data");
   logProgress(runId, `完成 (${(durationMs / 1000).toFixed(1)}s)`, allTokens, allCost);
 
@@ -607,6 +608,7 @@ export async function runQuickAnalysis(
     total_tokens: allTokens,
     total_cost_usd: allCost,
     llm_call_count: traceLogger.count,
+    warnings: traceLogger.warnings,
   };
   fs.writeFileSync(path.join(traceDir, "run_summary.json"), JSON.stringify({ ...meta, ticker, date, mode: "quick", direction }, null, 2), "utf-8");
 
@@ -757,7 +759,13 @@ export async function runFullAnalysis(
   };
 
   const durationMs = Date.now() - startTime;
-  reportStore.saveFull(ticker, date, result, durationMs, traceLogger.totalTokens, traceLogger.totalCostUsd, runId);
+  // Cross-stage consistency checks run LAST (all stages produced) against the
+  // market's latest close — zero LLM cost, deterministic. Issues land in the
+  // summary JSON so a reviewer sees structural anomalies (target on wrong side,
+  // conservative-reject overruled, retries exhausted, …) at a glance.
+  const latestClose = extractLatestClose(dataResults);
+  const crossIssues = crossStageChecks(result, latestClose);
+  reportStore.saveFull(ticker, date, result, durationMs, traceLogger.totalTokens, traceLogger.totalCostUsd, runId, traceLogger.warnings, crossIssues);
   saveRawData(detailDir, dataResults, "07_data");
   logProgress(runId, `完成 (${(durationMs / 1000).toFixed(1)}s, ${traceLogger.count} LLM calls)`, traceLogger.totalTokens, traceLogger.totalCostUsd);
 
@@ -769,6 +777,7 @@ export async function runFullAnalysis(
     total_tokens: traceLogger.totalTokens,
     total_cost_usd: traceLogger.totalCostUsd,
     llm_call_count: traceLogger.count,
+    warnings: traceLogger.warnings,
   };
   fs.writeFileSync(path.join(traceDir, "run_summary.json"), JSON.stringify({ ...meta, ticker, date, mode: "full", direction: tradingPlan.direction }, null, 2), "utf-8");
 

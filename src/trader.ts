@@ -98,14 +98,18 @@ function parseNumericField(content: string, fieldPattern: string, isPercent: boo
  * anywhere. Sub-batch tranche labels (第一批/第二批/分批/加仓) are never
  * synonyms, so a per-tranche number is never mistaken for the total.
  */
-export function parsePositionPct(content: string): number {
+export function parsePositionPctSource(content: string): { value: number; source: string } {
   let v = parseNumericField(content, "建议仓位", true);
-  if (v > 0) return v;
+  if (v > 0) return { value: v, source: "建议仓位" };
   for (const label of ["减仓总量", "减仓比例", "总仓位", "建仓总量"]) {
     v = parseNumericField(content, label, true);
-    if (v > 0) return v;
+    if (v > 0) return { value: v, source: label };
   }
-  return 0;
+  return { value: 0, source: "none" };
+}
+
+export function parsePositionPct(content: string): number {
+  return parsePositionPctSource(content).value;
 }
 
 function parseListSection(content: string, header: string): string[] {
@@ -213,19 +217,64 @@ export async function runTrader(
   });
 
   const direction = researchDecision.direction;
+  const mappedDirection =
+    direction === "Overweight"
+      ? "Buy"
+      : direction === "Underweight"
+      ? "Sell"
+      : direction;
   // Prefer the structured TRADER_PLAN block; fall back to list-section parsing.
   const plan = parseTraderPlan(result.content);
 
+  const target_price = parseNumericField(result.content, "目标价格", false);
+  const stop_loss = parseNumericField(result.content, "止损价格", false);
+  const posSource = parsePositionPctSource(result.content);
+  const position_pct = posSource.value;
+
+  // Surface silent fallbacks so a reviewer sees where this run degraded.
+  // position_pct: synonym fallback (benign, value recovered) vs total absence
+  // (dangerous — 0 silently defeats the downstream cap-binding). Hold plans
+  // legitimately carry 0%, so never warn on Hold.
+  if (posSource.source !== "建议仓位" && posSource.source !== "none") {
+    traceLogger.recordWarning({
+      phase: "trader",
+      fn: "parsePositionPct",
+      detail: `建议仓位缺失，回退到同义词 ${posSource.source}=${position_pct}%`,
+      severity: "warn",
+    });
+  } else if (position_pct === 0 && mappedDirection !== "Hold") {
+    traceLogger.recordWarning({
+      phase: "trader",
+      fn: "parsePositionPct",
+      detail: "未找到任何仓位标签，position_pct=0（风控 cap 绑定将失效）",
+      severity: "error",
+    });
+  }
+  // target/stop absent on a directional plan → reviewer should notice.
+  if (mappedDirection !== "Hold") {
+    if (target_price === 0) {
+      traceLogger.recordWarning({ phase: "trader", fn: "parseNumericField", detail: "目标价格解析失败，target_price=0", severity: "warn" });
+    }
+    if (stop_loss === 0) {
+      traceLogger.recordWarning({ phase: "trader", fn: "parseNumericField", detail: "止损价格解析失败，stop_loss=0", severity: "warn" });
+    }
+  }
+  // Structured block missing entirely → every signal array fell back to the
+  // brittle list-section parser.
+  if (!plan) {
+    traceLogger.recordWarning({
+      phase: "trader",
+      fn: "parseTraderPlan",
+      detail: "TRADER_PLAN JSON 块缺失，信号字段回退到 list-section 解析",
+      severity: "warn",
+    });
+  }
+
   return {
-    direction:
-      direction === "Overweight"
-        ? "Buy"
-        : direction === "Underweight"
-        ? "Sell"
-        : direction,
-    target_price: parseNumericField(result.content, "目标价格", false),
-    stop_loss: parseNumericField(result.content, "止损价格", false),
-    position_pct: parsePositionPct(result.content),
+    direction: mappedDirection,
+    target_price,
+    stop_loss,
+    position_pct,
     execution_plan: result.content.slice(0, 3000),
     entry_signals: plan?.entry_signals.length ? plan.entry_signals : parseListSection(result.content, "入场信号"),
     exit_signals: plan?.exit_signals.length ? plan.exit_signals : parseListSection(result.content, "退出信号"),

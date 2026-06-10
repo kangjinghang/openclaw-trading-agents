@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { QuickAnalysisResult, FullAnalysisResult, AnalysisReport, QualitySummary, QualityReview } from "./types";
+import { QuickAnalysisResult, FullAnalysisResult, AnalysisReport, QualitySummary, QualityReview, FallbackWarning, CrossStageIssue } from "./types";
 import { toMarkdown, toHtml } from "./report-formatter";
 
 export class ReportStore {
@@ -50,7 +50,8 @@ export class ReportStore {
     durationMs: number,
     totalTokens: number,
     totalCostUsd: number,
-    runId?: string
+    runId?: string,
+    warnings: FallbackWarning[] = []
   ): void {
     const tickerDir = path.join(this.baseDir, ticker);
     const detailDir = path.join(tickerDir, `${date}_${mode}`);
@@ -83,6 +84,7 @@ export class ReportStore {
       analyst_verdicts: analystVerdicts,
       detail_dir: `${date}_${mode}/`,
       trace_count: result.analysts.length + 1,
+      warnings,
     };
 
     this.writeJson(path.join(tickerDir, `${date}_${mode}.json`), summary);
@@ -104,7 +106,9 @@ export class ReportStore {
     durationMs: number,
     totalTokens: number,
     totalCostUsd: number,
-    runId?: string
+    runId?: string,
+    warnings: FallbackWarning[] = [],
+    crossStageIssues: CrossStageIssue[] = []
   ): void {
     const tickerDir = path.join(this.baseDir, ticker);
     const detailDir = path.join(tickerDir, `${date}_full`);
@@ -153,6 +157,8 @@ export class ReportStore {
       analyst_verdicts: analystVerdicts,
       detail_dir: `${date}_full/`,
       trace_count: result.analysts.length + 4 + 1 + 1 + 3 + 1,
+      warnings,
+      cross_stage_issues: crossStageIssues,
     };
 
     this.writeJson(path.join(tickerDir, `${date}_full.json`), summary);

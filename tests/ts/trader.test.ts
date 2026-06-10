@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { runTrader, parseTraderPlan, parsePositionPct } from "../../src/trader";
+import { runTrader, parseTraderPlan, parsePositionPct, parsePositionPctSource } from "../../src/trader";
 import { loadAndRender } from "../../src/prompt-loader";
 import {
   TradingAgentsConfig,
@@ -48,7 +48,7 @@ describe("runTrader", () => {
     mockClient = {
       chat: { completions: { create: vi.fn() } },
     } as any;
-    mockTraceLogger = { record: vi.fn(), count: 0 };
+    mockTraceLogger = { record: vi.fn(), count: 0, recordWarning: vi.fn() };
   });
 
   afterEach(() => {
@@ -704,6 +704,95 @@ T+1.
 
     expect(result.entry_signals).toEqual(["放量突破5.35元", "MACD金叉"]);
     expect(result.invalidations).toEqual(["半年报环比下降30%"]);
+  });
+
+  it("records a warn when position_pct falls back to a synonym (建议仓位 absent)", async () => {
+    // The 600600 regression: a Sell plan phrased the total as 减仓总量 with no
+    // 建议仓位 line. The synonym fallback recovers the value, but a reviewer
+    // must see the run degraded to the synonym path.
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+    mockCreate.mockResolvedValueOnce({
+      choices: [{
+        message: { content: `### 1. 交易方向与仓位
+| **减仓总量** | 不超过总资金的 **30%** |
+### 价格区间
+- **目标价格**：900 元
+- **止损价格**：1100 元
+<!-- VERDICT: {"direction": "Sell", "reason": "减仓"} -->` },
+      }],
+      usage: { prompt_tokens: 800, completion_tokens: 200, total_tokens: 1000 },
+    } as any);
+
+    await runTrader({ ...mockResearchDecision(), direction: "Underweight" }, [], "", mockConfig, mockClient, mockTraceLogger);
+
+    const posCalls = mockTraceLogger.recordWarning.mock.calls.filter((c: any[]) => c[0].fn === "parsePositionPct");
+    expect(posCalls.length).toBeGreaterThanOrEqual(1);
+    expect(posCalls[0][0]).toMatchObject({ phase: "trader", severity: "warn" });
+    expect(posCalls[0][0].detail).toContain("减仓总量");
+  });
+
+  it("records an error when position_pct is 0 on a non-Hold plan", async () => {
+    // No position label at all → position_pct=0, which silently defeats the
+    // downstream cap-binding. This is the dangerous case (error severity).
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+    mockCreate.mockResolvedValueOnce({
+      choices: [{
+        message: { content: `### 交易方向与仓位
+- **建议方向**：买入
+### 价格区间
+- **目标价格**：900 元
+- **止损价格**：850 元
+<!-- VERDICT: {"direction": "Buy", "reason": "建仓"} -->` },
+      }],
+      usage: { prompt_tokens: 800, completion_tokens: 200, total_tokens: 1000 },
+    } as any);
+
+    await runTrader(mockResearchDecision(), [], "", mockConfig, mockClient, mockTraceLogger);
+
+    const posCalls = mockTraceLogger.recordWarning.mock.calls.filter((c: any[]) => c[0].fn === "parsePositionPct");
+    expect(posCalls.length).toBeGreaterThanOrEqual(1);
+    expect(posCalls[0][0]).toMatchObject({ phase: "trader", severity: "error" });
+    expect(posCalls[0][0].detail).toContain("0");
+  });
+
+  it("does NOT warn about position on a Hold plan (0% is legitimate)", async () => {
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+    mockCreate.mockResolvedValueOnce({
+      choices: [{
+        message: { content: `### 交易方向与仓位
+- **建议仓位**：0%
+### 价格区间
+- **目标价格**：1000 元
+- **止损价格**：950 元
+<!-- VERDICT: {"direction": "Hold", "reason": "观望"} -->` },
+      }],
+      usage: { prompt_tokens: 800, completion_tokens: 200, total_tokens: 1000 },
+    } as any);
+
+    await runTrader({ ...mockResearchDecision(), direction: "Hold" }, [], "", mockConfig, mockClient, mockTraceLogger);
+
+    const posCalls = mockTraceLogger.recordWarning.mock.calls.filter((c: any[]) => c[0].fn === "parsePositionPct");
+    expect(posCalls).toHaveLength(0);
+  });
+
+  it("records a warn when target_price/stop_loss parse to 0 on a non-Hold plan", async () => {
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+    mockCreate.mockResolvedValueOnce({
+      choices: [{
+        message: { content: `### 交易方向与仓位
+- **建议仓位**：20%
+### 价格区间
+- 未指定目标价
+- 未指定止损价
+<!-- VERDICT: {"direction": "Buy", "reason": "test"} -->` },
+      }],
+      usage: { prompt_tokens: 800, completion_tokens: 200, total_tokens: 1000 },
+    } as any);
+
+    await runTrader(mockResearchDecision(), [], "", mockConfig, mockClient, mockTraceLogger);
+
+    const numericCalls = mockTraceLogger.recordWarning.mock.calls.filter((c: any[]) => c[0].fn === "parseNumericField");
+    expect(numericCalls.length).toBeGreaterThanOrEqual(2);
   });
 });
 

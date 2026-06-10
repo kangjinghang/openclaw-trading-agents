@@ -2,7 +2,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { LLMCallTrace } from "./types";
+import { LLMCallTrace, FallbackWarning } from "./types";
 
 export class TraceLogger {
   private traceDir: string;
@@ -10,6 +10,7 @@ export class TraceLogger {
   private counter: number = 0;
   private _totalTokens: number = 0;
   private _totalCostUsd: number = 0;
+  private _warnings: FallbackWarning[] = [];
 
   constructor(traceDir: string, runId: string = "") {
     this.traceDir = traceDir;
@@ -50,5 +51,21 @@ export class TraceLogger {
   /** Get the run ID */
   get runId(): string {
     return this._runId;
+  }
+
+  /**
+   * Record a silent fallback that fired (parse → default/synonym/alternative).
+   * `severity` defaults to "warn"; pass "error" for dangerous defaults like
+   * risk → "pass" or a numeric field falling to 0. Kept on the TraceLogger so
+   * warnings share the run's lifecycle without threading a collector through
+   * every pure parse function.
+   */
+  recordWarning(warning: Omit<FallbackWarning, "severity"> & { severity?: FallbackWarning["severity"] }): void {
+    this._warnings.push({ severity: "warn", ...warning } as FallbackWarning);
+  }
+
+  /** Get all fallback warnings recorded this run */
+  get warnings(): FallbackWarning[] {
+    return this._warnings;
   }
 }

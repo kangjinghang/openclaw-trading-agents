@@ -80,6 +80,24 @@ export interface AnalysisReport {
   analyst_verdicts: Record<string, { direction: string; reason: string }>;
   detail_dir: string;
   trace_count: number;
+  /** Silent fallbacks that fired during the run (parse → default/synonym). */
+  warnings?: FallbackWarning[];
+  /** Cross-stage structural anomalies (full mode only). */
+  cross_stage_issues?: CrossStageIssue[];
+}
+
+/**
+ * A structural anomaly across pipeline stages — e.g. the trader's target price
+ * is on the wrong side of the market, risk passed despite a conservative
+ * reject, or analysts are bearish while research says Buy. Unlike the analyst-
+ * only quality gate, these run at the END of the full pipeline and check that
+ * the stages agree with each other and with the market. Deterministic — zero
+ * LLM cost.
+ */
+export interface CrossStageIssue {
+  severity: "warn" | "error";
+  check: string;
+  message: string;
 }
 
 /** Single LLM call trace for auditing */
@@ -110,6 +128,21 @@ export interface LLMCallTrace {
     };
     cost_usd: number;
   };
+}
+
+/**
+ * A silent fallback that fired during a run: a parse/extract path degraded to a
+ * default, synonym, or alternative without failing outright. Surfaces these so a
+ * reviewer can see "this run degraded here" (e.g. position_pct fell back to a
+ * synonym, or risk defaulted to "pass") instead of a report that looks healthy
+ * while a value quietly went wrong. `severity: "error"` marks dangerous defaults
+ * (risk → pass, numeric → 0); `"warn"` marks benign synonyms/fallbacks.
+ */
+export interface FallbackWarning {
+  phase: string;
+  fn: string;
+  detail: string;
+  severity: "warn" | "error";
 }
 
 /** Result from a Python data script */
@@ -303,4 +336,5 @@ export interface RunMeta {
   total_tokens: number;
   total_cost_usd: number;
   llm_call_count: number;
+  warnings?: FallbackWarning[];
 }

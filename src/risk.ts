@@ -262,7 +262,35 @@ export async function runRiskManager(
   // Prefer structured RISK_JUDGE block; fall back to VERDICT when absent.
   const judge = parseRiskJudge(result.content);
   const verdict = parseVerdict(result.content);
-  const status = (judge?.verdict || verdict?.direction || "pass").toLowerCase() as RiskAssessment["status"];
+
+  let status: RiskAssessment["status"];
+  if (!judge && !verdict) {
+    // Scariest fallback: nothing parseable → status silently "pass". Surface
+    // it as an error so a reviewer sees the plan was rubber-stamped by default.
+    status = "pass";
+    traceLogger.recordWarning({
+      phase: "risk",
+      fn: "runRiskManager",
+      detail: "RISK_JUDGE 与 VERDICT 均缺失，status 默认 pass（无法解析风控结论）",
+      severity: "error",
+    });
+  } else {
+    status = (judge?.verdict || verdict!.direction || "pass").toLowerCase() as RiskAssessment["status"];
+  }
+
+  const max_position_override = extractPositionCap(judge?.hard_constraints);
+  // Risk produced hard constraints but none yielded a position-% cap → the
+  // plan's position_pct is uncapped. This is the class behind the 600600
+  // "judge says ≤10% but position stayed 15%" regression (a cap the regex
+  // couldn't extract). Only warn when there's a real position to cap.
+  if (judge && judge.hard_constraints.length > 0 && max_position_override === undefined && tradingPlan.position_pct > 0) {
+    traceLogger.recordWarning({
+      phase: "risk",
+      fn: "extractPositionCap",
+      detail: `有 ${judge.hard_constraints.length} 条硬约束但未提取到仓位% cap，position_pct=${tradingPlan.position_pct}% 未被风控约束`,
+      severity: "warn",
+    });
+  }
 
   const scoreMatch = result.content.match(/风险评分[（(]0-100[)）]?[：:]*\s*\n?\s*(\d+)/) ||
                      result.content.match(/risk.?score[：:]*\s*\n?\s*(\d+)/i);
@@ -272,6 +300,6 @@ export async function runRiskManager(
     judge: judge ?? undefined,
     reasoning: judge?.reason || verdict?.reason || "",
     risk_score: scoreMatch ? parseInt(scoreMatch[1], 10) : 50,
-    max_position_override: extractPositionCap(judge?.hard_constraints),
+    max_position_override,
   };
 }

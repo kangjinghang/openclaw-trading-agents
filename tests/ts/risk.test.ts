@@ -56,7 +56,7 @@ describe("Risk Module", () => {
     mockClient = {
       chat: { completions: { create: vi.fn() } },
     } as any;
-    mockTraceLogger = { record: vi.fn(), count: 0 };
+    mockTraceLogger = { record: vi.fn(), count: 0, recordWarning: vi.fn() };
   });
 
   afterEach(() => {
@@ -226,6 +226,59 @@ describe("Risk Module", () => {
 
       const callArgs = mockCreate.mock.calls[0][0] as any;
       expect(callArgs.model).toBe("gpt-4o"); // mockConfig.models.risk
+    });
+
+    it("records an error when status defaults to pass (RISK_JUDGE + VERDICT both missing)", async () => {
+      // The scariest fallback: nothing parseable → status silently becomes
+      // "pass", rubber-stamping the plan. A reviewer must see this.
+      const mockCreate = vi.mocked(mockClient.chat.completions.create);
+      mockCreate.mockResolvedValueOnce({
+        choices: [{ message: { content: "风控经理输出但无任何结构化结论" } }],
+        usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+      } as any);
+
+      await runRiskManager(
+        { rounds: [[]], risk_arguments: [], total_tokens: 0, total_cost_usd: 0 },
+        mockTradingPlan(),
+        mockConfig,
+        mockClient,
+        mockTraceLogger
+      );
+
+      const calls = mockTraceLogger.recordWarning.mock.calls.filter((c: any[]) => c[0].fn === "runRiskManager");
+      expect(calls.length).toBeGreaterThanOrEqual(1);
+      expect(calls[0][0]).toMatchObject({ phase: "risk", severity: "error" });
+      expect(calls[0][0].detail).toContain("pass");
+    });
+
+    it("records a warn when hard_constraints exist but no position cap is extractable", async () => {
+      // Risk gave constraints, but none matched the position-cap regex → cap
+      // undefined → position_pct uncapped. This is the class that produced the
+      // 600600 "judge says ≤10% but position stayed 15%" bug.
+      const mockCreate = vi.mocked(mockClient.chat.completions.create);
+      mockCreate.mockResolvedValueOnce({
+        choices: [{
+          message: {
+            content: `### 1. 风险评分（0-100）
+55
+
+<!-- RISK_JUDGE: {"verdict": "pass", "reason": "ok", "hard_constraints": ["止损价≥60.5元", "开盘不追高"], "soft_constraints": [], "execution_preconditions": [], "de_risk_triggers": []} -->`,
+          },
+        }],
+        usage: { prompt_tokens: 600, completion_tokens: 200, total_tokens: 800 },
+      } as any);
+
+      await runRiskManager(
+        { rounds: [[]], risk_arguments: [], total_tokens: 0, total_cost_usd: 0 },
+        mockTradingPlan(), // position_pct: 30, uncapped
+        mockConfig,
+        mockClient,
+        mockTraceLogger
+      );
+
+      const calls = mockTraceLogger.recordWarning.mock.calls.filter((c: any[]) => c[0].fn === "extractPositionCap");
+      expect(calls.length).toBeGreaterThanOrEqual(1);
+      expect(calls[0][0]).toMatchObject({ phase: "risk", severity: "warn" });
     });
   });
 

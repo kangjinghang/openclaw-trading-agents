@@ -319,3 +319,82 @@ describe("ReportStore.saveFull token/cost (review gap #7)", () => {
     expect(summary.total_cost_usd).toBe(0.012);
   });
 });
+
+describe("ReportStore warnings persistence (review gap #2 silent-fallback visibility)", () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    if (tmpDir && fs.existsSync(tmpDir)) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  function quickResult(): QuickAnalysisResult {
+    return {
+      ticker: "600519",
+      date: "2026-06-05",
+      mode: "quick",
+      analysts: [],
+      final: {
+        ticker: "600519", company_name: "T", date: "2026-06-05",
+        direction: "Buy", confidence: 0.7, target_price: 100, stop_loss: 90,
+        position_pct: 10, reasoning: "", key_risks: [],
+        analyst_verdicts: {}, bull_bear_summary: "",
+        risk_assessment: "pass", execution_plan: "", next_review_trigger: "",
+      },
+    };
+  }
+
+  it("save persists fallback warnings into the summary JSON (quick)", () => {
+    tmpDir = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "report-warn-test-"));
+    const store = new ReportStore(tmpDir);
+    const warnings = [
+      { phase: "trader", fn: "parsePositionPct", detail: "回退到减仓总量=30%", severity: "warn" as const },
+      { phase: "risk", fn: "runRiskManager", detail: "status 默认 pass", severity: "error" as const },
+    ];
+
+    store.save("600519", "2026-06-05", "quick", quickResult(), 15000, 2500, 0.012, "run-w", warnings);
+
+    const summary = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "600519", "2026-06-05_quick.json"), "utf-8")
+    );
+    expect(summary.warnings).toEqual(warnings);
+  });
+
+  it("save defaults warnings to [] when none are passed (backward compatible)", () => {
+    tmpDir = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "report-warn-test-"));
+    const store = new ReportStore(tmpDir);
+
+    store.save("600519", "2026-06-05", "quick", quickResult(), 15000, 2500, 0.012);
+
+    const summary = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "600519", "2026-06-05_quick.json"), "utf-8")
+    );
+    expect(summary.warnings).toEqual([]);
+  });
+
+  it("saveFull persists cross_stage_issues into the full summary", () => {
+    tmpDir = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "report-warn-test-"));
+    const store = new ReportStore(tmpDir);
+    const full: FullAnalysisResult = {
+      ticker: "600519", date: "2026-06-05", mode: "full",
+      analysts: [],
+      debate: { rounds: [], bull_summary: "", bear_summary: "", total_tokens: 0, total_cost_usd: 0 },
+      research_decision: { direction: "Buy", confidence: 0.7, bull_score: 70, bear_score: 40, reasoning: "", key_debate_points: [], verdict: { direction: "Buy", reason: "" } },
+      trading_plan: { direction: "Buy", target_price: 0, stop_loss: 0, position_pct: 0, execution_plan: "", entry_signals: [], exit_signals: [], invalidations: [], key_risks: [], t_plus_1_note: "" },
+      risk_debate: { rounds: [], risk_arguments: [], total_tokens: 0, total_cost_usd: 0 },
+      risk_assessment: { status: "pass", reasoning: "", risk_score: 50 },
+      final: { ticker: "600519", company_name: "T", date: "2026-06-05", direction: "Buy", confidence: 0.7, target_price: 0, stop_loss: 0, position_pct: 0, reasoning: "", key_risks: [], analyst_verdicts: {}, bull_bear_summary: "", risk_assessment: "pass", execution_plan: "", next_review_trigger: "" },
+    };
+    const issues = [
+      { severity: "warn" as const, check: "consensus_conflict", message: "分析师看空但研究 Buy" },
+    ];
+
+    store.saveFull("600519", "2026-06-05", full, 15000, 2500, 0.012, "run-c", [], issues);
+
+    const summary = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "600519", "2026-06-05_full.json"), "utf-8")
+    );
+    expect(summary.cross_stage_issues).toEqual(issues);
+  });
+});

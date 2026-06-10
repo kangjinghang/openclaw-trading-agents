@@ -20,6 +20,7 @@ export interface ReportSummary {
   analyst_verdicts: Record<string, { direction: string; reason: string }>;
   trace_count: number;
   risk_assessment?: string;
+  warnings?: Array<{ phase: string; fn: string; detail: string; severity: "warn" | "error" }>;
 }
 
 /** Scan report directory and return all report summaries */
@@ -228,6 +229,7 @@ function toSummary(raw: any): ReportSummary {
     analyst_verdicts: raw.analyst_verdicts || {},
     trace_count: raw.trace_count || 0,
     risk_assessment: raw.final?.risk_assessment,
+    warnings: raw.warnings || [],
   };
 }
 

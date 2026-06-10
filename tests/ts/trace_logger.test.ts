@@ -198,4 +198,24 @@ describe("TraceLogger", () => {
     const first = JSON.parse(fs.readFileSync(path.join(traceDir, "bull-bull-aaa.json"), "utf-8"));
     expect(first.trace_id).toBe("bull-aaa");
   });
+
+  it("Should collect fallback warnings and expose them via the warnings getter", () => {
+    // Silent fallbacks (parse failure → default/synonym/alternative) used to be
+    // invisible: a run looked healthy while position_pct quietly fell to 0 or
+    // risk defaulted to "pass". Each such fallback must leave a warning so a
+    // reviewer can see "this run degraded here". recordWarning() accumulates;
+    // the warnings getter returns the list. Default severity is "warn";
+    // dangerous defaults (e.g. risk → pass) use "error".
+    traceDir = fs.mkdtempSync(path.join(os.tmpdir(), "trace-test-"));
+    const logger = new TraceLogger(traceDir, "run-warn");
+
+    expect(logger.warnings).toEqual([]);
+
+    logger.recordWarning({ phase: "trader", fn: "parsePositionPct", detail: "建议仓位缺失，回退到减仓总量=30%" });
+    logger.recordWarning({ phase: "risk", fn: "runRiskManager", detail: "RISK_JUDGE+VERDICT 都缺失，默认 pass", severity: "error" });
+
+    expect(logger.warnings).toHaveLength(2);
+    expect(logger.warnings[0]).toMatchObject({ phase: "trader", fn: "parsePositionPct", severity: "warn" });
+    expect(logger.warnings[1]).toMatchObject({ phase: "risk", severity: "error", detail: expect.stringContaining("默认 pass") });
+  });
 });
