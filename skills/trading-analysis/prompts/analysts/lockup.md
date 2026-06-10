@@ -13,7 +13,7 @@
 
 ## 分析任务
 
-标的：{{ticker}}
+标的：{{ticker}}（{{company_info}}）
 分析日期：{{date}}
 
 ## 解禁数据

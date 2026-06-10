@@ -564,7 +564,7 @@ function renderTable() {
     const flagBadge = flagCount ? `<span class="warn-badge" title="${flagCount} 条 review 告警${flagErrs ? `（${flagErrs} error）` : ''}">⚠ ${flagCount}</span>` : '';
 
     return `<tr data-id="${r.id}">
-      <td style="font-weight:500">${r.ticker}</td>
+      <td style="font-weight:500">${r.ticker}<br><span style="color:var(--text3);font-size:11px;font-weight:400">${r.company_name || ''}</span></td>
       <td style="color:var(--text2)">${r.date}</td>
       <td>${badgeHtml(r.mode, 'badge-' + r.mode)}</td>
       <td>${badgeHtml(r.direction, dirClass)}</td>

@@ -119,7 +119,16 @@ function execPythonRaw(
   timeoutMs: number
 ): Promise<ScriptResult> {
   return new Promise((resolve) => {
-    const python = spawn(pythonCmd, [scriptPath, ...args]);
+    // PYTHONUTF8=1 + -X utf8 force Python 3.7+ to use UTF-8 for stdout/stderr.
+    // On Windows, Python defaults to the system locale (GBK for zh-CN),
+    // which garbles Chinese characters when Node decodes as UTF-8.
+    // On Linux/macOS this is a no-op (already UTF-8).
+    // Both the env var AND the CLI flag are needed: the env var covers
+    // child processes / library code; the flag covers the main interpreter's
+    // stdin/stdout encoding (env var alone can miss the pipe case on Windows).
+    const python = spawn(pythonCmd, ['-X', 'utf8', scriptPath, ...args], {
+      env: { ...process.env, PYTHONUTF8: '1' },
+    });
 
     let stdout = '';
     let stderr = '';

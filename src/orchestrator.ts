@@ -440,7 +440,7 @@ async function runAnalystPhase(
   traceLogger: TraceLogger,
   runId: string,
   health: PipelineHealth
-): Promise<{ analystReports: AnalystReport[]; totalTokens: number; totalCostUsd: number; dataResults: Array<{ role: string; result: ScriptResult }> }> {
+): Promise<{ analystReports: AnalystReport[]; totalTokens: number; totalCostUsd: number; dataResults: Array<{ role: string; result: ScriptResult }>; companyName: string }> {
   let totalTokens = 0;
   let totalCostUsd = 0;
 
@@ -479,7 +479,10 @@ async function runAnalystPhase(
   );
   if (health.hasAbort) {
     logProgress(runId, `❌ 管道中止: ${health.getIssues("data_collection").map(i => i.message).join("; ")}`);
-    return { analystReports: [], totalTokens: 0, totalCostUsd: 0, dataResults };
+    const fallbackName = (dataResults.find(r => r.role === "fundamentals")?.result?.data as any)?.valuation?.name
+      || (dataResults.find(r => r.role === "fundamentals")?.result?.data as any)?.stock_info?.name
+      || "";
+    return { analystReports: [], totalTokens: 0, totalCostUsd: 0, dataResults, companyName: fallbackName };
   }
   for (const { role, result } of dataResults) {
     if (!result.success) {
@@ -507,6 +510,17 @@ async function runAnalystPhase(
     dataQualityMap[role] = generateDataQuality(role, date, result);
   }
 
+  // Extract company name + industry from fundamentals data so all analysts
+  // know the correct stock identity (prevents LLM fabricating wrong company).
+  const fundamentalsData = dataResults.find(r => r.role === "fundamentals")?.result?.data as any;
+  const companyName = fundamentalsData?.valuation?.name
+    || fundamentalsData?.stock_info?.name
+    || "";
+  const industry = fundamentalsData?.stock_info?.industry || "";
+  const companyInfo = companyName
+    ? `${companyName}${industry ? `（${industry}）` : ""}（${ticker}）`
+    : ticker;
+
   // ── Phase 2: Run all 7 analysts with concurrency limit ─────────
   logProgress(runId, "[2/4] 分析师阶段 7 个分析师...");
   const promptsBaseDir = path.join(SKILLS_DIR, "trading-analysis", "prompts");
@@ -522,7 +536,7 @@ async function runAnalystPhase(
         const roleVars = buildTemplateVars(cfg.role, cfg.dataKey, dataJson);
         const userMessage = loadAndRender(
           cfg.prompt,
-          { ticker, date, ...roleVars, vpa: vpaMap[cfg.role] || "", technical_indicators: tiMap[cfg.role] || "", data_quality: dataQualityMap[cfg.role] },
+          { ticker, date, company_info: companyInfo, ...roleVars, vpa: vpaMap[cfg.role] || "", technical_indicators: tiMap[cfg.role] || "", data_quality: dataQualityMap[cfg.role] },
           promptsBaseDir
         );
 
@@ -596,7 +610,7 @@ async function runAnalystPhase(
   const analystEmpty = analystReports.filter(r => r.content.startsWith("[分析失败")).length;
   logProgress(runId, `[2/4] 分析师阶段完成${analystEmpty > 0 ? ` (${analystEmpty} 个失败)` : ""}`);
 
-  return { analystReports, totalTokens, totalCostUsd, dataResults };
+  return { analystReports, totalTokens, totalCostUsd, dataResults, companyName };
 }
 
 /**
@@ -627,7 +641,7 @@ export async function runQuickAnalysis(
   validateEnvironment(config.report_dir);
 
   const health = new PipelineHealth(runId);
-  const { analystReports, totalTokens, totalCostUsd, dataResults } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health);
+  const { analystReports, totalTokens, totalCostUsd, dataResults, companyName } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health);
 
   if (signal?.aborted) throw new AbortError();
 
@@ -710,7 +724,7 @@ export async function runQuickAnalysis(
 
   const finalDecision: FinalDecision = {
     ticker,
-    company_name: ticker,
+    company_name: companyName || ticker,
     date,
     direction,
     confidence: 0.7,
@@ -796,7 +810,7 @@ export async function runFullAnalysis(
 
   // Phase 1-2: Analysts
   const health = new PipelineHealth(runId);
-  const { analystReports, dataResults } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health);
+  const { analystReports, dataResults, companyName } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health);
 
   if (signal?.aborted) throw new AbortError();
 
@@ -903,7 +917,7 @@ export async function runFullAnalysis(
 
   const finalDecision: FinalDecision = {
     ticker,
-    company_name: ticker,
+    company_name: companyName || ticker,
     date,
     direction: tradingPlan.direction,
     confidence: researchDecision.confidence,

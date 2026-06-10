@@ -77,7 +77,9 @@ def fetch_fundamentals(ticker, date):
     except Exception as e:
         data["financial_snapshot_error"] = str(e)
 
-    # 3. Eastmoney: basic stock info
+    # 3. Eastmoney: basic stock info (industry, company name)
+    #    Primary: push2 API. Fallback: datacenter API (immune to push2 rate-limit).
+    info = {}
     try:
         market_code = 1 if code.startswith("6") else 0
         url = "https://push2.eastmoney.com/api/qt/stock/get"
@@ -89,19 +91,47 @@ def fetch_fundamentals(ticker, date):
         r = em_get(url, params=params, timeout=10)
         d = r.json().get("data", {})
         if d:
-            info = {}
             if d.get("f127"):
                 info["industry"] = d["f127"]
+            if d.get("f58"):
+                info["name"] = d["f58"]
             if d.get("f84"):
                 info["total_shares"] = d["f84"]
             if d.get("f85"):
                 info["float_shares"] = d["f85"]
             if d.get("f116"):
                 info["total_mv"] = d["f116"]
-            if info:
-                data["stock_info"] = info
     except Exception as e:
-        data["stock_info_error"] = str(e)
+        data["stock_info_push2_error"] = str(e)
+
+    # Fallback: datacenter API (uses datacenter-web.eastmoney.com which is
+    # NOT subject to push2's per-IP rate-limiting). Only runs when push2
+    # failed to return industry info.
+    if not info.get("industry"):
+        try:
+            url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+            params = {
+                "reportName": "RPT_LICO_FN_CPD",
+                "columns": "SECURITY_NAME_ABBR,BOARD_NAME,TRADE_MARKET",
+                "filter": f'(SECURITY_CODE="{code}")',
+                "pageSize": "1",
+            }
+            r = em_get(url, params=params, timeout=10)
+            result = r.json().get("result") or {}
+            items = result.get("data") or []
+            if items:
+                item = items[0]
+                if item.get("BOARD_NAME"):
+                    info["industry"] = item["BOARD_NAME"]
+                if item.get("SECURITY_NAME_ABBR"):
+                    info["name"] = item["SECURITY_NAME_ABBR"]
+        except Exception as e2:
+            data["stock_info_datacenter_error"] = str(e2)
+
+    if info:
+        data["stock_info"] = info
+    elif "stock_info_push2_error" not in data:
+        data["stock_info_error"] = "both push2 and datacenter returned no data"
 
     # 4. Eastmoney Datacenter: quarterly financial trends (last 4 quarters)
     try:
