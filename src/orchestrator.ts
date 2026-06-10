@@ -26,6 +26,7 @@ import {
 } from "./types";
 import { AbortError, ParseError, EnvironmentError } from "./errors";
 import { DATA_FETCH_STAGGER_MS, LLM_CALL_STAGGER_MS, DEFAULT_CONCURRENCY } from "./constants";
+import { PipelineHealth } from "./pipeline-health";
 import * as path from "path";
 import * as os from "os";
 import * as fs from "fs";
@@ -126,6 +127,58 @@ export function generateDataQuality(role: string, date: string, result: ScriptRe
   }
 
   return "✅ 数据完整：数据源获取正常，所有字段可用。可以正常进行分析和判断。";
+}
+
+/**
+ * Build template variable mapping for an analyst role.
+ * Most roles use a 1:1 mapping { [dataKey]: dataJson }.
+ * News, sentiment, and policy roles need the data JSON split into
+ * multiple template variables to match their prompt templates
+ * (e.g. {{stock_news}} + {{macro_news}} instead of {{news}}).
+ */
+export function buildTemplateVars(
+  role: string,
+  dataKey: string,
+  dataJson: string
+): Record<string, string> {
+  const defaults: Record<string, string> = { [dataKey]: dataJson };
+  if (dataJson.startsWith("[数据缺失")) return defaults;
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(dataJson);
+  } catch {
+    return defaults;
+  }
+
+  switch (role) {
+    case "news":
+    case "policy": {
+      // Templates expect {{stock_news}} and {{macro_news}}.
+      // news.py output: {stock_news, news_layers, layer_stats, macro_news, ...}
+      const stockPart: any = {};
+      if (parsed.stock_news !== undefined) stockPart.stock_news = parsed.stock_news;
+      if (parsed.news_layers !== undefined) stockPart.news_layers = parsed.news_layers;
+      if (parsed.layer_stats !== undefined) stockPart.layer_stats = parsed.layer_stats;
+
+      const macroPart: any = {};
+      if (parsed.macro_news !== undefined) macroPart.macro_news = parsed.macro_news;
+
+      return {
+        stock_news: Object.keys(stockPart).length > 0
+          ? JSON.stringify(stockPart, null, 2)
+          : "[数据缺失: 个股新闻]",
+        macro_news: Object.keys(macroPart).length > 0
+          ? JSON.stringify(macroPart, null, 2)
+          : "[数据缺失: 宏观新闻]",
+      };
+    }
+    case "sentiment":
+      // Template expects {{sentiment_data}}, not {{sentiment}}
+      return { sentiment_data: dataJson };
+    default:
+      return defaults;
+  }
 }
 
 /** Generate analyst consensus summary from all analyst reports */
@@ -372,7 +425,8 @@ async function runAnalystPhase(
   config: TradingAgentsConfig,
   openaiClient: OpenAI,
   traceLogger: TraceLogger,
-  runId: string
+  runId: string,
+  health: PipelineHealth
 ): Promise<{ analystReports: AnalystReport[]; totalTokens: number; totalCostUsd: number; dataResults: Array<{ role: string; result: ScriptResult }> }> {
   let totalTokens = 0;
   let totalCostUsd = 0;
@@ -405,6 +459,22 @@ async function runAnalystPhase(
   const dataFailed = dataResults.filter(d => !d.result.success).length;
   logProgress(runId, `[1/4] 数据采集完成 (${ANALYST_CONFIGS.length - dataFailed}/${ANALYST_CONFIGS.length} 成功${dataFailed > 0 ? `, ${dataFailed} 失败` : ""})`);
 
+  // CP1: Data collection gate
+  health.check("data_collection", "abort", "majority_scripts_failed",
+    dataFailed < 6,
+    `${dataFailed}/${ANALYST_CONFIGS.length} 数据源失败，无法进行有效分析`
+  );
+  if (health.hasAbort) {
+    logProgress(runId, `❌ 管道中止: ${health.getIssues("data_collection").map(i => i.message).join("; ")}`);
+    return { analystReports: [], totalTokens: 0, totalCostUsd: 0, dataResults };
+  }
+  for (const { role, result } of dataResults) {
+    if (!result.success) {
+      health.add({ stage: "data_collection", severity: "warn", check: "script_failed",
+        message: `数据源 ${role} 获取失败: ${(result.error || "").slice(0, 60)}`, context: { role } });
+    }
+  }
+
   const dataMap: Record<string, string> = {};
   const vpaMap: Record<string, string> = {};
   const tiMap: Record<string, string> = {};
@@ -436,11 +506,32 @@ async function runAnalystPhase(
     async (cfg, idx) => {
       try {
         const dataJson = dataMap[cfg.role];
+        const roleVars = buildTemplateVars(cfg.role, cfg.dataKey, dataJson);
         const userMessage = loadAndRender(
           cfg.prompt,
-          { ticker, date, [cfg.dataKey]: dataJson, vpa: vpaMap[cfg.role] || "", technical_indicators: tiMap[cfg.role] || "", data_quality: dataQualityMap[cfg.role] },
+          { ticker, date, ...roleVars, vpa: vpaMap[cfg.role] || "", technical_indicators: tiMap[cfg.role] || "", data_quality: dataQualityMap[cfg.role] },
           promptsBaseDir
         );
+
+        // CP2: Template render gate — detect un-replaced placeholders
+        const remainingPlaceholders = userMessage.match(/\{\{(\w+)\}\}/g);
+        if (remainingPlaceholders) {
+          health.add({
+            stage: "template_render",
+            severity: "skip",
+            check: "placeholders_remaining",
+            message: `${cfg.role} 有 ${remainingPlaceholders.length} 个占位符未替换: ${remainingPlaceholders.join(", ")}`,
+            context: { role: cfg.role, placeholders: remainingPlaceholders.map(p => p.replace(/[{}]/g, "")) },
+          });
+          logProgress(runId, `  ⚠ 跳过 ${cfg.role}: 占位符未替换`);
+          analystReports[idx] = {
+            role: cfg.role,
+            content: `[分析跳过: 模板占位符未替换 — ${remainingPlaceholders.join(", ")}]`,
+            verdict: { direction: "中性", reason: "模板渲染异常，数据未注入" },
+            data_sources_used: [],
+          } as AnalystReport;
+          return;
+        }
 
         const llmResult = await callLLM(openaiClient, {
           model: config.models.analyst,
@@ -456,6 +547,18 @@ async function runAnalystPhase(
         totalCostUsd += llmResult.costUsd;
 
         const verdict = parseVerdict(llmResult.content);
+
+        // CP3: Analyst output gate
+        health.check("analyst_output", "warn", "verdict_missing",
+          verdict !== null,
+          `${cfg.role} VERDICT 解析失败，使用默认中性`,
+          { role: cfg.role }
+        );
+        health.check("analyst_output", "warn", "content_too_short",
+          llmResult.content.length >= 200,
+          `${cfg.role} 输出过短 (${llmResult.content.length} chars)，可能敷衍`,
+          { role: cfg.role, contentLength: llmResult.content.length }
+        );
 
         analystReports[idx] = {
           role: cfg.role,
@@ -510,7 +613,8 @@ export async function runQuickAnalysis(
   logProgress(runId, `开始 Quick 分析 ${ticker} (${date})`);
   validateEnvironment(config.report_dir);
 
-  const { analystReports, totalTokens, totalCostUsd, dataResults } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId);
+  const health = new PipelineHealth(runId);
+  const { analystReports, totalTokens, totalCostUsd, dataResults } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health);
 
   if (signal?.aborted) throw new AbortError();
 
@@ -656,7 +760,8 @@ export async function runFullAnalysis(
   validateEnvironment(config.report_dir);
 
   // Phase 1-2: Analysts
-  const { analystReports, dataResults } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId);
+  const health = new PipelineHealth(runId);
+  const { analystReports, dataResults } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health);
 
   if (signal?.aborted) throw new AbortError();
 
