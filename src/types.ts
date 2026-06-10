@@ -84,6 +84,8 @@ export interface AnalysisReport {
   warnings?: FallbackWarning[];
   /** Cross-stage structural anomalies (full mode only). */
   cross_stage_issues?: CrossStageIssue[];
+  /** Pipeline health issues collected at each checkpoint. */
+  pipeline_health?: PipelineIssue[];
 }
 
 /**
@@ -98,6 +100,20 @@ export interface CrossStageIssue {
   severity: "warn" | "error";
   check: string;
   message: string;
+}
+
+/** A single pipeline health check result. */
+export interface PipelineIssue {
+  /** Pipeline stage where the issue was detected. */
+  stage: "data_collection" | "template_render" | "analyst_output" | "quality_gate" | "quality_review" | "cross_stage";
+  /** abort = stop pipeline; skip = skip this item; warn = record only. */
+  severity: "abort" | "skip" | "warn";
+  /** Short check name (e.g. "placeholders_remaining"). */
+  check: string;
+  /** Human-readable description. */
+  message: string;
+  /** Optional context (role, placeholder names, etc.). */
+  context?: Record<string, any>;
 }
 
 /** Single LLM call trace for auditing */
