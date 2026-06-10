@@ -37,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 风险辩论三角色 A 股对称重述（`src/risk.ts`）：aggressive/conservative/neutral 每角色从一句话扩写为带反述/阈值/例子的整段框架
 
 **工程稳健性**
+- 管道健康关卡框架（`src/pipeline-health.ts` + `src/orchestrator.ts`）：PipelineHealth 收集器贯穿全管道，6 个关卡（数据采集/模板渲染/分析师输出/质量门/可信度复核/跨阶段），三级拦截（abort=中止/skip=跳过/warn=记录）。核心新增 CP2 模板渲染门——检测 `{{...}}` 占位符未替换则跳过该分析师 LLM 调用（防同类 bug 重演）。所有关卡结果落 summary JSON + run_summary.json + dashboard 告警条
+- `buildTemplateVars` 模板数据映射修复（`src/orchestrator.ts`）：news/sentiment/policy 三个分析师的模板占位符（`{{stock_news}}`/`{{macro_news}}`/`{{sentiment_data}}`）与代码注入变量名（`news`/`sentiment`）不匹配，数据从未注入 prompt。新增 `buildTemplateVars()` 按 role 拆分数据 JSON 为模板期望的多变量映射。实跑 600315 验证：sentiment 从"中性滑水"变为有观点的"看空"
 - 数据抓取 retry/backoff（`http_helpers.py`）：`_with_retry` 指数退避（默认只重试 ConnectionError，不重试 Timeout，防撞爆 30s 脚本预算）+ `http_get` drop-in 替换裸 requests.get
 - market 数据完整性检查（`src/orchestrator.ts`）：K 线 ≥50 行下限 + 日期新鲜度（gap>7 天），仅 market role，抓"看起来有数据实际是坏数据"
 - 质量门输出持久化（`src/report-store.ts`）：`saveQualitySummary` 把 Layer-1 grades + Layer-2 review 落盘到 `{detailDir}/00_quality.json`，在质量门算完立即写（不等后续阶段），mid-run 崩了也留审计。此前这块数据算完只注入 prompt 就丢，post-run 只能去 trace 里翻 prompt 输入
