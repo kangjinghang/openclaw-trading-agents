@@ -5,7 +5,7 @@ import * as path from "path";
 import * as os from "os";
 
 const DEFAULT_CONFIG: TradingAgentsConfig = {
-  models: { analyst: "gpt-4o", debater: "claude-sonnet-4-6", decision: "claude-sonnet-4-6", risk: "gpt-4o" },
+  models: { analyst: "glm-4.7-flash", debater: "glm-4.7", decision: "glm-4.7", risk: "glm-4.7" },
   debate_rounds: 2,
   risk_debate_rounds: 1,
   max_risk_retries: 1,
@@ -24,14 +24,60 @@ function resolveConfig(userConfig?: Partial<TradingAgentsConfig>): TradingAgents
   };
 }
 
+/**
+ * Build an OpenAI client from the host's configured provider.
+ * Uses api.runtime.modelAuth to resolve the API key, and api.config
+ * to extract the provider's baseUrl.
+ */
+async function buildClientFromHost(api: any): Promise<OpenAI> {
+  const cfg = api.config;
+  // Find the first configured provider with a baseUrl (e.g., zai)
+  const providers = cfg?.models?.providers || {};
+  let baseUrl: string | undefined;
+  let providerName: string | undefined;
+  for (const [name, provider] of Object.entries(providers)) {
+    const p = provider as any;
+    if (p?.baseUrl) {
+      baseUrl = p.baseUrl;
+      providerName = name;
+      break;
+    }
+  }
+
+  // Try to resolve API key via OpenClaw's model auth
+  let apiKey: string | undefined;
+  if (api.runtime?.modelAuth?.resolveApiKeyForProvider && providerName) {
+    try {
+      const auth = await api.runtime.modelAuth.resolveApiKeyForProvider({
+        provider: providerName,
+        cfg,
+      });
+      apiKey = auth?.apiKey;
+    } catch {
+      // Fall through to env vars
+    }
+  }
+
+  // Fallback: env vars (OPENAI_API_KEY / OPENAI_BASE_URL)
+  const constructorOpts: ConstructorParameters<typeof OpenAI>[0] = {};
+  if (apiKey) constructorOpts.apiKey = apiKey;
+  if (baseUrl) constructorOpts.baseURL = baseUrl;
+
+  return new OpenAI(constructorOpts);
+}
+
 export default {
   id: "trading-agents",
   name: "Trading Agents - A股多角色分析",
   description: "Multi-agent A-share stock analysis with debate-driven decision making",
 
   register(api: any) {
-    const config = resolveConfig(api?.getConfig?.("trading-agents"));
-    const client = new OpenAI();
+    const config = resolveConfig(api.pluginConfig || api?.getConfig?.("trading-agents"));
+    let client: OpenAI | undefined;
+    async function getClient(): Promise<OpenAI> {
+      if (!client) client = await buildClientFromHost(api);
+      return client;
+    }
 
     // Register trading_quick tool
     api.registerTool({
@@ -49,16 +95,18 @@ export default {
       async execute(toolCallId: string, params: { ticker: string; date?: string }) {
         const date = params.date || new Date().toISOString().split("T")[0];
         try {
-          const [result] = await runQuickAnalysis(params.ticker, date, config, client);
-          return { type: "text", text: JSON.stringify(result, null, 2) };
+          const [result] = await runQuickAnalysis(params.ticker, date, config, await getClient());
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
         } catch (err: any) {
           return {
-            type: "text",
-            text: JSON.stringify({
-              error: true,
-              message: err.message,
-              ticker: params.ticker
-            })
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                error: true,
+                message: err.message,
+                ticker: params.ticker
+              })
+            }]
           };
         }
       },
@@ -80,16 +128,18 @@ export default {
       async execute(toolCallId: string, params: { ticker: string; date?: string }) {
         const date = params.date || new Date().toISOString().split("T")[0];
         try {
-          const [result] = await runFullAnalysis(params.ticker, date, config, client);
-          return { type: "text", text: JSON.stringify(result, null, 2) };
+          const [result] = await runFullAnalysis(params.ticker, date, config, await getClient());
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
         } catch (err: any) {
           return {
-            type: "text",
-            text: JSON.stringify({
-              error: true,
-              message: err.message,
-              ticker: params.ticker
-            })
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                error: true,
+                message: err.message,
+                ticker: params.ticker
+              })
+            }]
           };
         }
       },
@@ -115,9 +165,9 @@ export default {
         const filePath = path.join(reportDir, params.ticker, `${params.date}_${mode}.json`);
         const fs = await import("fs");
         if (!fs.existsSync(filePath)) {
-          return { type: "text", text: JSON.stringify({ error: "Report not found" }) };
+          return { content: [{ type: "text", text: JSON.stringify({ error: "Report not found" }) }] };
         }
-        return { type: "text", text: fs.readFileSync(filePath, "utf-8") };
+        return { content: [{ type: "text", text: fs.readFileSync(filePath, "utf-8") }] };
       },
     });
   },

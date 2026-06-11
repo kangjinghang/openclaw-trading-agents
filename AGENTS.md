@@ -9,6 +9,8 @@ npm run build                       # tsc → dist/
 npm test                            # vitest run (50+ tests in tests/ts/)
 npm run lint                        # eslint src/
 npx tsc --noEmit                    # typecheck (no output = pass)
+npm run analyze                     # node dist/cli.js (quick/full commands)
+npm run dashboard                   # node dist/dashboard.js
 ```
 
 **Order matters**: `build` before `test` — tests import from `dist/`.
@@ -36,8 +38,10 @@ This is an OpenClaw plugin (`openclaw.plugin.json`) with 3 tools:
 **Key directories**:
 - `skills/trading-analysis/prompts/` — all LLM prompt templates (`.md` with `{{placeholder}}` syntax)
 - `skills/*/scripts/` — Python data-fetchers (each outputs JSON to stdout)
+- `skills/_shared/` — shared Python utilities (http_helpers.py)
 - `src/` — TypeScript pipeline logic
 - `tests/ts/` — vitest tests (mock LLM + Python; no real API calls)
+- `tests/scripts/` — Python unit tests (pytest, separate from vitest)
 
 ## VERDICT Protocol
 
@@ -56,6 +60,7 @@ Parse with `parseVerdict()` in `src/llm-client.ts`. Direction values vary by pha
 - `tests/scripts/` has Python unit tests (pytest, separate from vitest)
 - No real API keys needed for tests — everything is stubbed
 - `tests/ts/integration.test.ts` covers the full pipeline with mocks
+- Vitest config: `vitest.config.ts` — globals enabled, node environment, `tests/ts/**/*.test.ts`
 
 ## Pre-commit
 
@@ -69,11 +74,13 @@ Husky runs `npx lint-staged` on commit:
 - `OPENAI_BASE_URL` — optional, for compatible APIs (ZhiPu, DeepSeek, etc.)
 - Python 3.11+ required for data scripts
 - Data scripts use mootdx (primary) + akshare (fallback) for A-share data
+- CI tests on Node 18, 20, 22 (ubuntu-latest)
 
 ## Conventions
 
 - TypeScript strict mode, ES2020 target, CommonJS modules
-- No ESLint/Prettier config beyond `eslint.config.js` defaults
+- ESLint config: `eslint.config.js` — `@typescript-eslint/no-unused-vars: warn`, `@typescript-eslint/no-explicit-any: warn`
+- No Prettier — rely on eslint --fix for formatting
 - All LLM output parsing is in `src/llm-client.ts` — new verdict formats go there
 - Prompt templates use `{{key}}` placeholders, rendered by `src/prompt-loader.ts`
 - Python scripts output JSON to stdout, errors to stderr

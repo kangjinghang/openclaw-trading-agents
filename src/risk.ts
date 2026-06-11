@@ -168,13 +168,18 @@ export function extractPositionCap(
   const caps: number[] = [];
   for (const c of hardConstraints) {
     // Skip sub-batch constraints — they're not total-position caps.
-    if (/首批|首笔|首次|分批|加仓/.test(c)) continue;
-    // Match 仓位 OR 持仓 (synonyms in A-share trading). The % sign is REQUIRED:
-    // it's what distinguishes a position-PERCENT cap ("仓位≤30%") from an
-    // absolute-quantity constraint ("持仓量≤100万手" = open interest, no %).
-    const m = c.match(/(?:仓位|持仓)\s*(?:≤|<=|不超过|不多于|最多|上限)\s*(\d{1,3})\s*%/);
-    if (m) {
-      const val = parseInt(m[1], 10);
+    if (/首批|首笔|首次|分批|加仓|单批|每批|单次/.test(c)) continue;
+    // Pattern 1: "仓位≤30%" / "持仓不超过20%" (keyword directly before operator)
+    const m1 = c.match(/(?:仓位|持仓)\s*(?:≤|<=|不超过|不多于|最多|上限)\s*(\d{1,3})\s*%/);
+    if (m1) {
+      const val = parseInt(m1[1], 10);
+      if (val > 0 && val <= 100) caps.push(val);
+      continue;
+    }
+    // Pattern 2: "减仓比例≤总持仓20%" (X比例/X规模 before operator, number after filler)
+    const m2 = c.match(/(?:减仓|增仓|建仓|仓位|持仓)(?:比例|规模)?\s*(?:≤|<=|不超过|不多于|最多|上限)\s*(?:[\u4e00-\u9fa5]*?)\s*(\d{1,3})\s*%/);
+    if (m2) {
+      const val = parseInt(m2[1], 10);
       if (val > 0 && val <= 100) caps.push(val);
     }
   }

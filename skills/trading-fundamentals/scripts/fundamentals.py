@@ -353,10 +353,16 @@ def _fetch_financial_health(code, periods=4):
 
     def load(statement, want):
         """Return {报告日(YYYYMMDD): {col: float|None}} for present columns."""
-        try:
-            df = ak.stock_financial_report_sina(stock=sym, symbol=statement)
-        except Exception:
-            return {}
+        df = None
+        for attempt in range(2):  # retry once on transient failure
+            try:
+                df = ak.stock_financial_report_sina(stock=sym, symbol=statement)
+                break
+            except Exception:
+                if attempt == 0:
+                    import time; time.sleep(0.5)
+                else:
+                    return {}
         if df is None or getattr(df, "empty", True):
             return {}
         # Defend against duplicate column labels (sina occasionally repeats).

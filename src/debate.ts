@@ -42,7 +42,7 @@ function parseClaims(content: string, side: "bull" | "bear"): DebateClaim[] {
  * Extract summary section from debate output.
  */
 function extractSummary(content: string): string {
-  const summaryRegex = /### (?:论据|风险)总结\s*\n([\s\S]*?)(?=\n<!-- VERDICT|$)/;
+  const summaryRegex = /### (?:论据|风险)总结\s*\n([\s\S]*?)(?=\n<!--|$)/;
   const match = content.match(summaryRegex);
   return match ? match[1].trim() : content.slice(-200).trim();
 }

@@ -1,15 +1,25 @@
 ---
 name: build-test-dashboard
-description: "Build TypeScript, run tests, and restart the local dashboard server. The standard dev cycle after code changes."
+description: "Build TypeScript, run tests, and optionally restart the local dashboard server. The standard dev cycle after code changes."
 ---
 
 # Build, Test & Restart Dashboard
 
-The standard development cycle: compile TypeScript, run test suite, restart the local dashboard, and verify it's serving.
+The standard development cycle: compile TypeScript, run test suite, optionally restart the local dashboard, and verify it's serving.
 
 ## Trigger
 
-User says "重启 dashboard", "build and test", "跑测试", "dev cycle", or after completing code changes that need verification.
+User says "重启 dashboard", "build and test", "跑测试", "dev cycle", "build", "test", or after completing code changes that need verification.
+
+## Modes
+
+- **Full mode** (default): Build → Test → Restart Dashboard → Verify
+- **Quick mode**: Build → Test only (skip dashboard restart)
+
+Use quick mode when:
+- Only verifying code changes without dashboard
+- Dashboard is not running or not needed
+- User says "build and test", "跑测试", or "verify"
 
 ## Procedure
 
@@ -29,7 +39,9 @@ npm test 2>&1 | tail -20
 
 Check for failures. All tests must pass before restarting dashboard.
 
-### Step 3: Restart dashboard
+### Step 3: Restart dashboard (Full mode only)
+
+> Skip this step in quick mode. Go directly to Step 4 if dashboard restart is not needed.
 
 Kill any existing dashboard process on port 3210, then start fresh:
 
@@ -61,12 +73,18 @@ for r in data[:5]:
 
 Confirm recent reports are visible.
 
-## Quick Combined Command
+## Quick Combined Commands
 
+**Full mode (with dashboard restart):**
 ```bash
 npm run build 2>&1 | tail -3 && npm test 2>&1 | tail -5 && \
   lsof -ti:3210 | xargs kill -9 2>/dev/null; sleep 0.3 && \
   node dist/dashboard.js --port 3210
+```
+
+**Quick mode (build and test only):**
+```bash
+npm run build 2>&1 | tail -3 && npm test 2>&1 | tail -5
 ```
 
 ## Dashboard Endpoints

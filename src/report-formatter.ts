@@ -10,7 +10,7 @@ type AnyResult = QuickAnalysisResult | FullAnalysisResult;
  */
 function markdownToHtml(md: string): string {
   // Remove VERDICT HTML comments
-  let html = md.replace(/<!--\s*VERDICT:.*?-->/g, "");
+  let html = md.replace(/<!--[\s\S]*?-->/g, "");
   // Horizontal rules
   html = html.replace(/^---\s*$/gm, "<hr>");
   // Headings (### before ## before #)
@@ -43,7 +43,7 @@ function markdownToHtml(md: string): string {
 /** Strip VERDICT comments and trim execution plan for clean display */
 function cleanExecutionPlan(raw: string): string {
   return raw
-    .replace(/<!--\s*VERDICT:.*?-->/g, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/^---\s*$/gm, "")
     .trim();
 }
@@ -332,13 +332,13 @@ export function toHtml(result: AnyResult): string {
     }
 
     const bullClean = full.debate.bull_summary
-      .replace(/<!--\s*VERDICT:.*?-->/g, "")
+      .replace(/<!--[\s\S]*?-->/g, "")
       .replace(/^#{1,3}\s+.*$/gm, "")
       .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
       .replace(/\n+/g, "<br>")
       .trim();
     const bearClean = full.debate.bear_summary
-      .replace(/<!--\s*VERDICT:.*?-->/g, "")
+      .replace(/<!--[\s\S]*?-->/g, "")
       .replace(/^#{1,3}\s+.*$/gm, "")
       .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
       .replace(/\n+/g, "<br>")

@@ -425,6 +425,20 @@ describe("extractPositionCap", () => {
     // Without %, "仓位≤30" is ambiguous (30 what?) — not a clean cap to enforce.
     expect(extractPositionCap(["仓位≤30"])).toBeUndefined();
   });
+
+  it("extracts 减仓比例≤总持仓N% phrasings (pattern 2)", () => {
+    // Regression: 600507 real run emitted "减仓比例≤总持仓20%" — the original
+    // regex only looked for 仓位/持仓 immediately before the operator.
+    expect(extractPositionCap(["减仓比例≤总持仓20%"])).toBe(20);
+    expect(extractPositionCap(["建仓规模≤总仓位30%"])).toBe(30);
+    expect(extractPositionCap(["增仓比例不超过15%"])).toBe(15);
+  });
+
+  it("skips 单批/每批/单次 sub-batch constraints", () => {
+    expect(extractPositionCap(["单批次减仓≤10%"])).toBeUndefined();
+    expect(extractPositionCap(["每批建仓≤5%"])).toBeUndefined();
+    expect(extractPositionCap(["单次加仓不超过3%"])).toBeUndefined();
+  });
 });
 
 describe("parseRiskJudge", () => {
