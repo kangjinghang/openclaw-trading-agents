@@ -22,6 +22,8 @@ function mockDebateResult(): DebateResult {
     ],
     bull_summary: '多头逻辑：政策利好+北向流入',
     bear_summary: '空头风险：估值偏高+解禁压力',
+    convergence_score: 0.5,
+    resolved_points: [],
     total_tokens: 3600,
     total_cost_usd: 0.01,
   };

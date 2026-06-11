@@ -323,3 +323,195 @@ describe("runBullBearDebate state-machine (DEBATE_STATE path)", () => {
     expect(bearR1Message).toContain("BULL-1");
   });
 });
+
+describe("convergence_score and resolved_points", () => {
+  let mockClient: OpenAI;
+  let mockTraceLogger: any;
+
+  beforeEach(() => {
+    mockClient = {
+      chat: { completions: { create: vi.fn() } },
+    } as any;
+    mockTraceLogger = { record: vi.fn(), count: 0 };
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("should include convergence_score between 0 and 1 with no DEBATE_STATE (legacy path)", async () => {
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+
+    mockCreate.mockResolvedValueOnce(mockDebateResponse("bull", 1) as any);
+    mockCreate.mockResolvedValueOnce(mockDebateResponse("bear", 1) as any);
+    mockCreate.mockResolvedValueOnce(mockDebateResponse("bull", 2) as any);
+    mockCreate.mockResolvedValueOnce(mockDebateResponse("bear", 2) as any);
+
+    const reports = mockAnalystReports();
+    const result = await runBullBearDebate(reports, "", mockConfig, mockClient, mockTraceLogger);
+
+    expect(result.convergence_score).toBeGreaterThanOrEqual(0);
+    expect(result.convergence_score).toBeLessThanOrEqual(1);
+    expect(Array.isArray(result.resolved_points)).toBe(true);
+  });
+
+  it("should compute convergence_score = 0.5 when no claims are resolved or unresolved", async () => {
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+
+    // Legacy path: no DEBATE_STATE blocks → no resolved/unresolved ids
+    mockCreate.mockResolvedValueOnce(mockDebateResponse("bull", 1) as any);
+    mockCreate.mockResolvedValueOnce(mockDebateResponse("bear", 1) as any);
+    mockCreate.mockResolvedValueOnce(mockDebateResponse("bull", 2) as any);
+    mockCreate.mockResolvedValueOnce(mockDebateResponse("bear", 2) as any);
+
+    const reports = mockAnalystReports();
+    const result = await runBullBearDebate(reports, "", mockConfig, mockClient, mockTraceLogger);
+
+    // No resolved or unresolved claims → baseConvergence = 0.5
+    expect(result.convergence_score).toBe(0.5);
+    expect(result.resolved_points).toEqual([]);
+  });
+
+  it("should compute convergence_score based on resolved claims", async () => {
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+
+    // Round 1 Bull: introduces BULL-1
+    mockCreate.mockResolvedValueOnce(mockStatefulResponse(
+      "bull", "BULL-1", "盈利超预期", "Q3净利+30%", "高",
+      {
+        responded_claim_ids: [],
+        new_claims: [{ claim: "盈利超预期", evidence: ["Q3净利+30%"], confidence: 0.8 }],
+        resolved_claim_ids: [],
+        unresolved_claim_ids: [],
+        next_focus_claim_ids: [],
+        round_summary: "多头展开盈利论点",
+        round_goal: "空头需回应",
+      }
+    ) as any);
+
+    // Round 1 Bear: introduces BEAR-1, marks BULL-1 unresolved
+    mockCreate.mockResolvedValueOnce(mockStatefulResponse(
+      "bear", "BEAR-1", "估值过高", "PE 60x", "中",
+      {
+        responded_claim_ids: ["BULL-1"],
+        new_claims: [{ claim: "估值过高", evidence: ["PE 60x"], confidence: 0.7 }],
+        resolved_claim_ids: [],
+        unresolved_claim_ids: ["BULL-1"],
+        next_focus_claim_ids: ["BULL-1"],
+        round_summary: "空头质疑估值",
+        round_goal: "多头需证明",
+      }
+    ) as any);
+
+    // Round 2 Bull: resolves BEAR-1, introduces BULL-2
+    mockCreate.mockResolvedValueOnce(mockStatefulResponse(
+      "bull", "BULL-2", "成长股估值合理", "PEG 1.2", "中",
+      {
+        responded_claim_ids: ["BEAR-1"],
+        new_claims: [{ claim: "成长股估值合理", evidence: ["PEG 1.2"], confidence: 0.75 }],
+        resolved_claim_ids: ["BEAR-1"],
+        unresolved_claim_ids: [],
+        next_focus_claim_ids: [],
+        round_summary: "多头以PEG反驳",
+        round_goal: "空头需回应",
+      }
+    ) as any);
+
+    // Round 2 Bear: no resolution
+    mockCreate.mockResolvedValueOnce(mockStatefulResponse(
+      "bear", "BEAR-2", "行业增速放缓", "订单-15%", "中",
+      {
+        responded_claim_ids: [],
+        new_claims: [{ claim: "行业增速放缓", evidence: ["订单-15%"], confidence: 0.65 }],
+        resolved_claim_ids: [],
+        unresolved_claim_ids: [],
+        next_focus_claim_ids: [],
+        round_summary: "空头无新进展",
+        round_goal: "结束",
+      }
+    ) as any);
+
+    const reports = mockAnalystReports();
+    const result = await runBullBearDebate(reports, "", mockConfig, mockClient, mockTraceLogger);
+
+    // BEAR-1 was resolved. Last round unresolved = [BULL-1] (carried forward), total resolved = 1
+    // baseConvergence = 1 / (1 + 1) = 0.5
+    // divergencePenalty: first round unresolved=1, last round unresolved=1 → no penalty
+    // convergence = 0.5 - 0 = 0.5
+    expect(result.convergence_score).toBe(0.5);
+
+    // resolved_points should contain BEAR-1
+    expect(result.resolved_points).toHaveLength(1);
+    expect(result.resolved_points[0]).toContain("BEAR-1");
+    expect(result.resolved_points[0]).toContain("估值过高");
+  });
+
+  it("should apply divergence penalty when unresolved claims grow across rounds", async () => {
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+
+    // Round 1 Bull: introduces BULL-1
+    mockCreate.mockResolvedValueOnce(mockStatefulResponse(
+      "bull", "BULL-1", "盈利超预期", "Q3净利+30%", "高",
+      {
+        responded_claim_ids: [],
+        new_claims: [{ claim: "盈利超预期", evidence: ["Q3净利+30%"], confidence: 0.8 }],
+        resolved_claim_ids: [],
+        unresolved_claim_ids: [],
+        next_focus_claim_ids: [],
+        round_summary: "展开",
+        round_goal: "回应",
+      }
+    ) as any);
+
+    // Round 1 Bear: 0 unresolved at end of round 1
+    mockCreate.mockResolvedValueOnce(mockStatefulResponse(
+      "bear", "BEAR-1", "估值过高", "PE 60x", "中",
+      {
+        responded_claim_ids: [],
+        new_claims: [{ claim: "估值过高", evidence: ["PE 60x"], confidence: 0.7 }],
+        resolved_claim_ids: [],
+        unresolved_claim_ids: [],
+        next_focus_claim_ids: [],
+        round_summary: "展开",
+        round_goal: "回应",
+      }
+    ) as any);
+
+    // Round 2 Bull: introduces BULL-2
+    mockCreate.mockResolvedValueOnce(mockStatefulResponse(
+      "bull", "BULL-2", "成长股估值合理", "PEG 1.2", "中",
+      {
+        responded_claim_ids: [],
+        new_claims: [{ claim: "成长股估值合理", evidence: ["PEG 1.2"], confidence: 0.75 }],
+        resolved_claim_ids: [],
+        unresolved_claim_ids: [],
+        next_focus_claim_ids: [],
+        round_summary: "展开",
+        round_goal: "回应",
+      }
+    ) as any);
+
+    // Round 2 Bear: marks 3 claims unresolved (growing from 0 in round 1)
+    mockCreate.mockResolvedValueOnce(mockStatefulResponse(
+      "bear", "BEAR-2", "行业增速放缓", "订单-15%", "中",
+      {
+        responded_claim_ids: [],
+        new_claims: [{ claim: "行业增速放缓", evidence: ["订单-15%"], confidence: 0.65 }],
+        resolved_claim_ids: [],
+        unresolved_claim_ids: ["BULL-1", "BEAR-1", "BULL-2"],
+        next_focus_claim_ids: ["BULL-1"],
+        round_summary: "全质疑",
+        round_goal: "结束",
+      }
+    ) as any);
+
+    const reports = mockAnalystReports();
+    const result = await runBullBearDebate(reports, "", mockConfig, mockClient, mockTraceLogger);
+
+    // 0 resolved, 3 unresolved → baseConvergence = 0
+    // divergencePenalty: first round unresolved=0, last round unresolved=3 → (3-0)*0.1 = 0.3, capped at 0.3
+    // convergence = max(0, 0 - 0.3) = 0
+    expect(result.convergence_score).toBe(0);
+    expect(result.resolved_points).toEqual([]);
+  });
+});

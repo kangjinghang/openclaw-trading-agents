@@ -363,5 +363,42 @@ export async function runBullBearDebate(
     bearSummary = bearSummaryText;
   }
 
-  return { rounds, bull_summary: bullSummary, bear_summary: bearSummary, total_tokens: totalTokens, total_cost_usd: totalCostUsd };
+  // Compute convergence score based on rounds data
+  const lastRound = rounds[rounds.length - 1];
+  const totalUnresolved = lastRound?.unresolved_ids?.length || 0;
+  const totalResolved = rounds.reduce((sum, r) => sum + (r.resolved_ids?.length || 0), 0);
+  const totalClaims = totalResolved + totalUnresolved;
+
+  // Base convergence: ratio of resolved claims
+  const baseConvergence = totalClaims > 0 ? totalResolved / totalClaims : 0.5;
+
+  // Divergence penalty: if last round has more unresolved than first round
+  let divergencePenalty = 0;
+  if (rounds.length >= 2) {
+    const firstRoundUnresolved = rounds[0].unresolved_ids?.length || 0;
+    const lastRoundUnresolved = lastRound?.unresolved_ids?.length || 0;
+    if (lastRoundUnresolved > firstRoundUnresolved) {
+      divergencePenalty = Math.min(0.3, (lastRoundUnresolved - firstRoundUnresolved) * 0.1);
+    }
+  }
+
+  const convergenceScore = Math.max(0, Math.min(1, baseConvergence - divergencePenalty));
+
+  // Build resolved points list
+  const resolvedPoints = rounds
+    .flatMap(r => r.resolved_ids || [])
+    .map(id => {
+      const claim = registry.byId.get(id);
+      return claim ? `${claim.id}: ${claim.topic}` : id;
+    });
+
+  return {
+    rounds,
+    bull_summary: bullSummary,
+    bear_summary: bearSummary,
+    convergence_score: convergenceScore,
+    resolved_points: resolvedPoints,
+    total_tokens: totalTokens,
+    total_cost_usd: totalCostUsd,
+  };
 }

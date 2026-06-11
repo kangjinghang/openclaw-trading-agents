@@ -237,6 +237,10 @@ export interface DebateResult {
   rounds: DebateRound[];
   bull_summary: string;
   bear_summary: string;
+  /** 0-1, how well the debate converged (ratio of resolved claims, minus divergence penalty). */
+  convergence_score: number;
+  /** Resolved claim summaries across all rounds. */
+  resolved_points: string[];
   total_tokens: number;
   total_cost_usd: number;
 }
