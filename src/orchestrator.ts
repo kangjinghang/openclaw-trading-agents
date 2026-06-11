@@ -953,6 +953,21 @@ export async function runFullAnalysis(
     tradingPlan = { ...tradingPlan, position_pct: riskAssessment.max_position_override };
   }
 
+  // Apply stop_loss constraint from risk hard_constraints.
+  // Mirror the position cap pattern: enforce after loop, not inside.
+  if (riskAssessment.judge?.hard_constraints) {
+    for (const constraint of riskAssessment.judge.hard_constraints) {
+      const stopLossMatch = constraint.match(/止损[价额]?(?:≥|>=|不低于|至少)\s*(\d+(?:\.\d+)?)/);
+      if (stopLossMatch) {
+        const minStopLoss = parseFloat(stopLossMatch[1]);
+        if (tradingPlan.stop_loss < minStopLoss) {
+          logProgress(runId, `  风控硬约束：止损价 ${tradingPlan.stop_loss} → ${minStopLoss}`);
+          tradingPlan = { ...tradingPlan, stop_loss: minStopLoss };
+        }
+      }
+    }
+  }
+
   logProgress(runId, `[7/7] 风控评估: ${riskAssessment.status} (风险评分 ${riskAssessment.risk_score})`);
 
   // Assemble FinalDecision
