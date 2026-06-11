@@ -653,4 +653,119 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
     // Should contain debate scores
     expect(result.final.decision_rationale).toContain('多空辩论');
   });
+
+  it('should register health warning when debate diverges (low convergence_score)', async () => {
+    vi.mocked(execPython).mockResolvedValue({
+      success: true,
+      data: { ticker: '600519', data: [] }
+    });
+
+    const mockCreate = vi.fn();
+
+    // Build DEBATE_STATE blocks that produce unresolved claims but no resolved ones
+    const bullDebateState1 = JSON.stringify({
+      responded_claim_ids: [],
+      new_claims: [
+        { claim: "盈利增长", evidence: ["Q1利润+20%"], confidence: 0.8 },
+        { claim: "政策利好", evidence: ["减税"], confidence: 0.7 }
+      ],
+      resolved_claim_ids: [],
+      unresolved_claim_ids: [],
+      next_focus_claim_ids: [],
+      round_summary: "Bull round 1",
+      round_goal: "Establish bull case"
+    });
+    // Bear marks bull claims as unresolved, adds own
+    const bearDebateState1 = JSON.stringify({
+      responded_claim_ids: ["BULL-1", "BULL-2"],
+      new_claims: [
+        { claim: "估值偏高", evidence: ["PE=50"], confidence: 0.6 }
+      ],
+      resolved_claim_ids: [],
+      unresolved_claim_ids: ["BULL-1", "BULL-2"],
+      next_focus_claim_ids: ["BULL-1"],
+      round_summary: "Bear round 1 — unresolved",
+      round_goal: "Challenge bull claims"
+    });
+    // Round 2: more unresolved
+    const bullDebateState2 = JSON.stringify({
+      responded_claim_ids: ["BEAR-1"],
+      new_claims: [],
+      resolved_claim_ids: [],
+      unresolved_claim_ids: ["BEAR-1"],
+      next_focus_claim_ids: [],
+      round_summary: "Bull round 2",
+      round_goal: "Rebuttal"
+    });
+    const bearDebateState2 = JSON.stringify({
+      responded_claim_ids: [],
+      new_claims: [],
+      resolved_claim_ids: [],
+      unresolved_claim_ids: ["BULL-1", "BULL-2"],
+      next_focus_claim_ids: [],
+      round_summary: "Bear round 2 — still unresolved",
+      round_goal: "Final rebuttal"
+    });
+
+    mockCreate.mockImplementation(async (params: any) => {
+      const systemPrompt = params.messages?.[0]?.content || '';
+
+      // Analysts (7 calls, parallel)
+      if (!systemPrompt.includes('portfolio') && !systemPrompt.includes('manager') && !systemPrompt.includes('bullish') && !systemPrompt.includes('bearish') && !systemPrompt.includes('research') && !systemPrompt.includes('trader') && !systemPrompt.includes('risk')) {
+        return mockAnalystResponse('market', '看多', 'market reason');
+      }
+
+      // Debate: bull or bear — emit DEBATE_STATE blocks
+      if (systemPrompt.includes('bullish')) {
+        const userMsg = params.messages?.[1]?.content || '';
+        const isRound2 = userMsg.includes('round 2') || userMsg.includes('Round 2') || userMsg.includes('第 2 轮') || userMsg.includes('第2轮');
+        const state = isRound2 ? bullDebateState2 : bullDebateState1;
+        return { choices: [{ message: { content: `Bull argument.\n\n### 论据总结\nBull summary\n\n<!-- DEBATE_STATE: ${state} -->\n\n<!-- VERDICT: {"direction": "看多", "reason": "bull"} -->` } }], usage: { prompt_tokens: 600, completion_tokens: 300, total_tokens: 900 } };
+      }
+      if (systemPrompt.includes('bearish')) {
+        const userMsg = params.messages?.[1]?.content || '';
+        const isRound2 = userMsg.includes('round 2') || userMsg.includes('Round 2') || userMsg.includes('第 2 轮') || userMsg.includes('第2轮');
+        const state = isRound2 ? bearDebateState2 : bearDebateState1;
+        return { choices: [{ message: { content: `Bear counter.\n\n### 风险总结\nBear summary\n\n<!-- DEBATE_STATE: ${state} -->\n\n<!-- VERDICT: {"direction": "看空", "reason": "bear"} -->` } }], usage: { prompt_tokens: 600, completion_tokens: 300, total_tokens: 900 } };
+      }
+
+      // Research Manager
+      if (systemPrompt.includes('research') && !systemPrompt.includes('trader')) {
+        return { choices: [{ message: { content: `### 评分\n- **多头得分**：60\n- **空头得分**：50\n\n### 关键辩论焦点\n1. 估值分歧\n\n### 最终决策\n- **方向**：Hold\n- **信心水平**：0.5\n\n<!-- VERDICT: {"direction": "Hold", "reason": "分歧大"} -->` } }], usage: { prompt_tokens: 1000, completion_tokens: 400, total_tokens: 1400 } };
+      }
+
+      // Trader
+      if (systemPrompt.includes('trader')) {
+        return { choices: [{ message: { content: `### 交易方向与仓位\n- **建议仓位**：10%\n\n### 价格区间\n- **目标价格**：1400 元\n- **止损价格**：1200 元\n\n### T+1 操作约束说明\nT+1制度\n\n### 关键风险提示\n1. 政策风险\n\n<!-- VERDICT: {"direction": "Hold", "reason": "观望"} -->` } }], usage: { prompt_tokens: 800, completion_tokens: 400, total_tokens: 1200 } };
+      }
+
+      // Risk Debate (3 parallel)
+      if (systemPrompt.includes('risk assessor')) {
+        return { choices: [{ message: { content: `### 1. 立场声明\n支持\n\n### 2. 证据支撑\n- 证据1\n\n### 3. 风险评估结论\n- **verdict**：pass\n\n<!-- VERDICT: {"direction": "pass", "reason": "ok"} -->` } }], usage: { prompt_tokens: 500, completion_tokens: 200, total_tokens: 700 } };
+      }
+
+      // Risk Manager
+      if (systemPrompt.includes('risk manager')) {
+        return { choices: [{ message: { content: `### 1. 风险评分（0-100）\n35\n\n### 2. 风控决策\n- **status**：pass\n\n<!-- VERDICT: {"direction": "pass", "reason": "risk ok"} -->` } }], usage: { prompt_tokens: 600, completion_tokens: 200, total_tokens: 800 } };
+      }
+
+      return { choices: [{ message: { content: `<!-- VERDICT: {"direction": "Hold", "reason": "fallback"} -->` } }], usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 } };
+    });
+
+    mockClient.chat.completions.create = mockCreate;
+
+    const [result, runMeta] = await runFullAnalysis('600519', '2026-06-05', config, mockClient);
+
+    // The debate should have a low convergence_score (< 0.5) because all claims are unresolved
+    expect(result.debate.convergence_score).toBeLessThan(0.5);
+
+    // Pipeline health should contain a debate-stage warning
+    expect(runMeta.pipeline_health).toBeDefined();
+    const debateIssues = (runMeta.pipeline_health || []).filter(
+      (issue: any) => issue.stage === "debate" && issue.check === "debate_divergence"
+    );
+    expect(debateIssues.length).toBeGreaterThanOrEqual(1);
+    expect(debateIssues[0].severity).toBe("warn");
+    expect(debateIssues[0].message).toContain("收敛分数偏低");
+  });
 });

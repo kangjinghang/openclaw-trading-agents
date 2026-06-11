@@ -894,6 +894,21 @@ export async function runFullAnalysis(
   const debate = await runBullBearDebate(analystReports, quality.summary_text, config, openaiClient, traceLogger);
   logProgress(runId, `[3/7] 多空辩论完成 (Bull ${debate.rounds.flatMap(r => r.bull_claims).length} claims, Bear ${debate.rounds.flatMap(r => r.bear_claims).length} claims)`);
 
+  // Debate divergence detection
+  if (debate.convergence_score < 0.5) {
+    health.add({
+      stage: "debate",
+      severity: "warn",
+      check: "debate_divergence",
+      message: `辩论收敛分数偏低 (${debate.convergence_score.toFixed(2)})，可能存在发散`,
+      context: {
+        convergence_score: debate.convergence_score,
+        resolved_count: debate.resolved_points.length,
+        unresolved_count: debate.rounds[debate.rounds.length - 1]?.unresolved_ids?.length || 0,
+      },
+    });
+  }
+
   if (signal?.aborted) throw new AbortError();
 
   // Phase 4: Research Manager
