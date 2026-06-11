@@ -24,6 +24,9 @@ import {
   RunMeta,
   QualitySummary,
   ProvenanceStage,
+  DebateResult,
+  ResearchDecision,
+  RiskAssessment,
 } from "./types";
 import { AbortError, ParseError, EnvironmentError } from "./errors";
 import { DATA_FETCH_STAGGER_MS, LLM_CALL_STAGGER_MS, DEFAULT_CONCURRENCY } from "./constants";
@@ -318,6 +321,48 @@ function analystVerdictSummary(reports: AnalystReport[]): string {
     else neutral++;
   }
   return `${bull}看多/${bear}看空/${neutral}中性`;
+}
+
+/** Build a human-readable rationale explaining WHY the final decision was reached. */
+function generateDecisionRationale(
+  analystReports: AnalystReport[],
+  debate: DebateResult,
+  researchDecision: ResearchDecision,
+  riskAssessment: RiskAssessment
+): string {
+  const parts: string[] = [];
+
+  // 1. Analyst consensus (reuse existing analystVerdictSummary)
+  const summary = analystVerdictSummary(analystReports);
+  parts.push(`分析师共识：${summary}`);
+
+  // 2. Debate result
+  if (debate.rounds.length > 0) {
+    parts.push(`多空辩论：Bull ${researchDecision.bull_score} vs Bear ${researchDecision.bear_score}`);
+  }
+
+  // 3. Risk status
+  if (riskAssessment.status !== "pass") {
+    parts.push(`风控意见：${riskAssessment.status}`);
+    if (riskAssessment.retries_exhausted) {
+      parts.push(`（重试耗尽，保留原始决策）`);
+    }
+  }
+
+  // 4. Technical vs fundamental conflict detection
+  const marketAnalyst = analystReports.find(r => r.role === "market");
+  const fundamentalsAnalyst = analystReports.find(r => r.role === "fundamentals");
+  if (marketAnalyst && fundamentalsAnalyst) {
+    const mDir = marketAnalyst.verdict.direction;
+    const fDir = fundamentalsAnalyst.verdict.direction;
+    const isBearish = mDir === "看空" || mDir === "Sell" || mDir === "Underweight";
+    const isBullish = fDir === "看多" || fDir === "Buy" || fDir === "Overweight";
+    if (isBearish && isBullish) {
+      parts.push(`技术面看空但基本面看多，采用左侧逆向策略`);
+    }
+  }
+
+  return parts.join("；");
 }
 
 function parseDirection(raw?: string): FinalDecision["direction"] {
@@ -738,6 +783,7 @@ export async function runQuickAnalysis(
     risk_assessment: "pass",
     execution_plan: "",
     next_review_trigger: "",
+    decision_rationale: `投资组合经理决策：${direction}，置信度 70%。分析师共识：${analystVerdictSummary(analystReports)}`,
   };
 
   const result: QuickAnalysisResult = { ticker, date, mode: "quick", analysts: analystReports, final: finalDecision };
@@ -915,6 +961,10 @@ export async function runFullAnalysis(
     analystVerdicts[report.role] = report.verdict.direction;
   }
 
+  const decisionRationale = generateDecisionRationale(
+    analystReports, debate, researchDecision, riskAssessment
+  );
+
   const finalDecision: FinalDecision = {
     ticker,
     company_name: companyName || ticker,
@@ -931,6 +981,7 @@ export async function runFullAnalysis(
     risk_assessment: riskAssessment.status,
     execution_plan: tradingPlan.execution_plan,
     next_review_trigger: "",
+    decision_rationale: decisionRationale,
   };
 
   const result: FullAnalysisResult = {

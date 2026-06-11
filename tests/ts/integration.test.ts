@@ -544,4 +544,61 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
     expect(result.final.reasoning).toContain('分析师多数意见');
     expect(result.analysts).toHaveLength(7);
   });
+
+  it('should include decision_rationale in full analysis result', async () => {
+    vi.mocked(execPython).mockResolvedValue({
+      success: true,
+      data: { ticker: '600519', data: [] }
+    });
+
+    const mockCreate = vi.fn();
+    let debateCallIdx = 0;
+
+    mockCreate.mockImplementation(async (params: any) => {
+      const systemPrompt = params.messages?.[0]?.content || '';
+
+      // Analysts
+      if (!systemPrompt.includes('portfolio') && !systemPrompt.includes('manager') && !systemPrompt.includes('bullish') && !systemPrompt.includes('bearish') && !systemPrompt.includes('research') && !systemPrompt.includes('trader') && !systemPrompt.includes('risk')) {
+        return mockAnalystResponse('market', '看多', 'market reason');
+      }
+
+      if (systemPrompt.includes('bullish')) {
+        debateCallIdx++;
+        return { choices: [{ message: { content: `BULL-${Math.ceil(debateCallIdx/2)} claim.\n\n### 论据总结\nBull summary\n\n<!-- VERDICT: {"direction": "看多", "reason": "bull"} -->` } }], usage: { prompt_tokens: 600, completion_tokens: 300, total_tokens: 900 } };
+      }
+      if (systemPrompt.includes('bearish')) {
+        return { choices: [{ message: { content: `BEAR claim.\n\n### 风险总结\nBear summary\n\n<!-- VERDICT: {"direction": "看空", "reason": "bear"} -->` } }], usage: { prompt_tokens: 600, completion_tokens: 300, total_tokens: 900 } };
+      }
+
+      if (systemPrompt.includes('research') && !systemPrompt.includes('trader')) {
+        return { choices: [{ message: { content: `### 评分\n- **多头得分**：70\n- **空头得分**：40\n\n### 关键辩论焦点\n1. 政策利好\n\n### 最终决策\n- **方向**：Overweight\n- **信心水平**：0.75\n\n<!-- VERDICT: {"direction": "Overweight", "reason": "bull wins"} -->` } }], usage: { prompt_tokens: 1000, completion_tokens: 400, total_tokens: 1400 } };
+      }
+
+      if (systemPrompt.includes('trader')) {
+        return { choices: [{ message: { content: `### 交易方向与仓位\n- **建议仓位**：25%\n\n### 价格区间\n- **目标价格**：1400 元\n- **止损价格**：1200 元\n\n### T+1 操作约束说明\nT+1制度\n\n### 关键风险提示\n1. 政策风险\n\n<!-- VERDICT: {"direction": "Buy", "reason": "分批建仓"} -->` } }], usage: { prompt_tokens: 800, completion_tokens: 400, total_tokens: 1200 } };
+      }
+
+      if (systemPrompt.includes('risk assessor')) {
+        return { choices: [{ message: { content: `### 1. 立场声明\n支持\n\n### 2. 证据支撑\n- 证据1\n\n### 3. 风险评估结论\n- **verdict**：pass\n\n<!-- VERDICT: {"direction": "pass", "reason": "ok"} -->` } }], usage: { prompt_tokens: 500, completion_tokens: 200, total_tokens: 700 } };
+      }
+
+      if (systemPrompt.includes('risk manager')) {
+        return { choices: [{ message: { content: `### 1. 风险评分（0-100）\n35\n\n### 2. 风控决策\n- **status**：pass\n\n<!-- VERDICT: {"direction": "pass", "reason": "risk ok"} -->` } }], usage: { prompt_tokens: 600, completion_tokens: 200, total_tokens: 800 } };
+      }
+
+      return { choices: [{ message: { content: `<!-- VERDICT: {"direction": "Hold", "reason": "fallback"} -->` } }], usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 } };
+    });
+
+    mockClient.chat.completions.create = mockCreate;
+
+    const [result] = await runFullAnalysis('600519', '2026-06-05', config, mockClient);
+
+    expect(result.final.decision_rationale).toBeDefined();
+    expect(typeof result.final.decision_rationale).toBe("string");
+    expect(result.final.decision_rationale!.length).toBeGreaterThan(0);
+    // Should contain analyst consensus info
+    expect(result.final.decision_rationale).toContain('分析师共识');
+    // Should contain debate scores
+    expect(result.final.decision_rationale).toContain('多空辩论');
+  });
 });

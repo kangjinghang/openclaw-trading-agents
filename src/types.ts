@@ -53,6 +53,8 @@ export interface FinalDecision {
   risk_assessment: "pass" | "revise" | "reject";
   execution_plan: string;
   next_review_trigger: string;
+  /** Human-readable explanation of WHY the final decision was made (e.g. analyst conflicts, risk overrides). */
+  decision_rationale?: string;
 }
 
 /** Quick analysis result (returned by trading_quick tool) */
