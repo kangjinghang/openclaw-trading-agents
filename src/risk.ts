@@ -61,7 +61,7 @@ export const RISK_ROLES: Array<{
   },
 ];
 
-function parseRiskArgument(content: string, role: RiskArgument["role"]): RiskArgument {
+export function parseRiskArgument(content: string, role: RiskArgument["role"]): RiskArgument {
   const verdictMatch = content.match(/verdict[：:*]+\s*(pass|revise|reject)/i) ||
                        content.match(/结论[：:*]+\s*(pass|revise|reject|通过|修订|拒绝)/i);
   let verdict: RiskArgument["verdict"] = "pass";
@@ -71,12 +71,24 @@ function parseRiskArgument(content: string, role: RiskArgument["role"]): RiskArg
     else if (raw === "reject" || raw === "拒绝") verdict = "reject";
   }
 
-  const evidenceSection = content.match(/### 2\. 证据支撑\s*\n([\s\S]*?)(?=\n###|$)/);
-  const evidence = evidenceSection
-    ? evidenceSection[1].split("\n").map((l) => l.replace(/^-\s*/, "").trim()).filter(Boolean)
-    : [];
+  // evidence：按子标题分割（## 证据N：... 或 ### 证据N：...），保留标题文字作为证据摘要
+  const evidenceRegex = /#{2,3}\s*证据[一二三四五六七八九十\d]+[：:]\s*(.+?)(?=#{2,3}\s*证据|\n#{2,3}\s*\d|$)/gs;
+  const evidenceMatches = content.match(evidenceRegex) || [];
+  const evidence = evidenceMatches
+    .map((m) => m.replace(/^#{2,3}\s*/, "").trim())
+    .filter((e) => e.length > 0);
 
-  const positionMatch = content.match(/### 1\. 立场声明\s*\n(.+)/);
+  // 如果没有子标题格式，回退到 bullet list 格式
+  if (evidence.length === 0) {
+    const evidenceSection = content.match(/#{2,3}\s*2\.?\s*证据支撑.*\n([\s\S]*?)(?=\n+#{2,3}\s*\d)/);
+    if (evidenceSection) {
+      const bulletMatches = evidenceSection[1].match(/^- (.+)/gm) || [];
+      evidence.push(...bulletMatches.map((m) => m.replace(/^- /, "").trim()));
+    }
+  }
+
+  // 支持 ## 和 ### 两种标题级别，匹配立场声明到下一个标题为止
+  const positionMatch = content.match(/#{2,3}\s*1\.?\s*立场声明([\s\S]*?)(?=\n+#{2,3}\s*\d)/);
 
   return {
     role,

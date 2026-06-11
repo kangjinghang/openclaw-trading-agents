@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { runRiskDebate, runRiskManager, parseRiskJudge, extractPositionCap, RISK_ROLES } from "../../src/risk";
+import { runRiskDebate, runRiskManager, parseRiskJudge, extractPositionCap, parseRiskArgument, RISK_ROLES } from "../../src/risk";
 import { TradingAgentsConfig, TradingPlan, RiskDebateResult } from "../../src/types";
 import OpenAI from "openai";
 
@@ -302,6 +302,69 @@ describe("Risk Module", () => {
         expect(c.model).toBe("gpt-4o"); // risk debaters stay on the quick tier
       }
     });
+  });
+});
+
+describe("parseRiskArgument", () => {
+  it("should parse ## 二级标题格式（子标题+段落）", () => {
+    const content = `## 1. 立场声明：**建议修订（REVISE）**
+
+本风控评估认为，该交易计划存在结构性缺陷。要求修订后方可执行。
+
+核心立场：**不是反对交易本身，而是反对以当前参数执行交易。**
+
+## 2. 证据支撑
+
+### 证据一：止损价5.50元低于跌停价5.54元——涨跌停板陷阱使止损形同虚设
+
+这是本计划最致命的结构性缺陷。计划将止损设在5.50元，**低于跌停板价格5.54元**。
+
+- **场景推演**：若股价跳空低开触及跌停，卖单无法成交
+- **结论**：止损价必须高于跌停价
+
+### 证据二：技术面全面看空
+
+六维技术信号中，**看空证据4条 vs 超卖反弹证据2条**。
+
+## 3. 风险评估结论
+
+- **verdict**：revise
+- **理由**：止损价必须高于跌停价
+
+<!-- VERDICT: {"direction": "revise", "reason": "止损价5.50低于跌停价5.54"} -->`;
+
+    const result = parseRiskArgument(content, "conservative");
+    expect(result.position).toContain("建议修订");
+    expect(result.position).toContain("不是反对交易本身");
+    expect(result.evidence.length).toBe(2);
+    expect(result.evidence[0]).toContain("止损价5.50元低于跌停价5.54元");
+    expect(result.evidence[1]).toContain("技术面全面看空");
+    expect(result.verdict).toBe("revise");
+  });
+
+  it("should parse ### 三级标题格式（兼容旧格式）", () => {
+    const content = `### 1. 立场声明
+支持该交易计划
+
+### 2. 证据支撑
+- 证据1：估值合理
+- 证据2：资金流入
+
+### 3. 风险评估结论
+- **verdict**：pass
+- **理由**：风险可控`;
+
+    const result = parseRiskArgument(content, "aggressive");
+    expect(result.position).toContain("支持");
+    expect(result.evidence).toHaveLength(2);
+    expect(result.verdict).toBe("pass");
+  });
+
+  it("should handle empty content gracefully", () => {
+    const result = parseRiskArgument("", "neutral");
+    expect(result.position).toBe("");
+    expect(result.evidence).toHaveLength(0);
+    expect(result.verdict).toBe("pass");
   });
 });
 
