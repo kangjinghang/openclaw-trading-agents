@@ -8,6 +8,7 @@ pip install -r requirements.txt     # Python deps: mootdx, akshare, pandas, requ
 npm run build                       # tsc → dist/
 npm test                            # vitest run (tests/ts/ *.test.ts)
 npm run test:watch                  # vitest in watch mode
+npm run coverage                    # vitest run --coverage
 npm run lint                        # eslint src/
 npx tsc --noEmit                    # typecheck (pass = no output)
 node dist/cli.js                    # standalone CLI: quick|full <ticker> [date] [options]
@@ -119,4 +120,4 @@ Plugin config file: `~/.openclaw/plugins/trading-agents/config.json`. Standalone
 - Python scripts output JSON to stdout, errors to stderr
 - Data scripts use mootdx (primary) + akshare (fallback) for A-share data
 - K-line completeness check: min 50 bars; freshness fail if latest bar >7 days from analysis date (near-term only)
-- CI: Node 20/22 on ubuntu-latest, runs build → test → lint → tsc --noEmit
+- CI: Node 20/22 on ubuntu-latest, runs build → test (with coverage) → lint → tsc --noEmit

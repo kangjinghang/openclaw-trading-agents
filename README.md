@@ -2,6 +2,10 @@
 
 多智能体辩论式 A 股分析系统 —— 基于 OpenClaw 插件框架
 
+[![CI](https://github.com/kangjinghang/openclaw-trading-agents/actions/workflows/ci.yml/badge.svg)](https://github.com/kangjinghang/openclaw-trading-agents/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![OpenClaw](https://img.shields.io/badge/OpenClaw-Plugin-8A2BE2)](https://github.com/openclaw/openclaw)
+
 [English](#english) | [中文](#中文)
 
 ---

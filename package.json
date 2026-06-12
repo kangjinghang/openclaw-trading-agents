@@ -4,7 +4,9 @@
   "description": "Multi-agent A-share stock analysis with debate-driven decision making for OpenClaw",
   "main": "dist/index.js",
   "openclaw": {
-    "extensions": ["./dist/index.js"]
+    "extensions": [
+      "./dist/index.js"
+    ]
   },
   "files": [
     "dist/",
@@ -17,6 +19,7 @@
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
+    "coverage": "vitest run --coverage",
     "lint": "eslint src/",
     "analyze": "node dist/cli.js",
     "dashboard": "node dist/dashboard.js",
@@ -31,6 +34,7 @@
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/node": "22.19.19",
+    "@vitest/coverage-v8": "3.2.6",
     "eslint": "10.4.1",
     "husky": "9.1.7",
     "lint-staged": "16.1.6",
