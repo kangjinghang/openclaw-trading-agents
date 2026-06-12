@@ -4,13 +4,14 @@
 
 ```bash
 npm install                         # Node dependencies
-pip install mootdx akshare requests # Python data-fetch deps
+pip install -r requirements.txt     # Python deps: mootdx, akshare, pandas, requests
 npm run build                       # tsc → dist/
-npm test                            # vitest run (50+ tests in tests/ts/)
+npm test                            # vitest run (tests/ts/ *.test.ts)
+npm run test:watch                  # vitest in watch mode
 npm run lint                        # eslint src/
-npx tsc --noEmit                    # typecheck (no output = pass)
-npm run analyze                     # node dist/cli.js (quick/full commands)
-npm run dashboard                   # node dist/dashboard.js
+npx tsc --noEmit                    # typecheck (pass = no output)
+node dist/cli.js                    # standalone CLI: quick|full <ticker> [date] [options]
+node dist/dashboard.js              # HTTP dashboard on port 3210
 ```
 
 **Order matters**: `build` before `test` — tests import from `dist/`.
@@ -20,68 +21,102 @@ Run a single test file:
 npx vitest run tests/ts/orchestrator_pipeline.test.ts
 ```
 
-Python setup (for data scripts):
+Python (for data scripts):
 ```bash
-bash scripts/setup-python.sh  # creates .venv, installs skill requirements
+bash scripts/setup-python.sh  # creates .venv, installs skill deps
 source .venv/bin/activate
 ```
 
+The plugin **auto-detects** a Python with `requests` installed (system, Homebrew, pyenv). Override: `TRADING_PYTHON=/path/to/python3`.
+
+**Pre-commit** (husky → lint-staged): eslint --fix then tsc --noEmit on `src/**/*.ts`. Fix before committing.
+
 ## Architecture
 
-This is an OpenClaw plugin (`openclaw.plugin.json`) with 3 tools:
-- `trading_quick` — 8 LLM calls (7 analysts → PM)
-- `trading_full` — 15+ LLM calls (analysts → debate → research → trader → risk)
+OpenClaw plugin (`openclaw.plugin.json`) with 3 tools:
+- `trading_quick` — 8 LLM calls (7 analysts → Portfolio Manager)
+- `trading_full` — 15+ LLM calls (7 analysts → Bull↔Bear debate → Research → Trader → Risk debate → Risk Manager)
 - `trading_report` — read-only query of saved reports
 
-**Data flow**: TypeScript orchestrator (`src/orchestrator.ts`) spawns Python scripts (`skills/*/scripts/*.py`) as child processes, feeds their JSON output into LLM calls via `src/llm-client.ts`.
+**Data flow** (`src/orchestrator.ts`):
+1. Spawn 8 Python scripts in parallel (graceful degradation on failure)
+2. Render prompt templates (`.md` with `{{key}}` placeholders), detect unresolved placeholders (skip that analyst)
+3. 7 parallel LLM analyst calls with stagger jitter (0-800ms), default concurrency 3
+4. Quality gate (deterministic Layer-1 + optional LLM Layer-2 credibility review)
+5. Mode-specific downstream: PM (quick) OR debate → research → trader → risk (full)
 
-**Key directories**:
-- `skills/trading-analysis/prompts/` — all LLM prompt templates (`.md` with `{{placeholder}}` syntax)
-- `skills/*/scripts/` — Python data-fetchers (each outputs JSON to stdout)
-- `skills/_shared/` — shared Python utilities (http_helpers.py)
-- `src/` — TypeScript pipeline logic
-- `tests/ts/` — vitest tests (mock LLM + Python; no real API calls)
-- `tests/scripts/` — Python unit tests (pytest, separate from vitest)
+**Entrypoints**: `src/index.ts` (plugin), `src/cli.ts` (standalone binary `trading-agents`).
 
-## VERDICT Protocol
+**`dist/` is committed** to git — `openclaw plugins install` needs the prebuilt artifact. Developers rebuild after TS changes and commit updated `dist/`.
+
+## Key files
+
+| File | Role |
+|------|------|
+| `src/types.ts` | All interfaces: config, analyst/debate/risk reports, quality, provenance |
+| `src/orchestrator.ts` | Pipeline: `runQuickAnalysis()`, `runFullAnalysis()`, shared `runAnalystPhase()` |
+| `src/llm-client.ts` | `callLLM()` wraps OpenAI, tracks tokens/cost. `parseVerdict()` extracts `<!-- VERDICT: {...} -->` from LLM output |
+| `src/exec-python.ts` | Spawns `python3`; auto-resolves Python binary; caches results (`~/.openclaw/cache`, TTL 4h); 30s timeout |
+| `src/prompt-loader.ts` | Loads `.md` templates, replaces `{{key}}` — missing keys left as-is (detected by `\|\|(\w+)\|\|` check in orchestrator) |
+| `src/quality-gate.ts` | Deterministic Layer-1: empty/short/failure-marker/field-citation checks; A-F grading |
+| `src/quality-review.ts` | Optional LLM Layer-2: catches fabrication, stale data, internal inconsistency via `<!-- QUALITY_REVIEW: {...} -->` |
+| `src/pipeline-health.ts` | Runtime issue collector: abort/skip/warn severity; `hasAbort` stops pipeline |
+| `src/cross-stage-checks.ts` | Post-pipeline structural anomaly detection (wrong-side target, consensus conflict, conservative overruled) |
+| `src/debate.ts` / `research-manager.ts` / `trader.ts` / `risk.ts` | Full-mode phases via `<!-- DEBATE_STATE: {...} -->`, `<!-- RISK_JUDGE: {...} -->` protocols |
+
+## Skills & Prompts
+
+- 7 analyst skills + sector skill (8 data scripts), each under `skills/*/scripts/`
+- **news and policy share the same script** (`skills/trading-news/scripts/news.py`) with different `--lookback-days` (7 vs 14) and different prompt templates
+- Prompt templates: `skills/trading-analysis/prompts/`:
+  - `analysts/{role}.md` — 7 analyst prompts
+  - `portfolio_manager.md`, `quality_review.md`
+  - `debate/{bull,bear}_researcher.md`, `research_manager.md`, `trader.md`, `risk_debater.md`, `risk_manager.md`
+- Template variables split for news/sentiment: news gets `{{stock_news}}` + `{{macro_news}}`, sentiment gets `{{sentiment_data}}` (not the raw `{{sentiment}}` key)
+
+## VERDICT & Structured Output Protocol
 
 LLM outputs embed structured verdicts as HTML comments:
-```
-<!-- VERDICT: {"direction": "看多", "reason": "..."} -->
-```
-Parse with `parseVerdict()` in `src/llm-client.ts`. Direction values vary by phase:
-- Analysts: `看多` / `看空` / `中性`
-- Portfolio Manager: `Buy` / `Overweight` / `Hold` / `Underweight` / `Sell`
-- Risk: `pass` / `revise` / `reject`
+
+| Protocol | Parse function | Direction values |
+|----------|---------------|-----------------|
+| `<!-- VERDICT: {"direction":"...","reason":"..."} -->` | `parseVerdict()` in `llm-client.ts` | Analysts: `看多`/`看空`/`中性`; PM/Research/Trader: `Buy`/`Overweight`/`Hold`/`Underweight`/`Sell`; Risk: `pass`/`revise`/`reject` |
+| `<!-- DEBATE_STATE: {...} -->` | `llm-client.ts` | Debate claim tracking (round, resolved, unresolved IDs) |
+| `<!-- RISK_JUDGE: {...} -->` | `llm-client.ts` | Risk constraints: `hard_constraints`, `soft_constraints`, `execution_preconditions` |
+| `<!-- QUALITY_REVIEW: {...} -->` | `parseQualityReview()` in `quality-review.ts` | Credibility: `高`/`中`/`低` |
+
+`parseDirection()` in `orchestrator.ts` normalizes Chinese/English directions → `Buy`/`Hold`/`Sell`, handles pipe-separated fallback (takes first option).
 
 ## Testing
 
-- Tests mock all external calls (LLM API, Python processes, file system)
-- `tests/scripts/` has Python unit tests (pytest, separate from vitest)
-- No real API keys needed for tests — everything is stubbed
-- `tests/ts/integration.test.ts` covers the full pipeline with mocks
-- Vitest config: `vitest.config.ts` — globals enabled, node environment, `tests/ts/**/*.test.ts`
+- **TypeScript**: Vitest (globals enabled, node env) in `tests/ts/`. All external calls mocked (LLM, Python, filesystem). No real API keys needed.
+- **Python**: `pytest` in `tests/scripts/` (separate from vitest). Run via `python -m pytest tests/scripts/`.
+- Integration: `tests/ts/integration.test.ts` covers full pipeline with mocks.
 
-## Pre-commit
+## Config
 
-Husky runs `npx lint-staged` on commit:
-- `src/**/*.ts` → `eslint --fix` then `tsc --noEmit`
-- Fix lint/type errors before committing
+`TradingAgentsConfig` fields (`src/types.ts`, defaults in `src/index.ts`):
+- `models.analyst/debater/decision/risk` — model per role (default: `glm-4.7-flash`/`glm-4.7`)
+- `models.decision_deep` — optional stronger model for research manager + risk manager gatekeepers (falls back to `decision`/`risk`)
+- `debate_rounds` (2), `risk_debate_rounds` (1), `max_risk_retries` (1)
+- `report_dir` (`~/.openclaw/trading-reports`), `llm_concurrency` (3)
+
+Plugin config file: `~/.openclaw/plugins/trading-agents/config.json`. Standalone CLI: `node dist/cli.js quick 600519 --model gpt-4o --debate-rounds 3`.
 
 ## Environment
 
-- `OPENAI_API_KEY` — required for runtime (not for tests)
-- `OPENAI_BASE_URL` — optional, for compatible APIs (ZhiPu, DeepSeek, etc.)
-- Python 3.11+ required for data scripts
-- Data scripts use mootdx (primary) + akshare (fallback) for A-share data
-- CI tests on Node 18, 20, 22 (ubuntu-latest)
+- `OPENAI_API_KEY` — required (runtime only; tests are stubbed)
+- `OPENAI_BASE_URL` — optional, for OpenAI-compatible APIs (ZhiPu, DeepSeek, etc.)
+- Python 3.11+ with mootdx, akshare, pandas, requests
+- Reports saved to `~/.openclaw/trading-reports/{ticker}/{date}_{mode}.json` + detail directory with phase subdirs (01_analysts/, 02_debate/, etc.)
+- LLM traces: `{detailDir}/06_traces/{runId}/` — one JSON file per LLM call
+- Data cache: `~/.openclaw/cache/` — 4h TTL, keyed by script path + args hash
 
 ## Conventions
 
-- TypeScript strict mode, ES2020 target, CommonJS modules
-- ESLint config: `eslint.config.js` — `@typescript-eslint/no-unused-vars: warn`, `@typescript-eslint/no-explicit-any: warn`
-- No Prettier — rely on eslint --fix for formatting
-- All LLM output parsing is in `src/llm-client.ts` — new verdict formats go there
-- Prompt templates use `{{key}}` placeholders, rendered by `src/prompt-loader.ts`
+- TypeScript strict mode, ES2020, CommonJS, declaration + source maps
+- ESLint (typescript-eslint): `no-unused-vars` (warn), `no-explicit-any` (warn) — no Prettier
 - Python scripts output JSON to stdout, errors to stderr
-- Reports saved to `~/.openclaw/trading-reports/{ticker}/{date}_{mode}.json`
+- Data scripts use mootdx (primary) + akshare (fallback) for A-share data
+- K-line completeness check: min 50 bars; freshness fail if latest bar >7 days from analysis date (near-term only)
+- CI: Node 20/22 on ubuntu-latest, runs build → test → lint → tsc --noEmit
