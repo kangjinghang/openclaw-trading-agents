@@ -1,7 +1,7 @@
 // tests/ts/exec-python.test.ts
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execPython, execSkillScript } from '../../src/exec-python';
+import { execPython, execSkillScript, resolvePythonCmd, resetPythonResolver } from '../../src/exec-python';
 import { writeFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { mkdir, readdir } from 'fs/promises';
@@ -292,5 +292,59 @@ print(json.dumps({"result": "data"}))
 
     expect(result.success).toBe(true);
     expect(result._source).toBe('test-skill:source-test');
+  });
+});
+
+describe('resolvePythonCmd', () => {
+  beforeEach(() => {
+    resetPythonResolver();
+  });
+
+  it('returns a non-empty string', () => {
+    const cmd = resolvePythonCmd();
+    expect(cmd).toBeTruthy();
+    expect(typeof cmd).toBe('string');
+  });
+
+  it('caches the result on second call', () => {
+    const first = resolvePythonCmd();
+    const second = resolvePythonCmd();
+    expect(first).toBe(second);
+  });
+
+  it('prioritizes TRADING_PYTHON env var when set and valid', () => {
+    // Save and set env
+    const orig = process.env.TRADING_PYTHON;
+    process.env.TRADING_PYTHON = 'python3'; // use valid python3
+    resetPythonResolver();
+
+    const cmd = resolvePythonCmd();
+    expect(cmd).toBe('python3');
+
+    // Restore
+    if (orig) {
+      process.env.TRADING_PYTHON = orig;
+    } else {
+      delete process.env.TRADING_PYTHON;
+    }
+    resetPythonResolver();
+  });
+
+  it('falls back when TRADING_PYTHON points to invalid path', () => {
+    const orig = process.env.TRADING_PYTHON;
+    process.env.TRADING_PYTHON = '/nonexistent/python XYZ';
+    resetPythonResolver();
+
+    const cmd = resolvePythonCmd();
+    // Should still return something (fallback to python3)
+    expect(cmd).toBeTruthy();
+
+    // Restore
+    if (orig) {
+      process.env.TRADING_PYTHON = orig;
+    } else {
+      delete process.env.TRADING_PYTHON;
+    }
+    resetPythonResolver();
   });
 });

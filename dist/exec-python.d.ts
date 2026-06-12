@@ -1,4 +1,20 @@
 import { ScriptResult } from './types';
+/**
+ * Auto-detect a Python binary that has the required dependencies.
+ * Checks candidates in priority order, caches the first one that works.
+ *
+ * Priority:
+ * 1. TRADING_PYTHON env var (user explicit override)
+ * 2. python3 (PATH lookup)
+ * 3. /usr/bin/python3 (system)
+ * 4. /opt/homebrew/bin/python3 (Homebrew macOS)
+ * 5. ~/.pyenv/shims/python3 (pyenv)
+ *
+ * Falls back to 'python3' if none have `requests` installed.
+ */
+export declare function resolvePythonCmd(): string;
+/** Reset the cached Python resolver (for testing) */
+export declare function resetPythonResolver(): void;
 /** Try to read a cached result. Returns undefined if not found or expired. */
 export declare function readCache(scriptPath: string, args: string[], ttlMs?: number, cacheDir?: string): ScriptResult | undefined;
 /** Write a successful result to cache */

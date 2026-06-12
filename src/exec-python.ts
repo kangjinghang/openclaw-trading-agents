@@ -1,12 +1,67 @@
 // src/exec-python.ts
 
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { ScriptResult } from './types';
 import { PYTHON_SCRIPT_TIMEOUT_MS, CACHE_TTL_MS, DEFAULT_CACHE_DIR } from './constants';
+
+// ── Python resolver ─────────────────────────────────────────────────
+
+/** Cached resolved Python command */
+let resolvedPython: string | null = null;
+
+/**
+ * Auto-detect a Python binary that has the required dependencies.
+ * Checks candidates in priority order, caches the first one that works.
+ *
+ * Priority:
+ * 1. TRADING_PYTHON env var (user explicit override)
+ * 2. python3 (PATH lookup)
+ * 3. /usr/bin/python3 (system)
+ * 4. /opt/homebrew/bin/python3 (Homebrew macOS)
+ * 5. ~/.pyenv/shims/python3 (pyenv)
+ *
+ * Falls back to 'python3' if none have `requests` installed.
+ */
+export function resolvePythonCmd(): string {
+  if (resolvedPython) return resolvedPython;
+
+  const candidates = [
+    process.env.TRADING_PYTHON,
+    'python3',
+    '/usr/bin/python3',
+    '/opt/homebrew/bin/python3',
+    path.join(os.homedir(), '.pyenv/shims/python3'),
+  ].filter(Boolean) as string[];
+
+  for (const cmd of candidates) {
+    try {
+      execSync(`${cmd} -c "import requests"`, {
+        timeout: 5000,
+        stdio: 'pipe',
+        env: { ...process.env, PYTHONUTF8: '1' },
+      });
+      resolvedPython = cmd;
+      console.error(`[exec-python] resolved python: ${cmd}`);
+      return cmd;
+    } catch {
+      // try next candidate
+    }
+  }
+
+  // No candidate has requests — fallback to bare python3
+  resolvedPython = 'python3';
+  console.error('[exec-python] no python with requests found, falling back to python3');
+  return 'python3';
+}
+
+/** Reset the cached Python resolver (for testing) */
+export function resetPythonResolver(): void {
+  resolvedPython = null;
+}
 
 // ── Cache helpers ──────────────────────────────────────────────────
 
@@ -251,7 +306,7 @@ export async function execSkillScript(
 ): Promise<ScriptResult> {
   const scriptPath = `${projectRoot}/skills/${skillName}/scripts/${scriptName}.py`;
 
-  const result = await execPython(scriptPath, args, stdinData, 'python3', timeoutMs);
+  const result = await execPython(scriptPath, args, stdinData, resolvePythonCmd(), timeoutMs);
 
   // Add source information to result
   if (result.success) {

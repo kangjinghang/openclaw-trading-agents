@@ -78,6 +78,41 @@ openclaw plugins install --link .
 
 > **说明**：`dist/` 目录已包含在 git 仓库中，`openclaw plugins install` 无需额外编译步骤。开发者修改 TypeScript 源码后需运行 `npm run build` 并提交更新后的 `dist/`。
 
+### 配置 Trading Agent
+
+安装插件后，建议创建专用的 trading agent 并配置权限：
+
+```bash
+# 1. 创建 agent
+openclaw agents add trading --model zai/glm-5.1
+
+# 2. 编辑配置（添加插件工具可见性 + 关闭执行审批）
+openclaw config edit
+```
+
+在打开的配置文件中，找到 trading agent 条目，添加 `tools` 配置：
+
+```json
+{
+  "id": "trading",
+  "model": "zai/glm-5.1",
+  "tools": {
+    "alsoAllow": ["group:plugins"],
+    "exec": { "host": "gateway", "security": "full", "ask": "off" }
+  }
+}
+```
+
+> **`alsoAllow: ["group:plugins"]`** — 让 agent 能看到插件注册的工具（`trading_quick`/`trading_full`/`trading_report`）
+>
+> **`exec.security: "full", ask: "off"`** — 关闭执行审批弹窗（可选，不设则每次命令需手动审批）
+
+重启 gateway 使配置生效：`openclaw gateway restart`
+
+> **Python 环境**：数据脚本需要 `requests`、`mootdx`、`akshare`、`pandas`。插件会**自动探测**已安装这些依赖的 Python（支持系统 Python、Homebrew、pyenv 等）。你也可以通过 `TRADING_PYTHON` 环境变量显式指定 Python 路径。
+>
+> **⚠️ 注意**：`openclaw agents delete` 会移除 agent 的 workspace 目录，请勿将 workspace 指向项目源码目录。
+
 ### 快速开始
 
 ```bash
@@ -360,6 +395,41 @@ openclaw plugins install --link .
 ```
 
 > **Note**: The `dist/` directory is included in the git repository, so `openclaw plugins install` works without an additional build step. Developers should run `npm run build` and commit updated `dist/` after changing TypeScript source.
+
+### Configure Trading Agent
+
+After installing the plugin, create a dedicated trading agent and configure permissions:
+
+```bash
+# 1. Create agent
+openclaw agents add trading --model zai/glm-5.1
+
+# 2. Edit config (add plugin tool visibility + disable exec approval)
+openclaw config edit
+```
+
+In the config file, find the trading agent entry and add `tools` configuration:
+
+```json
+{
+  "id": "trading",
+  "model": "zai/glm-5.1",
+  "tools": {
+    "alsoAllow": ["group:plugins"],
+    "exec": { "host": "gateway", "security": "full", "ask": "off" }
+  }
+}
+```
+
+> **`alsoAllow: ["group:plugins"]`** — Makes plugin tools (`trading_quick`/`trading_full`/`trading_report`) visible to the agent
+>
+> **`exec.security: "full", ask: "off"`** — Disables exec approval prompts (optional, without this every command requires manual approval)
+
+Restart the gateway to apply: `openclaw gateway restart`
+
+> **Python Environment**: Data scripts require `requests`, `mootdx`, `akshare`, `pandas`. The plugin **auto-detects** a Python with these dependencies installed (supports system Python, Homebrew, pyenv, etc.). You can also set `TRADING_PYTHON` env var to specify an explicit path.
+>
+> **⚠️ Warning**: `openclaw agents delete` removes the agent's workspace directory. Do not point workspace to your project source directory.
 
 ### Quick Start
 
