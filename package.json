@@ -6,6 +6,13 @@
   "openclaw": {
     "extensions": ["./dist/index.js"]
   },
+  "files": [
+    "dist/",
+    "skills/",
+    "openclaw.plugin.json",
+    "scripts/setup-python.sh",
+    "requirements.txt"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
@@ -13,7 +20,7 @@
     "lint": "eslint src/",
     "analyze": "node dist/cli.js",
     "dashboard": "node dist/dashboard.js",
-    "prepare": "husky"
+    "prepare": "husky || true"
   },
   "bin": {
     "trading-agents": "dist/cli.js"

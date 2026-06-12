@@ -44,27 +44,49 @@ OpenClaw Trading Agents 是一个 OpenClaw 插件，通过多个 AI Agent 协作
 结构化报告 + LLM Trace 持久化
 ```
 
-### 快速开始
+### 安装
+
+**方式一：OpenClaw 插件安装（推荐）**
 
 ```bash
-# 1. 克隆项目
+# 从 GitHub 仓库安装
+openclaw plugins install git:github.com/kangjinghang/openclaw-trading-agents
+
+# 安装 Python 依赖（数据采集脚本需要）
+pip install -r requirements.txt
+```
+
+**方式二：本地开发安装**
+
+```bash
 git clone https://github.com/kangjinghang/openclaw-trading-agents.git
 cd openclaw-trading-agents
 
-# 2. 安装依赖
+# 安装 Node.js 依赖
 npm install
-pip install mootdx akshare requests
 
-# 3. 构建 & 测试
+# 安装 Python 依赖
+pip install -r requirements.txt
+
+# 构建 & 测试
 npm run build
-npm test    # 50 个测试
+npm test
 
-# 4. 设置 API Key
+# 注册到 OpenClaw（link 模式，修改源码后自动生效）
+openclaw plugins install --link .
+```
+
+> **说明**：`dist/` 目录已包含在 git 仓库中，`openclaw plugins install` 无需额外编译步骤。开发者修改 TypeScript 源码后需运行 `npm run build` 并提交更新后的 `dist/`。
+
+### 快速开始
+
+```bash
+# 设置 API Key
 export OPENAI_API_KEY=your-api-key
 # 可选：使用 OpenAI 兼容 API（智谱、DeepSeek 等）
 # export OPENAI_BASE_URL=https://open.bigmodel.cn/api/paas/v4/
 
-# 5. 运行分析（无需 OpenClaw）
+# 独立 CLI 运行（无需 OpenClaw）
 node dist/cli.js quick 600519
 node dist/cli.js full 600519
 ```
@@ -309,18 +331,39 @@ OpenClaw Trading Agents is an [OpenClaw](https://github.com/openclaw/openclaw) p
 - **A-Share Specific**: T+1 constraints, price limits, northbound capital tracking
 - **Full Traceability**: Every LLM call is traced and persisted for auditing
 
-### Quick Start
+### Installation
+
+**Option 1: OpenClaw Plugin Install (Recommended)**
+
+```bash
+# Install from GitHub
+openclaw plugins install git:github.com/kangjinghang/openclaw-trading-agents
+
+# Install Python dependencies (required for data scripts)
+pip install -r requirements.txt
+```
+
+**Option 2: Local Development**
 
 ```bash
 git clone https://github.com/kangjinghang/openclaw-trading-agents.git
 cd openclaw-trading-agents
 
 npm install
-pip install mootdx akshare requests
+pip install -r requirements.txt
 
 npm run build
-npm test    # 50 tests
+npm test
 
+# Register as linked plugin (auto-reloads on source changes)
+openclaw plugins install --link .
+```
+
+> **Note**: The `dist/` directory is included in the git repository, so `openclaw plugins install` works without an additional build step. Developers should run `npm run build` and commit updated `dist/` after changing TypeScript source.
+
+### Quick Start
+
+```bash
 # Set API key
 export OPENAI_API_KEY=your-api-key
 # Optional: use OpenAI-compatible API (ZhiPu, DeepSeek, etc.)

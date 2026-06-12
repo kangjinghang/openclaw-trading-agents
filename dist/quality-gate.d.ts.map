@@ -1,0 +1,1 @@
+{"version":3,"file":"quality-gate.d.ts","sourceRoot":"","sources":["../src/quality-gate.ts"],"names":[],"mappings":"AAEA,OAAO,EAAE,aAAa,EAAgB,cAAc,EAAE,MAAM,SAAS,CAAC;AA2CtE;;;;;;;;;GASG;AACH,wBAAgB,mBAAmB,CAAC,OAAO,EAAE,MAAM,EAAE,IAAI,EAAE,MAAM,GAAG,MAAM,GAAG,IAAI,CAQhF;AAoED;;;;;GAKG;AACH,wBAAgB,sBAAsB,CAAC,OAAO,EAAE,aAAa,EAAE,GAAG,cAAc,CA4B/E"}

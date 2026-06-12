@@ -1,5 +1,6 @@
 node_modules/
-dist/
+# dist/ 已提交到 git —— openclaw plugins install 不执行 build，需要预编译产物
+dist/**/*.tsbuildinfo
 .venv/
 __pycache__/
 *.pyc

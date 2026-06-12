@@ -1,0 +1,253 @@
+"use strict";
+// src/exec-python.ts
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.readCache = readCache;
+exports.writeCache = writeCache;
+exports.execPython = execPython;
+exports.execSkillScript = execSkillScript;
+const child_process_1 = require("child_process");
+const crypto_1 = require("crypto");
+const fs = __importStar(require("fs"));
+const path = __importStar(require("path"));
+const os = __importStar(require("os"));
+const constants_1 = require("./constants");
+// ── Cache helpers ──────────────────────────────────────────────────
+/** Compute a cache key from script path + args */
+function cacheKey(scriptPath, args) {
+    const raw = `${scriptPath} ${args.join(' ')}`;
+    return (0, crypto_1.createHash)('sha256').update(raw).digest('hex').slice(0, 24);
+}
+/** Resolve cache directory, creating it if needed */
+function ensureCacheDir(cacheDir) {
+    const dir = (cacheDir || constants_1.DEFAULT_CACHE_DIR).replace('~', os.homedir());
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+}
+/** Try to read a cached result. Returns undefined if not found or expired. */
+function readCache(scriptPath, args, ttlMs = constants_1.CACHE_TTL_MS, cacheDir) {
+    try {
+        const dir = ensureCacheDir(cacheDir);
+        const filePath = path.join(dir, cacheKey(scriptPath, args) + '.json');
+        if (!fs.existsSync(filePath))
+            return undefined;
+        const entry = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        if (Date.now() - entry.timestamp > ttlMs)
+            return undefined;
+        return entry.result;
+    }
+    catch {
+        return undefined;
+    }
+}
+/** Write a successful result to cache */
+function writeCache(scriptPath, args, result, cacheDir) {
+    if (!result.success)
+        return;
+    try {
+        const dir = ensureCacheDir(cacheDir);
+        const filePath = path.join(dir, cacheKey(scriptPath, args) + '.json');
+        const entry = { timestamp: Date.now(), result };
+        const tmpPath = filePath + '.tmp';
+        fs.writeFileSync(tmpPath, JSON.stringify(entry), 'utf-8');
+        fs.renameSync(tmpPath, filePath);
+    }
+    catch {
+        // Cache write failure is non-fatal
+    }
+}
+// ── Python execution ───────────────────────────────────────────────
+/**
+ * Execute a Python script and capture its JSON output.
+ * Results are cached when `useCache` is true (default).
+ * @param scriptPath - Absolute path to the Python script
+ * @param args - Command line arguments to pass to the script
+ * @param stdinData - Optional data to pass via stdin
+ * @param pythonCmd - Python command to use (defaults to 'python3')
+ * @param timeoutMs - Timeout in milliseconds
+ * @param useCache - Whether to use cache (default: true)
+ * @param cacheDir - Override cache directory (default: ~/.openclaw/cache)
+ */
+async function execPython(scriptPath, args = [], stdinData = null, pythonCmd = 'python3', timeoutMs = constants_1.PYTHON_SCRIPT_TIMEOUT_MS, useCache = true, cacheDir) {
+    // Check cache first
+    if (useCache && stdinData === null) {
+        const cached = readCache(scriptPath, args, constants_1.CACHE_TTL_MS, cacheDir);
+        if (cached) {
+            console.error(`  [cache] hit: ${path.basename(scriptPath)} ${args.join(' ')}`);
+            return cached;
+        }
+    }
+    const result = await execPythonRaw(scriptPath, args, stdinData, pythonCmd, timeoutMs);
+    // Cache successful results
+    if (useCache && result.success && stdinData === null) {
+        writeCache(scriptPath, args, result, cacheDir);
+    }
+    return result;
+}
+/** Raw Python execution without caching */
+function execPythonRaw(scriptPath, args, stdinData, pythonCmd, timeoutMs) {
+    return new Promise((resolve) => {
+        // PYTHONUTF8=1 + -X utf8 force Python 3.7+ to use UTF-8 for stdout/stderr.
+        // On Windows, Python defaults to the system locale (GBK for zh-CN),
+        // which garbles Chinese characters when Node decodes as UTF-8.
+        // On Linux/macOS this is a no-op (already UTF-8).
+        // Both the env var AND the CLI flag are needed: the env var covers
+        // child processes / library code; the flag covers the main interpreter's
+        // stdin/stdout encoding (env var alone can miss the pipe case on Windows).
+        const python = (0, child_process_1.spawn)(pythonCmd, ['-X', 'utf8', scriptPath, ...args], {
+            env: { ...process.env, PYTHONUTF8: '1' },
+        });
+        let stdout = '';
+        let stderr = '';
+        let resolved = false;
+        // Kill process after timeout
+        const timer = setTimeout(() => {
+            if (!resolved) {
+                resolved = true;
+                python.kill('SIGKILL');
+                resolve({
+                    success: false,
+                    error: `Python script timed out after ${timeoutMs}ms: ${scriptPath}`
+                });
+            }
+        }, timeoutMs);
+        // Handle stdin input — always close stdin to send EOF so Python's
+        // sys.stdin.read() doesn't block indefinitely in non-tty (spawn) mode
+        if (stdinData !== null) {
+            try {
+                python.stdin.write(JSON.stringify(stdinData));
+                python.stdin.end();
+            }
+            catch (error) {
+                resolve({
+                    success: false,
+                    error: `Failed to write to stdin: ${error instanceof Error ? error.message : String(error)}`
+                });
+                python.kill();
+                return;
+            }
+        }
+        else {
+            python.stdin.end();
+        }
+        python.stdout.on('data', (data) => {
+            stdout += data.toString();
+        });
+        python.stderr.on('data', (data) => {
+            stderr += data.toString();
+        });
+        python.on('close', (code) => {
+            if (resolved)
+                return;
+            clearTimeout(timer);
+            resolved = true;
+            if (code !== 0) {
+                resolve({
+                    success: false,
+                    error: `Python script failed with exit code ${code}. stderr: ${stderr}`
+                });
+                return;
+            }
+            if (!stdout.trim()) {
+                resolve({
+                    success: false,
+                    error: 'Python script produced no output'
+                });
+                return;
+            }
+            try {
+                const raw = JSON.parse(stdout.trim());
+                // Extract pre-computed fields to top level for data scripts
+                // that output {success, data, vpa, technical_indicators} format.
+                // For generic JSON output, keep the whole object as data.
+                const isDataScriptFormat = typeof raw.success === 'boolean' && raw.data !== undefined;
+                const result = {
+                    success: true,
+                    data: isDataScriptFormat ? raw.data : raw,
+                };
+                if (isDataScriptFormat) {
+                    if (typeof raw.vpa === 'string') {
+                        result.vpa = raw.vpa;
+                    }
+                    if (typeof raw.technical_indicators === 'string') {
+                        result.technical_indicators = raw.technical_indicators;
+                    }
+                }
+                resolve(result);
+            }
+            catch (error) {
+                resolve({
+                    success: false,
+                    error: `Failed to parse JSON output: ${error instanceof Error ? error.message : String(error)}. Raw output: ${stdout}`
+                });
+            }
+        });
+        python.on('error', (error) => {
+            if (resolved)
+                return;
+            clearTimeout(timer);
+            resolved = true;
+            resolve({
+                success: false,
+                error: `Failed to start Python process: ${error.message}`
+            });
+        });
+    });
+}
+/**
+ * Execute a skill script from the skills directory
+ * @param skillName - Name of the skill (e.g., 'trading-kline')
+ * @param scriptName - Name of the script file without .py extension (e.g., 'get-data')
+ * @param projectRoot - Root directory of the project
+ * @param args - Command line arguments to pass to the script
+ * @param stdinData - Optional data to pass via stdin
+ * @returns Promise<ScriptResult> - The parsed JSON output with _source field
+ */
+async function execSkillScript(skillName, scriptName, projectRoot, args = [], stdinData = null, timeoutMs = constants_1.PYTHON_SCRIPT_TIMEOUT_MS) {
+    const scriptPath = `${projectRoot}/skills/${skillName}/scripts/${scriptName}.py`;
+    const result = await execPython(scriptPath, args, stdinData, 'python3', timeoutMs);
+    // Add source information to result
+    if (result.success) {
+        result._source = `${skillName}:${scriptName}`;
+    }
+    else {
+        // Improve error message for script not found
+        if (result.error?.includes('No such file or directory')) {
+            result.error = `Script not found: ${scriptPath}`;
+        }
+    }
+    return result;
+}
+//# sourceMappingURL=exec-python.js.map
