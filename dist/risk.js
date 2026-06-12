@@ -199,7 +199,9 @@ async function runRiskDebate(tradingPlan, analystReports, config, openaiClient, 
     const planText = `方向：${tradingPlan.direction}\n目标价：${tradingPlan.target_price}\n止损：${tradingPlan.stop_loss}\n仓位：${tradingPlan.position_pct}%\n执行计划：${tradingPlan.execution_plan}`;
     const riskArguments = new Array(exports.RISK_ROLES.length);
     const concurrency = config.llm_concurrency || constants_1.DEFAULT_CONCURRENCY;
+    const rateLimitCoordinator = new llm_client_1.RateLimitCoordinator();
     await pool(exports.RISK_ROLES, async ({ role, instructions }, idx) => {
+        await rateLimitCoordinator.waitIfNeeded();
         const riskRoleLabel = role === "aggressive" ? "激进风控" : role === "conservative" ? "保守风控" : "中性风控";
         const userMessage = (0, prompt_loader_1.loadAndRender)("debate/risk_debater.md", {
             ticker: "",
@@ -217,6 +219,7 @@ async function runRiskDebate(tradingPlan, analystReports, config, openaiClient, 
             phase: "risk_debate",
             role: `${role}_risk`,
             traceLogger,
+            rateLimitCoordinator,
         });
         riskArguments[idx] = parseRiskArgument(result.content, role);
     }, concurrency, constants_1.LLM_CALL_STAGGER_MS);

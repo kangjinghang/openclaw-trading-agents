@@ -1,7 +1,7 @@
 // src/risk.ts
 
 import OpenAI from "openai";
-import { callLLM, parseVerdict } from "./llm-client";
+import { callLLM, parseVerdict, RateLimitCoordinator } from "./llm-client";
 import { loadAndRender } from "./prompt-loader";
 import { TraceLogger } from "./trace-logger";
 import {
@@ -203,10 +203,13 @@ export async function runRiskDebate(
 
   const riskArguments: RiskArgument[] = new Array(RISK_ROLES.length);
   const concurrency = config.llm_concurrency || DEFAULT_CONCURRENCY;
+  const rateLimitCoordinator = new RateLimitCoordinator();
 
   await pool(
     RISK_ROLES,
     async ({ role, instructions }, idx) => {
+      await rateLimitCoordinator.waitIfNeeded();
+
       const riskRoleLabel = role === "aggressive" ? "激进风控" : role === "conservative" ? "保守风控" : "中性风控";
       const userMessage = loadAndRender(
         "debate/risk_debater.md",
@@ -229,6 +232,7 @@ export async function runRiskDebate(
         phase: "risk_debate",
         role: `${role}_risk`,
         traceLogger,
+        rateLimitCoordinator,
       });
 
       riskArguments[idx] = parseRiskArgument(result.content, role);

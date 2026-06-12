@@ -4,7 +4,7 @@ import OpenAI from "openai";
 import { execPython } from "./exec-python";
 import { PYTHON_SCRIPT_TIMEOUT_MS } from "./constants";
 import { loadAndRender } from "./prompt-loader";
-import { callLLM, parseVerdict } from "./llm-client";
+import { callLLM, parseVerdict, RateLimitCoordinator } from "./llm-client";
 import { TraceLogger } from "./trace-logger";
 import { ReportStore } from "./report-store";
 import { runBullBearDebate } from "./debate";
@@ -240,6 +240,39 @@ function generateAnalystConsensus(reports: AnalystReport[]): string {
   }
 
   return lines.join("\n");
+}
+
+/** Pre-run validation: check environment before starting analysis */
+
+/** Calculate quick-mode confidence based on analyst success rate and quality grades */
+export function calculateQuickConfidence(
+  reports: AnalystReport[],
+  quality: { grades: Array<{ role: string; grade: string }> }
+): number {
+  const total = reports.length;
+  if (total === 0) return 0.1;
+
+  // Count successful analysts (not starting with error/skip marker)
+  const succeeded = reports.filter(
+    r => !r.content.startsWith("[分析失败") && !r.content.startsWith("[分析跳过")
+  ).length;
+  const successRate = succeeded / total;
+
+  // Count quality-validated analysts (grade A or B)
+  const goodGrades = quality.grades.filter(g => g.grade === "A" || g.grade === "B").length;
+  const gradeRate = goodGrades / total;
+
+  // Weighted: 60% success rate + 40% grade quality
+  // Capped at 0.85 (quick mode is inherently less thorough than full mode)
+  const raw = 0.6 * successRate + 0.4 * gradeRate;
+  return Math.round(Math.min(raw, 0.85) * 100) / 100;
+}
+
+/** Count successful analysts (not failed/skipped) */
+function countSucceededAnalysts(reports: AnalystReport[]): number {
+  return reports.filter(
+    r => !r.content.startsWith("[分析失败") && !r.content.startsWith("[分析跳过")
+  ).length;
 }
 
 /** Pre-run validation: check environment before starting analysis */
@@ -572,11 +605,15 @@ async function runAnalystPhase(
 
   const analystReports: AnalystReport[] = new Array(ANALYST_CONFIGS.length);
   const concurrency = config.llm_concurrency || DEFAULT_CONCURRENCY;
+  const rateLimitCoordinator = new RateLimitCoordinator();
 
   await pool(
     ANALYST_CONFIGS,
     async (cfg, idx) => {
       try {
+        // Adaptive: if a concurrent call hit 429, wait before starting this one
+        await rateLimitCoordinator.waitIfNeeded();
+
         const dataJson = dataMap[cfg.role];
         const roleVars = buildTemplateVars(cfg.role, cfg.dataKey, dataJson);
         const userMessage = loadAndRender(
@@ -613,6 +650,7 @@ async function runAnalystPhase(
           phase: "analyst",
           role: cfg.role,
           traceLogger,
+          rateLimitCoordinator,
         });
 
         totalTokens += llmResult.usage.total_tokens;
@@ -767,12 +805,22 @@ export async function runQuickAnalysis(
     analystVerdicts[report.role] = report.verdict.direction;
   }
 
+  const confidence = calculateQuickConfidence(analystReports, quality);
+
+  // Warn when most analysts failed
+  const succeeded = countSucceededAnalysts(analystReports);
+  const totalAnalysts = analystReports.length;
+  if (succeeded < totalAnalysts * 0.5) {
+    reasoning = `⚠️ 仅 ${succeeded}/${totalAnalysts} 个分析师成功（其余因 API 限流或其他原因失败），置信度显著降低。${reasoning}`;
+    logProgress(runId, `  ⚠ 低覆盖率: ${succeeded}/${totalAnalysts} 分析师成功，结论可靠性受限`);
+  }
+
   const finalDecision: FinalDecision = {
     ticker,
     company_name: companyName || ticker,
     date,
     direction,
-    confidence: 0.7,
+    confidence,
     target_price: 0,
     stop_loss: 0,
     position_pct: 0,
@@ -783,7 +831,7 @@ export async function runQuickAnalysis(
     risk_assessment: "pass",
     execution_plan: "",
     next_review_trigger: "",
-    decision_rationale: `投资组合经理决策：${direction}，置信度 70%。分析师共识：${analystVerdictSummary(analystReports)}`,
+    decision_rationale: `投资组合经理决策：${direction}，置信度 ${(confidence * 100).toFixed(0)}%。分析师共识：${analystVerdictSummary(analystReports)}`,
   };
 
   const result: QuickAnalysisResult = { ticker, date, mode: "quick", analysts: analystReports, final: finalDecision };

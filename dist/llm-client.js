@@ -1,9 +1,13 @@
 "use strict";
 // src/llm-client.ts
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MODEL_COSTS = void 0;
+exports.RateLimitCoordinator = exports.MODEL_COSTS = void 0;
+exports.is429 = is429;
+exports.getRetryAfterMs = getRetryAfterMs;
+exports.retryDelayMs = retryDelayMs;
 exports.callLLM = callLLM;
 exports.parseVerdict = parseVerdict;
+const openai_1 = require("openai");
 const errors_1 = require("./errors");
 const constants_1 = require("./constants");
 /** Cost per 1M tokens (input, output) */
@@ -29,6 +33,65 @@ function calculateCost(model, promptTokens, completionTokens) {
     return ((promptTokens / 1000000) * costs.input +
         (completionTokens / 1000000) * costs.output);
 }
+/** Check if an error is a 429 rate limit error */
+function is429(error) {
+    if (error instanceof openai_1.RateLimitError)
+        return true;
+    if (error instanceof openai_1.APIError && error.status === 429)
+        return true;
+    // Fallback: check message for 429 (non-standard API providers)
+    const msg = error instanceof Error ? error.message : String(error);
+    return msg.startsWith("429");
+}
+/** Extract Retry-After from error headers, returns ms or undefined */
+function getRetryAfterMs(error) {
+    if (!(error instanceof openai_1.APIError))
+        return undefined;
+    const val = error.headers?.["retry-after"];
+    if (!val)
+        return undefined;
+    const seconds = parseInt(val, 10);
+    return Number.isNaN(seconds) ? undefined : seconds * 1000;
+}
+/** Compute retry delay for a given error and attempt index */
+function retryDelayMs(error, attempt) {
+    if (is429(error)) {
+        // 429: exponential backoff 5s → 15s → 45s, prefer Retry-After header
+        const retryAfter = getRetryAfterMs(error);
+        const delay = retryAfter ?? (constants_1.RATE_LIMIT_BASE_DELAY_MS * Math.pow(3, attempt));
+        return Math.min(delay, constants_1.RATE_LIMIT_MAX_DELAY_MS);
+    }
+    // Other errors: short fixed delay with jitter
+    return constants_1.LLM_RETRY_DELAY_MS + Math.random() * constants_1.LLM_RETRY_DELAY_MS;
+}
+/**
+ * Shared coordinator for adaptive rate limiting across concurrent LLM calls.
+ * When one call hits a 429, it signals the cooldown so other pending calls
+ * wait before starting — preventing retry storms across parallel workers.
+ */
+class RateLimitCoordinator {
+    constructor() {
+        this.cooldownUntil = 0;
+    }
+    /** Called when a 429 is detected — tells other callers to slow down. */
+    signalRateLimit(delayMs) {
+        const newCooldown = Date.now() + delayMs;
+        // Only extend, never shorten — the longest backoff wins
+        if (newCooldown > this.cooldownUntil) {
+            this.cooldownUntil = newCooldown;
+        }
+    }
+    /** Wait if we're currently in a cooldown period. Call before each LLM request. */
+    async waitIfNeeded() {
+        const now = Date.now();
+        if (this.cooldownUntil > now) {
+            const waitMs = this.cooldownUntil - now;
+            console.error(`  [rate-limit] cooldown: waiting ${(waitMs / 1000).toFixed(1)}s before next call`);
+            await new Promise(r => setTimeout(r, waitMs));
+        }
+    }
+}
+exports.RateLimitCoordinator = RateLimitCoordinator;
 /**
  * Make an LLM chat completion call, record trace, and return result.
  * Automatically retries up to LLM_MAX_RETRIES times if the response content is empty.
@@ -135,8 +198,13 @@ async function callLLM(client, options) {
             // API error — retry if attempts remain
             if (attempt < constants_1.LLM_MAX_RETRIES) {
                 const errMsg = error instanceof Error ? error.message : String(error);
-                console.error(`  [LLM] ${phase}/${role} API error: ${errMsg}, retrying (${attempt + 1}/${constants_1.LLM_MAX_RETRIES})...`);
-                await new Promise((r) => setTimeout(r, constants_1.LLM_RETRY_DELAY_MS + Math.random() * constants_1.LLM_RETRY_DELAY_MS));
+                const delay = retryDelayMs(error, attempt);
+                console.error(`  [LLM] ${phase}/${role} API error: ${errMsg}, retrying in ${(delay / 1000).toFixed(1)}s (${attempt + 1}/${constants_1.LLM_MAX_RETRIES})...`);
+                // Signal other concurrent callers to slow down on 429
+                if (is429(error) && options.rateLimitCoordinator) {
+                    options.rateLimitCoordinator.signalRateLimit(delay);
+                }
+                await new Promise((r) => setTimeout(r, delay));
             }
         }
     }

@@ -18,14 +18,20 @@ export const PYTHON_SCRIPT_TIMEOUT_MS = 30_000;
 /** Stagger jitter between data script starts (0~1500ms, for Eastmoney rate limit) */
 export const DATA_FETCH_STAGGER_MS = 1500;
 
-/** Stagger jitter between LLM calls (0~800ms, for API rate limit) */
-export const LLM_CALL_STAGGER_MS = 800;
+/** Stagger jitter between LLM calls (0~2000ms, for API rate limit avoidance) */
+export const LLM_CALL_STAGGER_MS = 2000;
 
 /** Default concurrency for parallel operations */
-export const DEFAULT_CONCURRENCY = 3;
+export const DEFAULT_CONCURRENCY = 2;
 
 /** TTL for data script cache entries (4 hours — covers repeated runs same day) */
 export const CACHE_TTL_MS = 4 * 60 * 60 * 1000;
 
 /** Default cache directory for data script results */
 export const DEFAULT_CACHE_DIR = "~/.openclaw/cache";
+
+/** Base delay for 429 rate limit retries (ms), actual = base * 3^attempt */
+export const RATE_LIMIT_BASE_DELAY_MS = 5_000;
+
+/** Maximum delay for 429 retries (ms) */
+export const RATE_LIMIT_MAX_DELAY_MS = 60_000;

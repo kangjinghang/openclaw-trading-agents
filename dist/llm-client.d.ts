@@ -15,6 +15,8 @@ export interface LLMCallOptions {
     phase: LLMCallTrace["phase"];
     role: string;
     traceLogger: TraceLogger;
+    /** Optional coordinator for adaptive rate limiting across concurrent calls */
+    rateLimitCoordinator?: RateLimitCoordinator;
 }
 export interface LLMCallResult {
     content: string;
@@ -25,6 +27,24 @@ export interface LLMCallResult {
     };
     costUsd: number;
     traceId: string;
+}
+/** Check if an error is a 429 rate limit error */
+export declare function is429(error: unknown): boolean;
+/** Extract Retry-After from error headers, returns ms or undefined */
+export declare function getRetryAfterMs(error: unknown): number | undefined;
+/** Compute retry delay for a given error and attempt index */
+export declare function retryDelayMs(error: unknown, attempt: number): number;
+/**
+ * Shared coordinator for adaptive rate limiting across concurrent LLM calls.
+ * When one call hits a 429, it signals the cooldown so other pending calls
+ * wait before starting — preventing retry storms across parallel workers.
+ */
+export declare class RateLimitCoordinator {
+    private cooldownUntil;
+    /** Called when a 429 is detected — tells other callers to slow down. */
+    signalRateLimit(delayMs: number): void;
+    /** Wait if we're currently in a cooldown period. Call before each LLM request. */
+    waitIfNeeded(): Promise<void>;
 }
 /**
  * Make an LLM chat completion call, record trace, and return result.

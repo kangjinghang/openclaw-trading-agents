@@ -66,7 +66,7 @@ function createMockLLM(
 
 const ANALYST_ROLES = ['market', 'fundamentals', 'news', 'sentiment', 'policy', 'hot_money', 'lockup'];
 
-describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
+describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', { timeout: 15_000 }, () => {
   const tmpReportDir = join(process.cwd(), 'test-tmp-reports');
   const actualTraceDir = join(tmpReportDir, '600519', '2026-06-05_quick', '02_traces');
   const actualDataDir = join(tmpReportDir, '600519', '2026-06-05_quick', '03_data');
@@ -432,7 +432,7 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
     // Call count: 18 (first pass) + 5 (1 trader + 3 risk_debate + 1 risk_mgr
     // on the single revise retry) = 23.
     expect(mockCreate).toHaveBeenCalledTimes(23);
-  }, 15000);
+  });
 
   it('should cap final position_pct to the risk manager hard-constraint cap', async () => {
     // Regression for 600600: risk_manager emitted "总仓位≤10%" as a
@@ -489,7 +489,7 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
     expect(result.final.position_pct).toBe(10);
     // And the cap was extracted onto the assessment.
     expect(result.risk_assessment.max_position_override).toBe(10);
-  }, 15000);
+  });
 
   it('should enforce stop_loss from risk hard_constraints', async () => {
     // When risk_manager says "止损价≥5.70元" but trader keeps producing
@@ -541,7 +541,7 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', () => {
     expect(result.trading_plan.stop_loss).toBeGreaterThanOrEqual(5.70);
     // Also verify the position cap test wasn't broken — position should be 20 (no cap here).
     expect(result.trading_plan.position_pct).toBe(20);
-  }, 15000);
+  });
 
   it('should handle pipe-separated VERDICT direction by taking first option', async () => {
     vi.mocked(execPython).mockResolvedValue({

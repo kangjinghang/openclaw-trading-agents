@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { TradingAgentsConfig, QuickAnalysisResult, FullAnalysisResult, ScriptResult, RunMeta } from "./types";
+import { TradingAgentsConfig, QuickAnalysisResult, FullAnalysisResult, AnalystReport, ScriptResult, RunMeta } from "./types";
 /** Generate a data quality description for an analyst based on their ScriptResult. */
 export declare function generateDataQuality(role: string, date: string, result: ScriptResult): string;
 /**
@@ -10,6 +10,14 @@ export declare function generateDataQuality(role: string, date: string, result: 
  * (e.g. {{stock_news}} + {{macro_news}} instead of {{news}}).
  */
 export declare function buildTemplateVars(role: string, dataKey: string, dataJson: string): Record<string, string>;
+/** Pre-run validation: check environment before starting analysis */
+/** Calculate quick-mode confidence based on analyst success rate and quality grades */
+export declare function calculateQuickConfidence(reports: AnalystReport[], quality: {
+    grades: Array<{
+        role: string;
+        grade: string;
+    }>;
+}): number;
 /**
  * Run a quick analysis workflow with 7 parallel analysts:
  * 1. Fetch data from all 7 scripts in parallel (graceful degradation)
