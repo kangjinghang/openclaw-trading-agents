@@ -2,6 +2,8 @@ import OpenAI from "openai";
 import { Type } from "@sinclair/typebox";
 import { runQuickAnalysis, runFullAnalysis } from "./orchestrator";
 import { TradingAgentsConfig, QuickAnalysisResult, FullAnalysisResult } from "./types";
+import { listReports } from "./dashboard-api";
+import { filterReports, formatHistoryCards } from "./history-format";
 import * as path from "path";
 import * as os from "os";
 
@@ -208,6 +210,15 @@ const ReportQueryParams = Type.Object({
   mode: Type.Optional(Type.String({ description: "报告模式: quick 或 full，默认 quick" })),
 });
 
+const HistoryParams = Type.Object({
+  ticker: Type.Optional(Type.String({ description: "按股票代码过滤，如 600519" })),
+  direction: Type.Optional(Type.String({ description: "按方向过滤: Buy/Sell/Hold 或 看多/看空/中性" })),
+  mode: Type.Optional(Type.String({ description: "报告模式: quick 或 full" })),
+  date_from: Type.Optional(Type.String({ description: "起始日期 YYYY-MM-DD（含）" })),
+  date_to: Type.Optional(Type.String({ description: "结束日期 YYYY-MM-DD（含）" })),
+  limit: Type.Optional(Type.Number({ description: "返回条数上限，默认 10" })),
+});
+
 export default {
   id: "trading-agents",
   name: "Trading Agents - A股多角色分析",
@@ -287,6 +298,25 @@ export default {
         }
         const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
         return toolResult(data);
+      },
+    });
+
+    // Register trading_history tool — browse/filter saved reports
+    api.registerTool({
+      name: "trading_history",
+      label: "Browse Analysis History",
+      description: "浏览/搜索已保存的历史分析报告。可按股票、方向、模式、日期范围过滤。不传参数则列出最近的报告。",
+      parameters: HistoryParams,
+      async execute(_toolCallId: string, params: {
+        ticker?: string; direction?: string; mode?: string;
+        date_from?: string; date_to?: string; limit?: number;
+      }) {
+        const all = listReports(config.report_dir);
+        const filtered = filterReports(all, params);
+        const limit = params.limit && params.limit > 0 ? params.limit : 10;
+        const shown = filtered.slice(0, limit);
+        const text = formatHistoryCards(filtered, shown, params);
+        return { content: [{ type: "text" as const, text }] };
       },
     });
   },

@@ -5,7 +5,7 @@
   "description": "Multi-agent A-share stock analysis with debate-driven decision making",
   "main": "dist/index.js",
   "contracts": {
-    "tools": ["trading_quick", "trading_full", "trading_report"]
+    "tools": ["trading_quick", "trading_full", "trading_report", "trading_history"]
   },
   "skills": [
     "./skills/trading-kline",
