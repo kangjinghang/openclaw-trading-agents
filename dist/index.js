@@ -39,6 +39,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const openai_1 = __importDefault(require("openai"));
 const typebox_1 = require("@sinclair/typebox");
 const orchestrator_1 = require("./orchestrator");
+const dashboard_api_1 = require("./dashboard-api");
+const history_format_1 = require("./history-format");
 const path = __importStar(require("path"));
 const os = __importStar(require("os"));
 const DEFAULT_CONFIG = {
@@ -231,6 +233,14 @@ const ReportQueryParams = typebox_1.Type.Object({
     date: typebox_1.Type.String({ description: "报告日期 YYYY-MM-DD" }),
     mode: typebox_1.Type.Optional(typebox_1.Type.String({ description: "报告模式: quick 或 full，默认 quick" })),
 });
+const HistoryParams = typebox_1.Type.Object({
+    ticker: typebox_1.Type.Optional(typebox_1.Type.String({ description: "按股票代码过滤，如 600519" })),
+    direction: typebox_1.Type.Optional(typebox_1.Type.String({ description: "按方向过滤: Buy/Sell/Hold 或 看多/看空/中性" })),
+    mode: typebox_1.Type.Optional(typebox_1.Type.String({ description: "报告模式: quick 或 full" })),
+    date_from: typebox_1.Type.Optional(typebox_1.Type.String({ description: "起始日期 YYYY-MM-DD（含）" })),
+    date_to: typebox_1.Type.Optional(typebox_1.Type.String({ description: "结束日期 YYYY-MM-DD（含）" })),
+    limit: typebox_1.Type.Optional(typebox_1.Type.Number({ description: "返回条数上限，默认 10" })),
+});
 exports.default = {
     id: "trading-agents",
     name: "Trading Agents - A股多角色分析",
@@ -314,6 +324,21 @@ exports.default = {
                 }
                 const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
                 return toolResult(data);
+            },
+        });
+        // Register trading_history tool — browse/filter saved reports
+        api.registerTool({
+            name: "trading_history",
+            label: "Browse Analysis History",
+            description: "浏览/搜索已保存的历史分析报告。可按股票、方向、模式、日期范围过滤。不传参数则列出最近的报告。",
+            parameters: HistoryParams,
+            async execute(_toolCallId, params) {
+                const all = (0, dashboard_api_1.listReports)(config.report_dir);
+                const filtered = (0, history_format_1.filterReports)(all, params);
+                const limit = params.limit && params.limit > 0 ? params.limit : 10;
+                const shown = filtered.slice(0, limit);
+                const text = (0, history_format_1.formatHistoryCards)(filtered, shown, params);
+                return { content: [{ type: "text", text }] };
             },
         });
     },

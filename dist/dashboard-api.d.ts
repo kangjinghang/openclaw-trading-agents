@@ -12,6 +12,8 @@ export interface ReportSummary {
     total_cost_usd: number;
     direction: string;
     confidence: number;
+    /** Final reasoning excerpt (from final.reasoning). Undefined in old reports. */
+    reasoning?: string;
     analyst_verdicts: Record<string, {
         direction: string;
         reason: string;
