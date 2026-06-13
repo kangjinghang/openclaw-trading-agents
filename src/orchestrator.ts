@@ -983,13 +983,14 @@ export async function runFullAnalysis(
   const traceLogger = new TraceLogger(traceDir, runId);
   const reportStore = new ReportStore(config.report_dir);
   const log = makeLogProgress(runId, onProgress);
+  const tracker = new ProgressTracker(startTime, log, FULL_WEIGHTS);
 
   log(`开始 Full 分析 ${ticker} (${date})`);
   validateEnvironment(config.report_dir);
 
   // Phase 1-2: Analysts
   const health = new PipelineHealth(runId);
-  const { analystReports, dataResults, companyName } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health, log);
+  const { analystReports, dataResults, companyName } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health, log, tracker);
 
   if (signal?.aborted) throw new AbortError();
 
@@ -1026,6 +1027,7 @@ export async function runFullAnalysis(
   log(`[3/7] 多空辩论 (${config.debate_rounds} 轮)...`);
   const debate = await runBullBearDebate(analystReports, quality.summary_text, config, openaiClient, traceLogger);
   log(`[3/7] 多空辩论完成 (Bull ${debate.rounds.flatMap(r => r.bull_claims).length} claims, Bear ${debate.rounds.flatMap(r => r.bear_claims).length} claims)`);
+  tracker.emit("debate");
 
   // Debate divergence detection
   if (debate.convergence_score < 0.5) {
@@ -1048,6 +1050,7 @@ export async function runFullAnalysis(
   log(`[4/7] 研究经理裁决...`);
   const researchDecision = await runResearchManager(analystReports, debate, quality.summary_text, config, openaiClient, traceLogger);
   log(`[4/7] 研究经理裁决: ${researchDecision.direction} (信心 ${researchDecision.confidence})`);
+  tracker.emit("research");
 
   if (signal?.aborted) throw new AbortError();
 
@@ -1055,6 +1058,7 @@ export async function runFullAnalysis(
   log(`[5/7] 交易员制定执行计划...`);
   let tradingPlan = await runTrader(researchDecision, analystReports, quality.summary_text, config, openaiClient, traceLogger, ticker, date);
   log(`[5/7] 交易计划: ${tradingPlan.direction} 目标价 ${tradingPlan.target_price} 止损 ${tradingPlan.stop_loss}`);
+  tracker.emit("trader");
 
   if (signal?.aborted) throw new AbortError();
 
@@ -1062,6 +1066,7 @@ export async function runFullAnalysis(
   log(`[6/7] 风控辩论 (3 方)...`);
   let riskDebate = await runRiskDebate(tradingPlan, analystReports, config, openaiClient, traceLogger);
   log(`[6/7] 风控辩论完成`);
+  tracker.emit("riskDebate");
 
   log(`[7/7] 风控经理评估...`);
   let riskAssessment = await runRiskManager(riskDebate, tradingPlan, config, openaiClient, traceLogger);
@@ -1117,6 +1122,7 @@ export async function runFullAnalysis(
   }
 
   log(`[7/7] 风控评估: ${riskAssessment.status} (风险评分 ${riskAssessment.risk_score})`);
+  tracker.emit("riskMgr");
 
   // Assemble FinalDecision
   const analystVerdicts: Record<string, string> = {};
