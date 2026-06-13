@@ -324,6 +324,20 @@ function makeLogProgress(runId: string, onProgress?: ProgressCallback) {
 
 type LogProgressFn = ReturnType<typeof makeLogProgress>;
 
+/** Compute overall % within a stage's [start,end] range given a 0..1 fraction. */
+export function pctInRange(range: [number, number], frac: number): number {
+  const f = Math.max(0, Math.min(1, frac));
+  return Math.round(range[0] + (range[1] - range[0]) * f);
+}
+
+/** Format elapsed ms as "45s" (<60s) or "1m30s" (>=60s). */
+export function formatElapsed(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m${s % 60}s`;
+}
+
 /**
  * Run tasks with limited concurrency and staggered start.
  * Adds a random jitter (0~staggerMs) before each task to avoid burst patterns.
