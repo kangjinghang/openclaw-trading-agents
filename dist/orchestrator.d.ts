@@ -18,6 +18,9 @@ export declare function calculateQuickConfidence(reports: AnalystReport[], quali
         grade: string;
     }>;
 }): number;
+/** Structured progress log to stderr */
+/** Optional progress callback for OpenClaw onUpdate integration */
+export type ProgressCallback = (text: string, id?: string) => void;
 /**
  * Run a quick analysis workflow with 7 parallel analysts:
  * 1. Fetch data from all 7 scripts in parallel (graceful degradation)
@@ -25,7 +28,7 @@ export declare function calculateQuickConfidence(reports: AnalystReport[], quali
  * 3. Portfolio Manager synthesizes all 7 reports
  * 4. Persist and return result
  */
-export declare function runQuickAnalysis(ticker: string, date: string, config: TradingAgentsConfig, openaiClient: OpenAI, signal?: AbortSignal): Promise<[QuickAnalysisResult, RunMeta]>;
+export declare function runQuickAnalysis(ticker: string, date: string, config: TradingAgentsConfig, openaiClient: OpenAI, signal?: AbortSignal, onProgress?: ProgressCallback): Promise<[QuickAnalysisResult, RunMeta]>;
 /**
  * Extract the most recent daily close from the market data script result, for
  * use as the market reference in cross-stage checks (target/stop on wrong side
@@ -41,5 +44,5 @@ export declare function extractLatestClose(dataResults: Array<{
  * 1. 7 analysts (parallel) → 2. Bull↔Bear debate → 3. Research Manager
  * 4. Trader → 5. Risk Debate (3-way parallel) → 6. Risk Manager (with revise loop)
  */
-export declare function runFullAnalysis(ticker: string, date: string, config: TradingAgentsConfig, openaiClient: OpenAI, signal?: AbortSignal): Promise<[FullAnalysisResult, RunMeta]>;
+export declare function runFullAnalysis(ticker: string, date: string, config: TradingAgentsConfig, openaiClient: OpenAI, signal?: AbortSignal, onProgress?: ProgressCallback): Promise<[FullAnalysisResult, RunMeta]>;
 //# sourceMappingURL=orchestrator.d.ts.map

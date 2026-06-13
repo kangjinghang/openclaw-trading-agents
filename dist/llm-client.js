@@ -98,7 +98,7 @@ exports.RateLimitCoordinator = RateLimitCoordinator;
  * Each attempt has a timeout of LLM_TIMEOUT_MS to prevent indefinite hangs.
  */
 async function callLLM(client, options) {
-    const { model, systemPrompt, userMessage, temperature = 0.4, maxTokens = constants_1.LLM_DEFAULT_MAX_TOKENS, phase, role, traceLogger, } = options;
+    const { model, systemPrompt, userMessage, temperature = 0.4, maxTokens = constants_1.LLM_DEFAULT_MAX_TOKENS, phase, role, traceLogger, thinking, } = options;
     let lastError;
     for (let attempt = 0; attempt <= constants_1.LLM_MAX_RETRIES; attempt++) {
         const traceId = generateTraceId();
@@ -109,7 +109,7 @@ async function callLLM(client, options) {
             const timeout = setTimeout(() => controller.abort(), constants_1.LLM_TIMEOUT_MS);
             let response;
             try {
-                response = await client.chat.completions.create({
+                const body = {
                     model,
                     messages: [
                         { role: "system", content: systemPrompt },
@@ -117,7 +117,9 @@ async function callLLM(client, options) {
                     ],
                     temperature,
                     max_tokens: maxTokens,
-                }, { signal: controller.signal });
+                    ...(thinking ? { thinking } : {}),
+                };
+                response = await client.chat.completions.create(body, { signal: controller.signal });
             }
             finally {
                 clearTimeout(timeout);

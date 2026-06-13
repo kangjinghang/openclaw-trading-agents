@@ -140,6 +140,7 @@ export async function runQualityReview(
       phase: "quality_review",
       role: "quality_review",
       traceLogger,
+      ...(config.models.analyst_thinking ? { thinking: { type: config.models.analyst_thinking } } : {}),
     });
     content = result.content;
   } catch {

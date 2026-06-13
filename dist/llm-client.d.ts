@@ -17,6 +17,10 @@ export interface LLMCallOptions {
     traceLogger: TraceLogger;
     /** Optional coordinator for adaptive rate limiting across concurrent calls */
     rateLimitCoordinator?: RateLimitCoordinator;
+    /** Optional thinking mode (e.g. { type: "disabled" }) for GLM models */
+    thinking?: {
+        type: string;
+    };
 }
 export interface LLMCallResult {
     content: string;

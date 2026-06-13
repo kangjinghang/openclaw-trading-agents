@@ -15,12 +15,24 @@ export interface TradingAgentsConfig {
      * Mirrors TradingAgents' quick/deep-thinking two-tier split.
      */
     decision_deep?: string;
+    /**
+     * Per-tier thinking mode override for GLM models.
+     * Only affects GLM-4.5+ models; ignored by other providers.
+     * Valid values: "enabled" | "disabled" | (unset = API default).
+     * When set, passed as `thinking: { type }` in the chat completion request.
+     */
+    analyst_thinking?: string;
+    decision_thinking?: string;
   };
   debate_rounds: number;
   risk_debate_rounds: number;
   max_risk_retries: number;
   report_dir: string;
   llm_concurrency: number;
+  /** Optional: override API key for LLM calls (independent of OpenClaw host) */
+  api_key?: string;
+  /** Optional: override base URL for LLM calls */
+  base_url?: string;
 }
 
 /** Phase 1 output: single analyst report */

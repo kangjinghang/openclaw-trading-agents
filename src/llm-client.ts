@@ -25,6 +25,8 @@ export interface LLMCallOptions {
   traceLogger: TraceLogger;
   /** Optional coordinator for adaptive rate limiting across concurrent calls */
   rateLimitCoordinator?: RateLimitCoordinator;
+  /** Optional thinking mode (e.g. { type: "disabled" }) for GLM models */
+  thinking?: { type: string };
 }
 
 export interface LLMCallResult {
@@ -136,6 +138,7 @@ export async function callLLM(
     phase,
     role,
     traceLogger,
+    thinking,
   } = options;
 
   let lastError: unknown;
@@ -151,7 +154,7 @@ export async function callLLM(
 
       let response;
       try {
-        response = await client.chat.completions.create({
+        const body = {
           model,
           messages: [
             { role: "system", content: systemPrompt },
@@ -159,7 +162,9 @@ export async function callLLM(
           ],
           temperature,
           max_tokens: maxTokens,
-        }, { signal: controller.signal });
+          ...(thinking ? { thinking } : {}),
+        };
+        response = await client.chat.completions.create(body as any, { signal: controller.signal });
       } finally {
         clearTimeout(timeout);
       }

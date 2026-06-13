@@ -143,6 +143,7 @@ async function runQualityReview(reports, quality, ticker, date, config, client, 
             phase: "quality_review",
             role: "quality_review",
             traceLogger,
+            ...(config.models.analyst_thinking ? { thinking: { type: config.models.analyst_thinking } } : {}),
         });
         content = result.content;
     }

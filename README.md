@@ -168,13 +168,27 @@ node dist/cli.js quick 600519 --report-dir ./my-reports
 
 **方式二：作为 OpenClaw 插件**
 
-```bash
-# 安装到 OpenClaw
-openclaw plugins install --link .
+安装后需在 OpenClaw 配置中启用插件并设置 API key。编辑 `openclaw.json`（`openclaw config edit`），在 `plugins.entries` 下添加：
 
-# 配置
-cp config/openclaw.example.json ~/.openclaw/plugins/trading-agents/config.json
+```json
+{
+  "plugins": {
+    "entries": {
+      "trading-agents": {
+        "enabled": true,
+        "config": {
+          "api_key": "your-llm-api-key",
+          "base_url": "https://api.openai.com/v1"
+        }
+      }
+    }
+  }
+}
 ```
+
+> **重要**：配置必须放在 `openclaw.json` 的 `plugins.entries.trading-agents.config` 里，不要放到单独的文件中。
+
+重启 OpenClaw 使配置生效：`openclaw gateway restart`
 
 通过 OpenClaw 调用三个工具：
 
@@ -247,33 +261,54 @@ openclaw-trading-agents/
 
 ### 配置
 
-插件配置文件：`~/.openclaw/plugins/trading-agents/config.json`
+插件配置位于 `openclaw.json` 的 `plugins.entries.trading-agents.config`（通过 `openclaw config edit` 编辑）：
 
 ```json
 {
-  "models": {
-    "analyst": "gpt-4o",
-    "debater": "gpt-4o",
-    "decision": "gpt-4o",
-    "risk": "gpt-4o"
-  },
-  "debate_rounds": 2,
-  "risk_debate_rounds": 1,
-  "max_risk_retries": 1,
-  "report_dir": "~/.openclaw/trading-reports"
+  "plugins": {
+    "entries": {
+      "trading-agents": {
+        "enabled": true,
+        "config": {
+          "api_key": "your-llm-api-key",
+          "base_url": "https://api.openai.com/v1",
+          "models": {
+            "analyst": "gpt-4o-mini",
+            "debater": "gpt-4o",
+            "decision": "gpt-4o",
+            "risk": "gpt-4o"
+          },
+          "llm_concurrency": 3
+        }
+      }
+    }
+  }
 }
 ```
 
+> **不设 `api_key` 的话**，插件会使用 OpenClaw 主配置的 provider API key。设置 `api_key` 可以给插件用独立的 key 或不同的 API endpoint。
+
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `models.analyst` | string | `gpt-4o` | 分析师使用的模型 |
-| `models.debater` | string | `gpt-4o` | 辩论使用的模型 |
-| `models.decision` | string | `gpt-4o` | 研究/交易决策使用的模型 |
-| `models.risk` | string | `gpt-4o` | 风控使用的模型 |
+| `api_key` | string | — | LLM API Key（可选，不设则用 OpenClaw 主配置） |
+| `base_url` | string | — | LLM API 地址（与 `api_key` 配合使用） |
+| `models.analyst` | string | `glm-4.7-flash` | 分析师 + quality review 使用的模型 |
+| `models.debater` | string | `glm-4.7` | 多空辩论使用的模型 |
+| `models.decision` | string | `glm-4.7` | 投资组合经理 / 研究经理 / 交易员使用的模型 |
+| `models.risk` | string | `glm-4.7` | 风控使用的模型 |
+| `models.decision_deep` | string | — | 研究经理 + 风控经理的深度推理模型（可选，不设则用 `decision`/`risk`） |
+| `llm_concurrency` | number | `1` | LLM 并发调用数。设为 1 最稳定（不会限流），设为 3 更快但可能触发 rate limit |
 | `debate_rounds` | number | `2` | Bull↔Bear 辩论轮次 |
 | `risk_debate_rounds` | number | `1` | 风控辩论轮次 |
 | `max_risk_retries` | number | `1` | 风控修订最大重试次数 |
 | `report_dir` | string | `~/.openclaw/trading-reports` | 报告保存目录 |
+
+> **超时设置**：分析可能需要数分钟（取决于模型速度和并发数）。如果 OpenClaw 的 tool call 超时（默认 5 分钟），在 `openclaw.json` 顶层添加 `"diagnostics": {"stuckSessionAbortMs": 1800000}`（30 分钟）。
+>
+> **模型选择建议**：
+> - 快速体验：全部用 `gpt-4o-mini` 或 `glm-4.7-flash`，并发设 3
+> - 质量优先：分析师用 `glm-4.7-flash`，决策/风控用 `glm-4.7` 或更强模型，并发设 1-2
+> - 注意：`glm-4.7` 等带 reasoning 的模型单次调用可能需要 60-120 秒
 
 ### VERDICT 协议
 
@@ -519,22 +554,49 @@ Structured Report + LLM Trace Persistence
 
 ### Configuration
 
-`~/.openclaw/plugins/trading-agents/config.json`:
+Plugin config goes in `openclaw.json` under `plugins.entries.trading-agents.config` (edit via `openclaw config edit`):
 
 ```json
 {
-  "models": {
-    "analyst": "gpt-4o",
-    "debater": "gpt-4o",
-    "decision": "gpt-4o",
-    "risk": "gpt-4o"
-  },
-  "debate_rounds": 2,
-  "risk_debate_rounds": 1,
-  "max_risk_retries": 1,
-  "report_dir": "~/.openclaw/trading-reports"
+  "plugins": {
+    "entries": {
+      "trading-agents": {
+        "enabled": true,
+        "config": {
+          "api_key": "your-llm-api-key",
+          "base_url": "https://api.openai.com/v1",
+          "models": {
+            "analyst": "gpt-4o-mini",
+            "debater": "gpt-4o",
+            "decision": "gpt-4o",
+            "risk": "gpt-4o"
+          },
+          "llm_concurrency": 3
+        }
+      }
+    }
+  }
 }
 ```
+
+> **Without `api_key`**: the plugin uses the OpenClaw host provider's API key. Set `api_key` for an independent key or different API endpoint.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `api_key` | string | — | LLM API key (optional, falls back to OpenClaw host config) |
+| `base_url` | string | — | LLM API base URL (used with `api_key`) |
+| `models.analyst` | string | `glm-4.7-flash` | Analyst + quality review model |
+| `models.debater` | string | `glm-4.7` | Bull↔Bear debate model |
+| `models.decision` | string | `glm-4.7` | Portfolio manager / research manager / trader model |
+| `models.risk` | string | `glm-4.7` | Risk debate / risk manager model |
+| `models.decision_deep` | string | — | Deeper reasoning model for research + risk managers (optional, falls back to `decision`/`risk`) |
+| `llm_concurrency` | number | `1` | Parallel LLM calls. 1 = safest (no rate limits), 3 = faster but may hit rate limits |
+| `debate_rounds` | number | `2` | Bull↔Bear debate rounds |
+| `risk_debate_rounds` | number | `1` | Risk debate rounds |
+| `max_risk_retries` | number | `1` | Max risk revision retries |
+| `report_dir` | string | `~/.openclaw/trading-reports` | Report output directory |
+
+> **Timeout**: Analysis can take several minutes. If OpenClaw aborts the tool call (default 5 min timeout), add `"diagnostics": {"stuckSessionAbortMs": 1800000}` (30 min) to the top level of `openclaw.json`.
 
 ### Development
 

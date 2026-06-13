@@ -29,6 +29,7 @@
     "trading-agents": "dist/cli.js"
   },
   "dependencies": {
+    "@sinclair/typebox": "^0.34.49",
     "openai": "4.104.0"
   },
   "devDependencies": {

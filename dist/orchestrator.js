@@ -291,14 +291,18 @@ function validateEnvironment(reportDir) {
 function generateRunId() {
     return `run-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 7)}`;
 }
-/** Structured progress log to stderr */
-function logProgress(runId, message, tokens, costUsd) {
-    const ts = new Date().toISOString().slice(11, 19);
-    let suffix = "";
-    if (tokens !== undefined && costUsd !== undefined) {
-        suffix = ` — ${tokens.toLocaleString()} tokens, $${costUsd.toFixed(4)}`;
-    }
-    console.error(`  [${ts}] [${runId.slice(0, 12)}] ${message}${suffix}`);
+/** Create a run-scoped logProgress that also forwards to OpenClaw onUpdate */
+function makeLogProgress(runId, onProgress) {
+    return (message, tokens, costUsd, id) => {
+        const ts = new Date().toISOString().slice(11, 19);
+        let suffix = "";
+        if (tokens !== undefined && costUsd !== undefined) {
+            suffix = ` — ${tokens.toLocaleString()} tokens, $${costUsd.toFixed(4)}`;
+        }
+        console.error(`  [${ts}] [${runId.slice(0, 12)}] ${message}${suffix}`);
+        if (onProgress)
+            onProgress(`${message}${suffix}`, id);
+    };
 }
 /**
  * Run tasks with limited concurrency and staggered start.
@@ -475,11 +479,11 @@ function saveRawData(detailDir, dataResults, subDirName) {
  * Shared Phase 1-2: fetch data + run 7 analysts in parallel.
  * Used by both runQuickAnalysis() and runFullAnalysis().
  */
-async function runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health) {
+async function runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health, log) {
     let totalTokens = 0;
     let totalCostUsd = 0;
     // ── Phase 1: Fetch data from all 7 scripts with concurrency limit ──
-    logProgress(runId, "[1/4] 数据采集 7 个数据源...");
+    log("[1/4] 数据采集 7 个数据源...");
     const dataConcurrency = config.llm_concurrency || constants_2.DEFAULT_CONCURRENCY;
     const dataResults = new Array(ANALYST_CONFIGS.length);
     await pool(ANALYST_CONFIGS, async (cfg, idx) => {
@@ -489,20 +493,20 @@ async function runAnalystPhase(ticker, date, config, openaiClient, traceLogger, 
             const result = await (0, exec_python_1.execPython)(scriptPath, args, null, 'python3', scriptTimeout(cfg));
             dataResults[idx] = { role: cfg.role, result };
             if (!result.success) {
-                logProgress(runId, `  数据采集 ${cfg.role} 失败: ${result.error?.slice(0, 80)}`);
+                log(`  数据采集 ${cfg.role} 失败: ${result.error?.slice(0, 80)}`);
             }
         }
         catch (err) {
             dataResults[idx] = { role: cfg.role, result: { success: false, error: err.message } };
-            logProgress(runId, `  数据采集 ${cfg.role} 异常: ${err.message?.slice(0, 80)}`);
+            log(`  数据采集 ${cfg.role} 异常: ${err.message?.slice(0, 80)}`);
         }
     }, dataConcurrency, constants_2.DATA_FETCH_STAGGER_MS);
     const dataFailed = dataResults.filter(d => !d.result.success).length;
-    logProgress(runId, `[1/4] 数据采集完成 (${ANALYST_CONFIGS.length - dataFailed}/${ANALYST_CONFIGS.length} 成功${dataFailed > 0 ? `, ${dataFailed} 失败` : ""})`);
+    log(`[1/4] 数据采集完成 (${ANALYST_CONFIGS.length - dataFailed}/${ANALYST_CONFIGS.length} 成功${dataFailed > 0 ? `, ${dataFailed} 失败` : ""})`);
     // CP1: Data collection gate
     health.check("data_collection", "abort", "majority_scripts_failed", dataFailed < 6, `${dataFailed}/${ANALYST_CONFIGS.length} 数据源失败，无法进行有效分析`);
     if (health.hasAbort) {
-        logProgress(runId, `❌ 管道中止: ${health.getIssues("data_collection").map(i => i.message).join("; ")}`);
+        log(`❌ 管道中止: ${health.getIssues("data_collection").map(i => i.message).join("; ")}`);
         const fallbackName = dataResults.find(r => r.role === "fundamentals")?.result?.data?.valuation?.name
             || dataResults.find(r => r.role === "fundamentals")?.result?.data?.stock_info?.name
             || "";
@@ -544,11 +548,14 @@ async function runAnalystPhase(ticker, date, config, openaiClient, traceLogger, 
         ? `${companyName}${industry ? `（${industry}）` : ""}（${ticker}）`
         : ticker;
     // ── Phase 2: Run all 7 analysts with concurrency limit ─────────
-    logProgress(runId, "[2/4] 分析师阶段 7 个分析师...");
+    log("[2/4] 分析师阶段 7 个分析师...");
     const promptsBaseDir = path.join(SKILLS_DIR, "trading-analysis", "prompts");
     const analystReports = new Array(ANALYST_CONFIGS.length);
     const concurrency = config.llm_concurrency || constants_2.DEFAULT_CONCURRENCY;
     const rateLimitCoordinator = new llm_client_1.RateLimitCoordinator();
+    // Live analyst vote tracking for progress updates
+    const votes = {};
+    let completedCount = 0;
     await pool(ANALYST_CONFIGS, async (cfg, idx) => {
         try {
             // Adaptive: if a concurrent call hit 429, wait before starting this one
@@ -566,7 +573,7 @@ async function runAnalystPhase(ticker, date, config, openaiClient, traceLogger, 
                     message: `${cfg.role} 有 ${remainingPlaceholders.length} 个占位符未替换: ${remainingPlaceholders.join(", ")}`,
                     context: { role: cfg.role, placeholders: remainingPlaceholders.map(p => p.replace(/[{}]/g, "")) },
                 });
-                logProgress(runId, `  ⚠ 跳过 ${cfg.role}: 占位符未替换`);
+                log(`  ⚠ 跳过 ${cfg.role}: 占位符未替换`);
                 analystReports[idx] = {
                     role: cfg.role,
                     content: `[分析跳过: 模板占位符未替换 — ${remainingPlaceholders.join(", ")}]`,
@@ -584,10 +591,17 @@ async function runAnalystPhase(ticker, date, config, openaiClient, traceLogger, 
                 role: cfg.role,
                 traceLogger,
                 rateLimitCoordinator,
+                ...(config.models.analyst_thinking ? { thinking: { type: config.models.analyst_thinking } } : {}),
             });
             totalTokens += llmResult.usage.total_tokens;
             totalCostUsd += llmResult.costUsd;
             const verdict = (0, llm_client_1.parseVerdict)(llmResult.content);
+            completedCount++;
+            const vDir = verdict?.direction || "?";
+            votes[vDir] = (votes[vDir] || 0) + 1;
+            const voteStr = Object.entries(votes).map(([d, c]) => `${c}${d}`).join("/");
+            log(`⏳ [2/4] 分析师 ${completedCount}/${ANALYST_CONFIGS.length} (${voteStr})`, undefined, undefined, "analyst-progress");
+            log(`  ✓ ${cfg.role}: ${vDir} (${llmResult.usage.total_tokens.toLocaleString()} tokens)`);
             // CP3: Analyst output gate
             health.check("analyst_output", "warn", "verdict_missing", verdict !== null, `${cfg.role} VERDICT 解析失败，使用默认中性`, { role: cfg.role });
             health.check("analyst_output", "warn", "content_too_short", llmResult.content.length >= 200, `${cfg.role} 输出过短 (${llmResult.content.length} chars)，可能敷衍`, { role: cfg.role, contentLength: llmResult.content.length });
@@ -599,7 +613,10 @@ async function runAnalystPhase(ticker, date, config, openaiClient, traceLogger, 
             };
         }
         catch (err) {
-            logProgress(runId, `  分析师 ${cfg.role} 失败: ${err.message?.slice(0, 80)}`);
+            completedCount++;
+            const voteStr = Object.entries(votes).map(([d, c]) => `${c}${d}`).join("/");
+            log(`⏳ [2/4] 分析师 ${completedCount}/${ANALYST_CONFIGS.length} (${voteStr})`, undefined, undefined, "analyst-progress");
+            log(`  ✗ ${cfg.role}: 失败 — ${err.message?.slice(0, 60)}`);
             analystReports[idx] = {
                 role: cfg.role,
                 content: `[分析失败: ${err.message}]`,
@@ -609,7 +626,7 @@ async function runAnalystPhase(ticker, date, config, openaiClient, traceLogger, 
         }
     }, concurrency, constants_2.LLM_CALL_STAGGER_MS);
     const analystEmpty = analystReports.filter(r => r.content.startsWith("[分析失败")).length;
-    logProgress(runId, `[2/4] 分析师阶段完成${analystEmpty > 0 ? ` (${analystEmpty} 个失败)` : ""}`);
+    log(`[2/4] 分析师阶段完成${analystEmpty > 0 ? ` (${analystEmpty} 个失败)` : ""}`);
     return { analystReports, totalTokens, totalCostUsd, dataResults, companyName };
 }
 /**
@@ -619,7 +636,7 @@ async function runAnalystPhase(ticker, date, config, openaiClient, traceLogger, 
  * 3. Portfolio Manager synthesizes all 7 reports
  * 4. Persist and return result
  */
-async function runQuickAnalysis(ticker, date, config, openaiClient, signal) {
+async function runQuickAnalysis(ticker, date, config, openaiClient, signal, onProgress) {
     const startTime = Date.now();
     const runId = generateRunId();
     const detailDir = path.join(config.report_dir.replace("~", os.homedir()), ticker, `${date}_quick`);
@@ -629,10 +646,11 @@ async function runQuickAnalysis(ticker, date, config, openaiClient, signal) {
     const traceDir = path.join(detailDir, "02_traces", runId);
     const traceLogger = new trace_logger_1.TraceLogger(traceDir, runId);
     const reportStore = new report_store_1.ReportStore(config.report_dir);
-    logProgress(runId, `开始 Quick 分析 ${ticker} (${date})`);
+    const log = makeLogProgress(runId, onProgress);
+    log(`开始 Quick 分析 ${ticker} (${date})`);
     validateEnvironment(config.report_dir);
     const health = new pipeline_health_1.PipelineHealth(runId);
-    const { analystReports, totalTokens, totalCostUsd, dataResults, companyName } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health);
+    const { analystReports, totalTokens, totalCostUsd, dataResults, companyName } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health, log);
     if (signal?.aborted)
         throw new errors_1.AbortError();
     // ── Quality Gate ──────────────────────────────────────────────────
@@ -641,7 +659,7 @@ async function runQuickAnalysis(ticker, date, config, openaiClient, signal) {
     const qualityReview = await (0, quality_review_1.runQualityReview)(analystReports, quality, ticker, date, config, openaiClient, traceLogger);
     if (qualityReview)
         quality.summary_text += (0, quality_review_1.formatQualityReview)(qualityReview);
-    logProgress(runId, `[2/4] 质量门控: ${quality.grades.map(g => `${g.role}=${g.grade}`).join(", ")}${qualityReview ? ` (可信度 ${qualityReview.credibility})` : ""}`);
+    log(`[2/4] 质量门控: ${quality.grades.map(g => `${g.role}=${g.grade}`).join(", ")}${qualityReview ? ` (可信度 ${qualityReview.credibility})` : ""}`);
     // CP4: Quality gate — register layer-1 grades
     for (const g of quality.grades) {
         if (g.grade === "D" || g.grade === "F") {
@@ -662,7 +680,7 @@ async function runQuickAnalysis(ticker, date, config, openaiClient, signal) {
     // prompts (transient) — unrecoverable without grepping trace inputs after.
     reportStore.saveQualitySummary(ticker, date, "quick", quality, qualityReview);
     // ── Portfolio Manager ────────────────────────────────────────────
-    logProgress(runId, "[3/4] 投资组合经理决策...");
+    log("[3/4] 投资组合经理决策...");
     const promptsBaseDir = path.join(SKILLS_DIR, "trading-analysis", "prompts");
     const allReportsText = analystReports
         .map((r) => `## ${r.role} 分析师报告\n\n${r.content}\n\nVERDICT: ${r.verdict.direction} — ${r.verdict.reason}`)
@@ -689,7 +707,7 @@ async function runQuickAnalysis(ticker, date, config, openaiClient, signal) {
     }
     else {
         // Fallback: majority vote from analysts
-        logProgress(runId, "  WARNING: 投资组合经理结论解析失败，使用分析师多数意见");
+        log("  WARNING: 投资组合经理结论解析失败，使用分析师多数意见");
         const verdictCounts = {};
         for (const report of analystReports) {
             verdictCounts[report.verdict.direction] = (verdictCounts[report.verdict.direction] || 0) + 1;
@@ -708,7 +726,7 @@ async function runQuickAnalysis(ticker, date, config, openaiClient, signal) {
     const totalAnalysts = analystReports.length;
     if (succeeded < totalAnalysts * 0.5) {
         reasoning = `⚠️ 仅 ${succeeded}/${totalAnalysts} 个分析师成功（其余因 API 限流或其他原因失败），置信度显著降低。${reasoning}`;
-        logProgress(runId, `  ⚠ 低覆盖率: ${succeeded}/${totalAnalysts} 分析师成功，结论可靠性受限`);
+        log(`  ⚠ 低覆盖率: ${succeeded}/${totalAnalysts} 分析师成功，结论可靠性受限`);
     }
     const finalDecision = {
         ticker,
@@ -730,14 +748,14 @@ async function runQuickAnalysis(ticker, date, config, openaiClient, signal) {
     };
     const result = { ticker, date, mode: "quick", analysts: analystReports, final: finalDecision };
     const durationMs = Date.now() - startTime;
-    logProgress(runId, `[4/4] 保存报告...`);
+    log(`[4/4] 保存报告...`);
     const provenance = [
         { stage: "analysts", key_decision: analystVerdictSummary(analystReports), detail_ref: "01_analysts/" },
         { stage: "portfolio_manager", key_decision: `${finalDecision.direction} (${(finalDecision.confidence * 100).toFixed(0)}%)` },
     ];
     reportStore.save(ticker, date, "quick", result, durationMs, allTokens, allCost, runId, traceLogger.warnings, health.toJSON(), provenance);
     saveRawData(detailDir, dataResults, "03_data");
-    logProgress(runId, `完成 (${(durationMs / 1000).toFixed(1)}s)`, allTokens, allCost);
+    log(`完成 (${(durationMs / 1000).toFixed(1)}s)`, allTokens, allCost);
     // Write run summary for auditing
     const meta = {
         run_id: runId,
@@ -773,7 +791,7 @@ function extractLatestClose(dataResults) {
  * 1. 7 analysts (parallel) → 2. Bull↔Bear debate → 3. Research Manager
  * 4. Trader → 5. Risk Debate (3-way parallel) → 6. Risk Manager (with revise loop)
  */
-async function runFullAnalysis(ticker, date, config, openaiClient, signal) {
+async function runFullAnalysis(ticker, date, config, openaiClient, signal, onProgress) {
     const startTime = Date.now();
     const runId = generateRunId();
     const detailDir = path.join(config.report_dir.replace("~", os.homedir()), ticker, `${date}_full`);
@@ -781,11 +799,12 @@ async function runFullAnalysis(ticker, date, config, openaiClient, signal) {
     const traceDir = path.join(detailDir, "06_traces", runId);
     const traceLogger = new trace_logger_1.TraceLogger(traceDir, runId);
     const reportStore = new report_store_1.ReportStore(config.report_dir);
-    logProgress(runId, `开始 Full 分析 ${ticker} (${date})`);
+    const log = makeLogProgress(runId, onProgress);
+    log(`开始 Full 分析 ${ticker} (${date})`);
     validateEnvironment(config.report_dir);
     // Phase 1-2: Analysts
     const health = new pipeline_health_1.PipelineHealth(runId);
-    const { analystReports, dataResults, companyName } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health);
+    const { analystReports, dataResults, companyName } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health, log);
     if (signal?.aborted)
         throw new errors_1.AbortError();
     // Quality Gate
@@ -794,7 +813,7 @@ async function runFullAnalysis(ticker, date, config, openaiClient, signal) {
     const qualityReview = await (0, quality_review_1.runQualityReview)(analystReports, quality, ticker, date, config, openaiClient, traceLogger);
     if (qualityReview)
         quality.summary_text += (0, quality_review_1.formatQualityReview)(qualityReview);
-    logProgress(runId, `质量门控: ${quality.grades.map(g => `${g.role}=${g.grade}`).join(", ")}${qualityReview ? ` (可信度 ${qualityReview.credibility})` : ""}`);
+    log(`质量门控: ${quality.grades.map(g => `${g.role}=${g.grade}`).join(", ")}${qualityReview ? ` (可信度 ${qualityReview.credibility})` : ""}`);
     // CP4: Quality gate — register layer-1 grades
     for (const g of quality.grades) {
         if (g.grade === "D" || g.grade === "F") {
@@ -815,9 +834,9 @@ async function runFullAnalysis(ticker, date, config, openaiClient, signal) {
     // prompts (transient) — unrecoverable without grepping trace inputs after.
     reportStore.saveQualitySummary(ticker, date, "full", quality, qualityReview);
     // Phase 3: Bull↔Bear Debate
-    logProgress(runId, `[3/7] 多空辩论 (${config.debate_rounds} 轮)...`);
+    log(`[3/7] 多空辩论 (${config.debate_rounds} 轮)...`);
     const debate = await (0, debate_1.runBullBearDebate)(analystReports, quality.summary_text, config, openaiClient, traceLogger);
-    logProgress(runId, `[3/7] 多空辩论完成 (Bull ${debate.rounds.flatMap(r => r.bull_claims).length} claims, Bear ${debate.rounds.flatMap(r => r.bear_claims).length} claims)`);
+    log(`[3/7] 多空辩论完成 (Bull ${debate.rounds.flatMap(r => r.bull_claims).length} claims, Bear ${debate.rounds.flatMap(r => r.bear_claims).length} claims)`);
     // Debate divergence detection
     if (debate.convergence_score < 0.5) {
         health.add({
@@ -835,27 +854,27 @@ async function runFullAnalysis(ticker, date, config, openaiClient, signal) {
     if (signal?.aborted)
         throw new errors_1.AbortError();
     // Phase 4: Research Manager
-    logProgress(runId, `[4/7] 研究经理裁决...`);
+    log(`[4/7] 研究经理裁决...`);
     const researchDecision = await (0, research_manager_1.runResearchManager)(analystReports, debate, quality.summary_text, config, openaiClient, traceLogger);
-    logProgress(runId, `[4/7] 研究经理裁决: ${researchDecision.direction} (信心 ${researchDecision.confidence})`);
+    log(`[4/7] 研究经理裁决: ${researchDecision.direction} (信心 ${researchDecision.confidence})`);
     if (signal?.aborted)
         throw new errors_1.AbortError();
     // Phase 5: Trader
-    logProgress(runId, `[5/7] 交易员制定执行计划...`);
+    log(`[5/7] 交易员制定执行计划...`);
     let tradingPlan = await (0, trader_1.runTrader)(researchDecision, analystReports, quality.summary_text, config, openaiClient, traceLogger, ticker, date);
-    logProgress(runId, `[5/7] 交易计划: ${tradingPlan.direction} 目标价 ${tradingPlan.target_price} 止损 ${tradingPlan.stop_loss}`);
+    log(`[5/7] 交易计划: ${tradingPlan.direction} 目标价 ${tradingPlan.target_price} 止损 ${tradingPlan.stop_loss}`);
     if (signal?.aborted)
         throw new errors_1.AbortError();
     // Phase 6-7: Risk Debate + Risk Manager (with revise loop)
-    logProgress(runId, `[6/7] 风控辩论 (3 方)...`);
+    log(`[6/7] 风控辩论 (3 方)...`);
     let riskDebate = await (0, risk_1.runRiskDebate)(tradingPlan, analystReports, config, openaiClient, traceLogger);
-    logProgress(runId, `[6/7] 风控辩论完成`);
-    logProgress(runId, `[7/7] 风控经理评估...`);
+    log(`[6/7] 风控辩论完成`);
+    log(`[7/7] 风控经理评估...`);
     let riskAssessment = await (0, risk_1.runRiskManager)(riskDebate, tradingPlan, config, openaiClient, traceLogger);
     let retries = 0;
     while (riskAssessment.status === "revise" && retries < config.max_risk_retries) {
         retries++;
-        logProgress(runId, `  风控要求修订 (${retries}/${config.max_risk_retries}), 重新生成交易计划...`);
+        log(`  风控要求修订 (${retries}/${config.max_risk_retries}), 重新生成交易计划...`);
         // Inject the prior risk constraints into the trader so the revised plan
         // actually addresses them (instead of a blind retry). max_position_override
         // remains as a hard numeric cap fallback in case the LLM ignores hard_constraints.
@@ -872,7 +891,7 @@ async function runFullAnalysis(ticker, date, config, openaiClient, signal) {
     // producing a self-contradictory report. Consumers (dashboard badge, report
     // formatter, final.risk_assessment propagation) already handle "revise".
     if (riskAssessment.status === "revise") {
-        logProgress(runId, `  风控修订次数已达上限，保留 revise（已耗尽重试）`);
+        log(`  风控修订次数已达上限，保留 revise（已耗尽重试）`);
         riskAssessment = { ...riskAssessment, retries_exhausted: true };
     }
     // Apply the FINAL risk assessment's numeric position cap to the final plan.
@@ -881,7 +900,7 @@ async function runFullAnalysis(ticker, date, config, openaiClient, signal) {
     // the loop didn't run (pass on first try) or exited revise-exhausted.
     // Regression: 600600 final judge said ≤10% but trader's 15% stood.
     if (riskAssessment.max_position_override !== undefined && riskAssessment.max_position_override < tradingPlan.position_pct) {
-        logProgress(runId, `  风控硬约束：仓位 ${tradingPlan.position_pct}% → ${riskAssessment.max_position_override}%`);
+        log(`  风控硬约束：仓位 ${tradingPlan.position_pct}% → ${riskAssessment.max_position_override}%`);
         tradingPlan = { ...tradingPlan, position_pct: riskAssessment.max_position_override };
     }
     // Apply stop_loss constraint from risk hard_constraints.
@@ -892,13 +911,13 @@ async function runFullAnalysis(ticker, date, config, openaiClient, signal) {
             if (stopLossMatch) {
                 const minStopLoss = parseFloat(stopLossMatch[1]);
                 if (tradingPlan.stop_loss < minStopLoss) {
-                    logProgress(runId, `  风控硬约束：止损价 ${tradingPlan.stop_loss} → ${minStopLoss}`);
+                    log(`  风控硬约束：止损价 ${tradingPlan.stop_loss} → ${minStopLoss}`);
                     tradingPlan = { ...tradingPlan, stop_loss: minStopLoss };
                 }
             }
         }
     }
-    logProgress(runId, `[7/7] 风控评估: ${riskAssessment.status} (风险评分 ${riskAssessment.risk_score})`);
+    log(`[7/7] 风控评估: ${riskAssessment.status} (风险评分 ${riskAssessment.risk_score})`);
     // Assemble FinalDecision
     const analystVerdicts = {};
     for (const report of analystReports) {
@@ -956,7 +975,7 @@ async function runFullAnalysis(ticker, date, config, openaiClient, signal) {
     ];
     reportStore.saveFull(ticker, date, result, durationMs, traceLogger.totalTokens, traceLogger.totalCostUsd, runId, traceLogger.warnings, crossIssues, health.toJSON(), fullProvenance);
     saveRawData(detailDir, dataResults, "07_data");
-    logProgress(runId, `完成 (${(durationMs / 1000).toFixed(1)}s, ${traceLogger.count} LLM calls)`, traceLogger.totalTokens, traceLogger.totalCostUsd);
+    log(`完成 (${(durationMs / 1000).toFixed(1)}s, ${traceLogger.count} LLM calls)`, traceLogger.totalTokens, traceLogger.totalCostUsd);
     // Write run summary for auditing
     const meta = {
         run_id: runId,
