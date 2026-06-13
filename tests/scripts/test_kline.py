@@ -60,18 +60,18 @@ class TestFetchFromMootdx:
         mock_quotes = MagicMock()
         mock_quotes_class.factory.return_value = mock_quotes
 
-        # Create mock dataframe
+        # Create mock dataframe (mootdx column names: datetime / vol)
         import pandas as pd
         mock_df = pd.DataFrame({
-            'date': ['2024-01-02', '2024-01-03'],
+            'datetime': ['2024-01-02', '2024-01-03'],
             'open': [100.0, 101.0],
             'high': [105.0, 106.0],
             'low': [99.0, 100.0],
             'close': [104.0, 105.0],
-            'volume': [1000000, 1100000],
+            'vol': [1000000, 1100000],
             'amount': [104000000, 115500000]
         })
-        mock_quotes.std.return_value = mock_df
+        mock_quotes.bars.return_value = mock_df
 
         # Patch sys.modules to prevent actual import
         with patch.dict('sys.modules', {'mootdx.quotes': MagicMock(Quotes=mock_quotes_class)}):
@@ -86,6 +86,37 @@ class TestFetchFromMootdx:
             assert result["data"][0]["open"] == 100.0
             assert result["data"][0]["close"] == 104.0
 
+    def test_volume_converted_from_lots_to_shares(self):
+        """TDX/mootdx returns volume in 手 (1 手 = 100 股).
+        Output volume MUST be in 股 — otherwise analysts cite 100x-too-small
+        numbers, amount/volume×price mismatch fires Layer-2 fabrication flags.
+        See 600157 2026-06-13 incident.
+        """
+        mock_quotes_class = MagicMock()
+        mock_quotes = MagicMock()
+        mock_quotes_class.factory.return_value = mock_quotes
+
+        import pandas as pd
+        # mootdx field name is 'vol', value is in 手
+        mock_df = pd.DataFrame({
+            'datetime': ['2024-01-02'],
+            'open': [1.70], 'high': [1.72], 'low': [1.68],
+            'close': [1.70],
+            'vol': [6850288],          # 6850288 手
+            'amount': [1152053120]      # 11.52 亿元
+        })
+        mock_quotes.bars.return_value = mock_df
+
+        with patch.dict('sys.modules', {'mootdx.quotes': MagicMock(Quotes=mock_quotes_class)}):
+            result = fetch_from_mootdx("600157", 1)
+            vol = result["data"][0]["volume"]
+            amt = result["data"][0]["amount"]
+            # 6850288 手 × 100 = 685,028,800 股
+            assert vol == 685028800, f"volume should be in 股 (×100), got {vol}"
+            # sanity: vol × close should now reconcile with amount within VWAP divergence
+            # (close=1.70 vs day VWAP≈1.682 → ~1% off; without fix this would be 99% off)
+            assert abs(vol * 1.70 - amt) / amt < 0.05, "vol×price must ≈ amount after unit fix"
+
     def test_raises_on_empty_dataframe(self):
         """Test that empty dataframe raises DataFetchError."""
         import pandas as pd
@@ -93,7 +124,7 @@ class TestFetchFromMootdx:
         mock_quotes_class = MagicMock()
         mock_quotes = MagicMock()
         mock_quotes_class.factory.return_value = mock_quotes
-        mock_quotes.std.return_value = pd.DataFrame()
+        mock_quotes.bars.return_value = pd.DataFrame()
 
         with patch.dict('sys.modules', {'mootdx.quotes': MagicMock(Quotes=mock_quotes_class)}):
             with pytest.raises(DataFetchError, match="No data returned"):
@@ -158,6 +189,22 @@ class TestFetchFromAkshare:
         with patch.dict('sys.modules', {'akshare': mock_ak}):
             with pytest.raises(DataFetchError, match="No data returned"):
                 fetch_from_akshare("600519", 60)
+
+    def test_volume_converted_from_lots_to_shares(self):
+        """akshare stock_zh_a_hist 成交量 也以 手 为单位（与 mootdx 一致，TDX 协议）。
+        输出必须换算为 股。见 TestFetchFromMootdx 同名测试。"""
+        import pandas as pd
+        mock_ak = MagicMock()
+        mock_df = pd.DataFrame({
+            '日期': ['2024-01-02'],
+            '开盘': [1.70], '最高': [1.72], '最低': [1.68], '收盘': [1.70],
+            '成交量': [6850288], '成交额': [1152053120]
+        })
+        mock_ak.stock_zh_a_hist.return_value = mock_df
+
+        with patch.dict('sys.modules', {'akshare': mock_ak}):
+            result = fetch_from_akshare("600157", 1)
+            assert result["data"][0]["volume"] == 685028800
 
     def test_raises_on_connection_failure(self):
         """Test that connection failure raises DataFetchError."""

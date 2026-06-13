@@ -72,7 +72,9 @@ def fetch_from_mootdx(ticker: str, count: int) -> Dict[str, Any]:
                 "high": float(row.get('high', 0)),
                 "low": float(row.get('low', 0)),
                 "close": float(row.get('close', 0)),
-                "volume": float(row.get('vol', 0)),
+                # mootdx/通达信 vol 字段单位为"手"(1 手 = 100 股)；
+                # 转换为"股"以避免分析师误用 100x 过小的数值触发 Layer-2 编造误报
+                "volume": float(row.get('vol', 0)) * 100,
                 "amount": float(row.get('amount', 0))
             })
 
@@ -131,7 +133,8 @@ def fetch_from_akshare(ticker: str, count: int) -> Dict[str, Any]:
                 "high": float(row.get('最高', 0)),
                 "low": float(row.get('最低', 0)),
                 "close": float(row.get('收盘', 0)),
-                "volume": float(row.get('成交量', 0)),
+                # akshare stock_zh_a_hist 成交量同样以"手"为单位(遵循 TDX 协议)；转换为"股"
+                "volume": float(row.get('成交量', 0)) * 100,
                 "amount": float(row.get('成交额', 0))
             })
 
