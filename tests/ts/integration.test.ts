@@ -597,6 +597,35 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', { timeout: 
     expect(result.analysts).toHaveLength(7);
   });
 
+  it('should emit overall-progress with monotonic percentages reaching 100 in quick mode', async () => {
+    vi.mocked(execPython).mockResolvedValue({
+      success: true,
+      data: { ticker: '600519', data: [] }
+    });
+
+    const mockCreate = createMockLLM('中性', 'test reason', 'Buy', '综合意见');
+    mockClient.chat.completions.create = mockCreate;
+
+    const progressMsgs: { text: string; id?: string }[] = [];
+    const onProgress = (text: string, id?: string) => progressMsgs.push({ text, id });
+    await runQuickAnalysis('600519', '2026-06-05', config, mockClient, undefined, onProgress);
+
+    const overall = progressMsgs.filter(p => p.id === 'overall-progress');
+    expect(overall.length).toBeGreaterThan(0);
+    const pcts = overall.map(p => {
+      const m = p.text.match(/(\d+)%/);
+      return m ? parseInt(m[1], 10) : -1;
+    });
+    // monotonic non-decreasing
+    for (let i = 1; i < pcts.length; i++) {
+      expect(pcts[i]).toBeGreaterThanOrEqual(pcts[i - 1]);
+    }
+    // ends at 100 (save stage)
+    expect(pcts[pcts.length - 1]).toBe(100);
+    // analysts phase advanced at least once (>=7 emits: data + 7 analysts + pm + save)
+    expect(overall.length).toBeGreaterThanOrEqual(7);
+  });
+
   it('should include decision_rationale in full analysis result', async () => {
     vi.mocked(execPython).mockResolvedValue({
       success: true,

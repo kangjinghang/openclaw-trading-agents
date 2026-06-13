@@ -576,7 +576,8 @@ async function runAnalystPhase(
   traceLogger: TraceLogger,
   runId: string,
   health: PipelineHealth,
-  log: LogProgressFn
+  log: LogProgressFn,
+  tracker?: ProgressTracker,
 ): Promise<{ analystReports: AnalystReport[]; totalTokens: number; totalCostUsd: number; dataResults: Array<{ role: string; result: ScriptResult }>; companyName: string }> {
   let totalTokens = 0;
   let totalCostUsd = 0;
@@ -608,6 +609,7 @@ async function runAnalystPhase(
 
   const dataFailed = dataResults.filter(d => !d.result.success).length;
   log(`[1/4] 数据采集完成 (${ANALYST_CONFIGS.length - dataFailed}/${ANALYST_CONFIGS.length} 成功${dataFailed > 0 ? `, ${dataFailed} 失败` : ""})`);
+  tracker?.emit("data");
 
   // CP1: Data collection gate
   health.check("data_collection", "abort", "majority_scripts_failed",
@@ -727,6 +729,7 @@ async function runAnalystPhase(
         const voteStr = Object.entries(votes).map(([d, c]) => `${c}${d}`).join("/");
         log(`⏳ [2/4] 分析师 ${completedCount}/${ANALYST_CONFIGS.length} (${voteStr})`, undefined, undefined, "analyst-progress");
         log(`  ✓ ${cfg.role}: ${vDir} (${llmResult.usage.total_tokens.toLocaleString()} tokens)`);
+        tracker?.emit("analysts", completedCount / ANALYST_CONFIGS.length);
 
         // CP3: Analyst output gate
         health.check("analyst_output", "warn", "verdict_missing",
@@ -751,6 +754,7 @@ async function runAnalystPhase(
         const voteStr = Object.entries(votes).map(([d, c]) => `${c}${d}`).join("/");
         log(`⏳ [2/4] 分析师 ${completedCount}/${ANALYST_CONFIGS.length} (${voteStr})`, undefined, undefined, "analyst-progress");
         log(`  ✗ ${cfg.role}: 失败 — ${err.message?.slice(0, 60)}`);
+        tracker?.emit("analysts", completedCount / ANALYST_CONFIGS.length);
         analystReports[idx] = {
           role: cfg.role,
           content: `[分析失败: ${err.message}]`,
@@ -794,12 +798,13 @@ export async function runQuickAnalysis(
   const traceLogger = new TraceLogger(traceDir, runId);
   const reportStore = new ReportStore(config.report_dir);
   const log = makeLogProgress(runId, onProgress);
+  const tracker = new ProgressTracker(startTime, log, QUICK_WEIGHTS);
 
   log(`开始 Quick 分析 ${ticker} (${date})`);
   validateEnvironment(config.report_dir);
 
   const health = new PipelineHealth(runId);
-  const { analystReports, totalTokens, totalCostUsd, dataResults, companyName } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health, log);
+  const { analystReports, totalTokens, totalCostUsd, dataResults, companyName } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health, log, tracker);
 
   if (signal?.aborted) throw new AbortError();
 
@@ -909,6 +914,8 @@ export async function runQuickAnalysis(
     decision_rationale: `投资组合经理决策：${direction}，置信度 ${(confidence * 100).toFixed(0)}%。分析师共识：${analystVerdictSummary(analystReports)}`,
   };
 
+  tracker.emit("pm");
+
   const result: QuickAnalysisResult = { ticker, date, mode: "quick", analysts: analystReports, final: finalDecision };
   const durationMs = Date.now() - startTime;
 
@@ -919,6 +926,7 @@ export async function runQuickAnalysis(
   ];
   reportStore.save(ticker, date, "quick", result, durationMs, allTokens, allCost, runId, traceLogger.warnings, health.toJSON(), provenance);
   saveRawData(detailDir, dataResults, "03_data");
+  tracker.emit("save");
   log(`完成 (${(durationMs / 1000).toFixed(1)}s)`, allTokens, allCost);
 
   // Write run summary for auditing
