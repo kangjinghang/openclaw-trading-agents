@@ -88,4 +88,23 @@ describe("prompt contracts", () => {
     expect(md).toContain("{{reports}}"); // reports placeholder
     expect(md).toContain("{{grades_table}}"); // Layer-1 grades placeholder
   });
+
+  it("portfolio_manager.md and research_manager.md cap confidence under data vacuum", () => {
+    // Regression for 600157 (2026-06-13): PM saw 6/7 analysts graded B + Layer-2
+    // credibility=低 + 1 fabrication_suspect, yet still output Hold @ 85%.
+    // The prompts now mandate explicit confidence ceilings keyed to quality
+    // grades so "data vacuum → neutral" can't masquerade as "balanced → high confidence".
+    const files = [
+      { path: "portfolio_manager.md", term: "置信度" },
+      { path: "debate/research_manager.md", term: "信心水平" },
+    ];
+    for (const f of files) {
+      const md = fs.readFileSync(path.join(PROMPTS, f.path), "utf-8");
+      expect(md).toContain("数据质量约束");          // section header
+      expect(md).toContain("严禁把");                // anti-masquerading rule
+      expect(md).toContain(f.term + "上限");         // confidence ceiling keyword (per-file term)
+      expect(md).toContain("≥4 名");                 // numeric trigger
+      expect(md).toContain("0.6");                   // first ceiling value
+    }
+  });
 });
