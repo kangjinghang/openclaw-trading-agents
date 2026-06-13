@@ -338,6 +338,41 @@ export function formatElapsed(ms: number): string {
   return `${m}m${s % 60}s`;
 }
 
+/** Duration-weighted stage → [startPct, endPct] maps. Analysts dominate (~80% quick / ~52% full). */
+export const QUICK_WEIGHTS: Record<string, [number, number]> = {
+  data: [0, 5], analysts: [5, 80], pm: [80, 97], save: [97, 100],
+};
+export const FULL_WEIGHTS: Record<string, [number, number]> = {
+  data: [0, 3], analysts: [3, 55], debate: [55, 72], research: [72, 80],
+  trader: [80, 88], riskDebate: [88, 95], riskMgr: [95, 100],
+};
+
+/**
+ * Emits a single in-place "overall-progress" line: `总进度 N% · 已用 Xs`.
+ * Monotonic: emit is a no-op when the computed pct does not strictly exceed
+ * the last emitted pct. This makes revise-loop re-runs of trader/riskDebate
+ * automatically skip (they'd re-compute a lower pct) without the orchestrator
+ * needing to track first-pass vs retry.
+ */
+export class ProgressTracker {
+  private lastPct = -1;
+  constructor(
+    private startTime: number,
+    private log: LogProgressFn,
+    private weights: Record<string, [number, number]>,
+  ) {}
+
+  emit(stage: string, frac = 1): void {
+    const range = this.weights[stage];
+    if (!range) return;                       // unknown stage: silent skip
+    const pct = pctInRange(range, frac);
+    if (pct <= this.lastPct) return;          // monotonic + dedupe
+    this.lastPct = pct;
+    const elapsed = formatElapsed(Date.now() - this.startTime);
+    this.log(`总进度 ${pct}% · 已用 ${elapsed}`, undefined, undefined, 'overall-progress');
+  }
+}
+
 /**
  * Run tasks with limited concurrency and staggered start.
  * Adds a random jitter (0~staggerMs) before each task to avoid burst patterns.
