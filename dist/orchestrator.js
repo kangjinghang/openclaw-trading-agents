@@ -709,7 +709,7 @@ async function runQuickAnalysis(ticker, date, config, openaiClient, signal, onPr
     if (signal?.aborted)
         throw new errors_1.AbortError();
     // ── Quality Gate ──────────────────────────────────────────────────
-    const quality = (0, quality_gate_1.validateAnalystReports)(analystReports);
+    const quality = (0, quality_gate_1.validateAnalystReports)(analystReports, dataResults);
     // Layer-2 LLM credibility review (optional; degrades to Layer-1 on skip/failure)
     const qualityReview = await (0, quality_review_1.runQualityReview)(analystReports, quality, ticker, date, config, openaiClient, traceLogger);
     if (qualityReview)
@@ -866,7 +866,7 @@ async function runFullAnalysis(ticker, date, config, openaiClient, signal, onPro
     if (signal?.aborted)
         throw new errors_1.AbortError();
     // Quality Gate
-    const quality = (0, quality_gate_1.validateAnalystReports)(analystReports);
+    const quality = (0, quality_gate_1.validateAnalystReports)(analystReports, dataResults);
     // Layer-2 LLM credibility review (optional; degrades to Layer-1 on skip/failure)
     const qualityReview = await (0, quality_review_1.runQualityReview)(analystReports, quality, ticker, date, config, openaiClient, traceLogger);
     if (qualityReview)

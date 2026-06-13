@@ -2,6 +2,7 @@
 // src/quality-gate.ts
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.checkFieldCitations = checkFieldCitations;
+exports.checkNullFieldSentinels = checkNullFieldSentinels;
 exports.validateAnalystReports = validateAnalystReports;
 /** Failure markers that indicate the LLM could not produce a real report. */
 const FAILURE_MARKERS = [
@@ -64,10 +65,75 @@ function checkFieldCitations(content, role) {
     return "未引用关键数据字段且缺少数值引用（疑似无视数据写水文）";
 }
 /**
+ * Per-role map of "critical null fields" — raw-data fields whose strict `null`
+ * value signals a data-fetch failure (not a normal "no data exists" empty
+ * array). When such a field is null, the analyst is required (per prompt) to
+ * emit a `[数据缺失: 指标名]` sentinel declaring it missing. This table lists,
+ * for each watched field, the keywords that a compliant sentinel must contain.
+ *
+ * Scope is deliberately narrow: only roles + fields where a confirmed false
+ * negative has surfaced (e.g. 600157 hot_money). Roles whose missing-data
+ * signal is usually `[]` (news/policy/market/lockup) are NOT in the table —
+ * `[]` is ambiguous (could be a normal slow news day) whereas `null` is an
+ * unambiguous fetch failure.
+ */
+const NULL_FIELD_CHECKS = {
+    hot_money: [
+        { field: "fund_flow", keywords: ["主力资金", "资金流", "fund_flow"] },
+        { field: "sector_fund_flow", keywords: ["板块资金", "sector_fund"] },
+    ],
+    sentiment: [
+        { field: "hot_rank", keywords: ["热度", "人气", "hot_rank"] },
+        { field: "zt_pool", keywords: ["涨停池", "zt_pool"] },
+    ],
+    fundamentals: [
+        { field: "financial_health", keywords: ["财务健康", "financial_health"] },
+    ],
+};
+/**
+ * Cross-check raw data null fields against `[数据缺失: ...]` sentinel coverage.
+ * Returns an issue string listing every null field that lacks a matching
+ * sentinel; null when all null fields are properly declared (or no watched
+ * fields are null).
+ *
+ * Regression: 600157 hot_money had fund_flow=null + sector_fund_flow=null
+ * (push2 rate-limited). The analyst wrote plain-text "数据缺失" instead of
+ * the bracketed sentinel form, so Layer-1's sentinel counter saw zero
+ * matches and graded it A. This check closes that loophole by consulting
+ * the raw data the analyst was given.
+ */
+function checkNullFieldSentinels(content, role, rawData) {
+    const checks = NULL_FIELD_CHECKS[role];
+    if (!checks || !rawData || typeof rawData !== "object")
+        return null;
+    const data = rawData;
+    // Pre-extract all sentinel payloads once (cheaper than re-scanning per field).
+    const sentinelTexts = [];
+    const sentinelRegex = /\[数据缺失:\s*([^\]]+)\]/g;
+    let m;
+    while ((m = sentinelRegex.exec(content)) !== null) {
+        sentinelTexts.push(m[1]);
+    }
+    const missing = [];
+    for (const c of checks) {
+        if (data[c.field] !== null)
+            continue; // only strict null = fetch failure
+        const covered = sentinelTexts.some((t) => c.keywords.some((k) => t.includes(k)));
+        if (!covered)
+            missing.push(c.field);
+    }
+    if (missing.length === 0)
+        return null;
+    return `原始数据 ${missing.join("、")} 为 null 但报告未标注对应 [数据缺失] 哨兵`;
+}
+/**
  * Hard-check a single analyst report for quality issues.
  * Returns a QualityGrade with identified issues.
+ *
+ * `rawData` (optional) is the parsed JSON the analyst was given; when present,
+ * Check 7 cross-references null fields against sentinel coverage.
  */
-function hardCheckReport(report) {
+function hardCheckReport(report, rawData) {
     const issues = [];
     const content = report.content;
     // Check 1: Empty or error placeholder
@@ -112,6 +178,15 @@ function hardCheckReport(report) {
     const citationIssue = checkFieldCitations(content, report.role);
     if (citationIssue)
         issues.push(citationIssue);
+    // Check 7: Null-field sentinel coverage — when raw data has a null field
+    // (fetch failure), the analyst must declare it via `[数据缺失: ...]`.
+    // Catches the loophole where analysts paraphrase "数据缺失" in prose
+    // instead of using the bracketed form, bypassing Check 4b's counter.
+    if (rawData !== undefined) {
+        const nullIssue = checkNullFieldSentinels(content, report.role, rawData);
+        if (nullIssue)
+            issues.push(nullIssue);
+    }
     // Determine grade based on issue count
     const grade = issues.length === 0 ? "A" :
         issues.length === 1 ? "B" :
@@ -122,11 +197,22 @@ function hardCheckReport(report) {
 /**
  * Validate all analyst reports and produce a quality summary.
  *
+ * `dataResults` (optional) is the orchestrator's per-role raw-data bundle.
+ * When supplied, Check 7 cross-references null fields against sentinel
+ * coverage; when omitted, the function falls back to legacy text-only checks.
+ *
  * The summary_text is designed to be injected into downstream prompts
  * (debate, research manager, trader) so they know which data to trust.
  */
-function validateAnalystReports(reports) {
-    const grades = reports.map(hardCheckReport);
+function validateAnalystReports(reports, dataResults) {
+    const rawByRole = new Map();
+    if (dataResults) {
+        for (const { role, result } of dataResults) {
+            if (result.success && result.data)
+                rawByRole.set(role, result.data);
+        }
+    }
+    const grades = reports.map((r) => hardCheckReport(r, rawByRole.get(r.role)));
     const failedRoles = grades.filter((g) => g.grade === "F").map((g) => g.role);
     const warnRoles = grades.filter((g) => g.grade === "D").map((g) => g.role);
     // Build human-readable summary for prompt injection
