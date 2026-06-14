@@ -168,7 +168,7 @@ def compute_vpa(data: list) -> str:
     for d in data:
         try:
             rows.append({
-                "date": str(d.get("date", ""))[-5:],  # MM-DD
+                "date": str(d.get("date", ""))[:10],  # YYYY-MM-DD
                 "open": float(d.get("open", 0)),
                 "high": float(d.get("high", 0)),
                 "low": float(d.get("low", 0)),
@@ -250,8 +250,52 @@ def compute_vpa(data: list) -> str:
     )
 
     # ── Build output ──
+
+    # Recent key stats block — pre-computed numbers the LLM must cite verbatim.
+    # Regression: 688662 market report self-computed pct_change from raw bars
+    # and got every recent day wrong (+13.6%/+22.4%/+15.1% reported vs actual
+    # +20.0%/+14.0%/+17.8%). The VPA per-day table already had the right
+    # numbers, but the LLM either misread the 30-row table or recomputed
+    # from `close` with the wrong baseline. Putting the headline numbers up
+    # front with an explicit "do not recompute" warning closes the gap.
+    def _fmt_pct(frac: float) -> str:
+        return f"{frac * 100:+.1f}%"
+
+    last = rows[-1]
+    recent_block: list[str] = [
+        "### 近期关键行情摘要（预计算，直接引用）\n",
+        "> **禁止自行计算涨跌幅** —— 以下数值已由系统基于完整 K 线预计算，直接引用即可。",
+        "> 从 raw K 线自行计算极易出错（前收盘基准 / 累计口径 / 日期对齐不一致）。\n",
+        f"- **最新收盘价**: {last['close']:.2f} 元（{last['date']}）",
+        f"- **当日涨跌幅**: {_fmt_pct(last['pct_change'])}",
+    ]
+    # Per-day pct for the last 3 trading days (oldest → newest)
+    if len(rows) >= 3:
+        per_day = [rows[-3]["pct_change"], rows[-2]["pct_change"], rows[-1]["pct_change"]]
+        recent_block.append(
+            f"- **近3日逐日涨跌幅（旧→新）**: {' / '.join(_fmt_pct(p) for p in per_day)}"
+        )
+
+    def _push_cumulative(days: int) -> None:
+        if len(rows) <= days:
+            recent_block.append(f"- **近{days}日累计涨跌幅**: 数据不足（K 线仅 {len(rows)} 根）")
+            return
+        prev_close = rows[-days - 1]["close"]
+        cur_close = rows[-1]["close"]
+        if prev_close > 0:
+            cum = (cur_close - prev_close) / prev_close
+            recent_block.append(
+                f"- **近{days}日累计涨跌幅**: {_fmt_pct(cum)}"
+                f"（从 {prev_close:.2f} 元至 {cur_close:.2f} 元）"
+            )
+
+    for _days in (5, 10, 30):
+        _push_cumulative(_days)
+    recent_block.append("")  # trailing blank line for markdown spacing
+
     lines = [
         f"## VPA 量价预计算指标（基于 {VPA_WINDOW} 日均量基准）\n",
+        *recent_block,
         f"**OBV 趋势（10日）**: {obv_trend}",
         f"**近5日量能趋势**: {vol_summary}（5日均量/20日均量 = {vol_trend_ratio:.2f}）\n",
         "### 逐日量价数据\n",
@@ -342,7 +386,7 @@ def compute_technical_indicators(data: list) -> str:
     for d in data:
         try:
             rows.append({
-                "date": str(d.get("date", ""))[-5:],  # MM-DD
+                "date": str(d.get("date", ""))[:10],  # YYYY-MM-DD
                 "close": float(d.get("close", 0)),
                 "high": float(d.get("high", 0)),
                 "low": float(d.get("low", 0)),
@@ -681,6 +725,14 @@ def parse_stdin() -> Optional[Dict[str, Any]]:
 
 def main():
     """Main entry point for CLI usage."""
+    # Windows console defaults to GBK; force UTF-8 so json.dumps output
+    # containing any non-GBK char (rare Han, symbols, etc.) doesn't crash
+    # print(). Python 3.7+ supports reconfigure on stdout.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass  # fallback: legacy Python or unsupported stream
+
     parser = argparse.ArgumentParser(description="Fetch K-line data for A-share stocks")
     parser.add_argument("--ticker", required=True, help="Stock ticker code (e.g., 600519)")
     parser.add_argument("--date", default="", help="Analysis date YYYY-MM-DD (unused by kline)")
