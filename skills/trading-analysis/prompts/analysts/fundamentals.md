@@ -49,6 +49,9 @@
 - 毛利率
 
 ### 3. 财务健康（引用 `financial_health`）
+
+> **若 `financial_health` 为 `null`（接口未返回或解析失败）**：必须在本节标注 `[数据缺失: financial_health]` 并跳过子项展开。**严禁基于其他字段（如 PE/PB/营收）拼凑"财务健康"分析**——这会被质量门判为编造嫌疑。
+
 - 资产负债率（`debt_ratio_pct`，关注最近 4 期趋势是否恶化）
 - 经营性现金流 / 归母净利润（`ocf_to_ni_ratio`：>1 盈利质量优，<0.5 偏弱；跨期对比须注意 `period_type` 累计期间长度，FY 同口径最可比）
 - 商誉占比（`goodwill_to_equity_pct`；若顶层 `goodwill_impairment_risk=true` 或占比偏高，须重点提示减值风险）
