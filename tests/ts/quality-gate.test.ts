@@ -429,3 +429,116 @@ describe("validateAnalystReports with dataResults (null-field cross-check)", () 
     expect(grade.issues.some((i) => i.includes("fund_flow"))).toBe(false);
   });
 });
+
+describe("Check 8: dragon_tiger date continuity (hot_money fabrication guard)", () => {
+  // Regression for 688163 2026-06-14: hot_money report claimed "连续两日
+  // 20%涨停" but dragon_tiger had only ONE entry (2026-06-12); 2026-06-13
+  // had no data. Layer-1 graded it A; Layer-2 LLM caught the fabrication.
+  // This structural check closes that gap at zero LLM cost.
+
+  const REPORT_WITH连续两日 = `
+## 执行摘要
+
+该股龙虎榜显示游资介入，连续两日 20% 涨停彰显强势。北向资金流出 40 亿。
+
+## 详细分析
+
+### 1. 龙虎榜
+上榜日期 2026-06-12，净买入 5156 万元。连续两日涨停，缩量封板。
+
+### 2. 北向资金
+全市场净流出 -40 亿元。
+
+<!-- VERDICT: {"direction": "看多", "reason": "游资净买入且连续涨停"} -->
+`;
+
+  const REPORT_WITH连续3日 = `
+## 执行摘要
+
+该股连续 3 日涨停，游资接力。
+
+## 详细分析
+
+### 1. 龙虎榜
+上榜 3 次，最近一次净买入 5000 万元。
+
+### 2. 北向资金
+全市场净流出 -40 亿元。
+
+<!-- VERDICT: {"direction": "看多", "reason": "连续 3 日涨停"} -->
+`;
+
+  const REPORT_NO连续短语 = `
+## 执行摘要
+
+该股龙虎榜显示游资介入，强势涨停。北向资金流出 40 亿。
+
+## 详细分析
+
+### 1. 龙虎榜
+上榜日期 2026-06-12，净买入 5156 万元。
+
+### 2. 北向资金
+全市场净流出 -40 亿元。
+
+<!-- VERDICT: {"direction": "看多", "reason": "游资净买入"} -->
+`;
+
+  function makeHotMoneyDataResults(dragonTiger: unknown[]) {
+    return [{
+      role: "hot_money",
+      result: { success: true, data: { dragon_tiger: dragonTiger } },
+    }];
+  }
+
+  it("flags '连续两日' claim when dragon_tiger has only 1 entry (688163 regression)", () => {
+    const reports = [makeReport("hot_money", REPORT_WITH连续两日)];
+    const dataResults = makeHotMoneyDataResults([
+      { date: "2026-06-12", net_buy: 51565000 },
+    ]);
+    const result = validateAnalystReports(reports, dataResults);
+    const grade = result.grades.find((g) => g.role === "hot_money")!;
+    const issue = grade.issues.find((i) => i.includes("连续"));
+    expect(issue).toBeDefined();
+    expect(issue).toContain("龙虎榜");
+    expect(issue).toContain("1");
+  });
+
+  it("does NOT flag when dragon_tiger entries match the claim", () => {
+    const reports = [makeReport("hot_money", REPORT_WITH连续3日)];
+    const dataResults = makeHotMoneyDataResults([
+      { date: "2026-06-10" }, { date: "2026-06-11" }, { date: "2026-06-12" },
+    ]);
+    const result = validateAnalystReports(reports, dataResults);
+    const grade = result.grades.find((g) => g.role === "hot_money")!;
+    expect(grade.issues.some((i) => i.includes("连续"))).toBe(false);
+  });
+
+  it("flags '连续两日' claim when dragon_tiger is empty", () => {
+    const reports = [makeReport("hot_money", REPORT_WITH连续两日)];
+    const dataResults = makeHotMoneyDataResults([]);
+    const result = validateAnalystReports(reports, dataResults);
+    const grade = result.grades.find((g) => g.role === "hot_money")!;
+    expect(grade.issues.some((i) => i.includes("连续"))).toBe(true);
+  });
+
+  it("does NOT run the check for non-hot_money roles", () => {
+    // A market report could plausibly mention "连续两日涨停" too, but the
+    // dragon_tiger data is hot_money-specific — the check must scope to role.
+    const reports = [makeReport("market", REPORT_WITH连续两日)];
+    const dataResults = [{
+      role: "market",
+      result: { success: true, data: { dragon_tiger: [] } },
+    }];
+    const result = validateAnalystReports(reports, dataResults);
+    const grade = result.grades.find((g) => g.role === "market")!;
+    expect(grade.issues.some((i) => i.includes("连续") && i.includes("龙虎榜"))).toBe(false);
+  });
+
+  it("does NOT run the check when rawData is absent", () => {
+    const reports = [makeReport("hot_money", REPORT_WITH连续两日)];
+    const result = validateAnalystReports(reports);  // no dataResults
+    const grade = result.grades.find((g) => g.role === "hot_money")!;
+    expect(grade.issues.some((i) => i.includes("连续"))).toBe(false);
+  });
+});

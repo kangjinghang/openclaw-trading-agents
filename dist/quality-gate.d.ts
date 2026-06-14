@@ -24,6 +24,21 @@ export declare function checkFieldCitations(content: string, role: string): stri
  */
 export declare function checkNullFieldSentinels(content: string, role: string, rawData: unknown): string | null;
 /**
+ * Check 8: dragon_tiger date continuity — when a hot_money report claims
+ * "连续 N 日涨停" but the underlying dragon_tiger data has fewer than N
+ * entries, the claim is unsupported and likely fabricated.
+ *
+ * Regression: 688163 2026-06-14 hot_money report claimed "连续两日 20%涨停"
+ * but dragon_tiger had only ONE entry (2026-06-12); 2026-06-13 had no data.
+ * Layer-1 graded it A; Layer-2 LLM caught the fabrication. This structural
+ * check closes that gap at zero LLM cost by cross-referencing the claim's
+ * day count against the dragon_tiger entry count.
+ *
+ * Returns an issue string when an unsupported "连续 N 日" claim is detected;
+ * null otherwise. Only runs for the hot_money role.
+ */
+export declare function checkDragonTigerContinuity(content: string, role: string, rawData: unknown): string | null;
+/**
  * Validate all analyst reports and produce a quality summary.
  *
  * `dataResults` (optional) is the orchestrator's per-role raw-data bundle.

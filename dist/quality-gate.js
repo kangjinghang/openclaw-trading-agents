@@ -3,6 +3,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.checkFieldCitations = checkFieldCitations;
 exports.checkNullFieldSentinels = checkNullFieldSentinels;
+exports.checkDragonTigerContinuity = checkDragonTigerContinuity;
 exports.validateAnalystReports = validateAnalystReports;
 /** Failure markers that indicate the LLM could not produce a real report. */
 const FAILURE_MARKERS = [
@@ -126,6 +127,49 @@ function checkNullFieldSentinels(content, role, rawData) {
         return null;
     return `原始数据 ${missing.join("、")} 为 null 但报告未标注对应 [数据缺失] 哨兵`;
 }
+/** Chinese-numeral to integer map for the dragon_tiger continuity check. */
+const CN_NUM = {
+    两: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10,
+};
+/**
+ * Check 8: dragon_tiger date continuity — when a hot_money report claims
+ * "连续 N 日涨停" but the underlying dragon_tiger data has fewer than N
+ * entries, the claim is unsupported and likely fabricated.
+ *
+ * Regression: 688163 2026-06-14 hot_money report claimed "连续两日 20%涨停"
+ * but dragon_tiger had only ONE entry (2026-06-12); 2026-06-13 had no data.
+ * Layer-1 graded it A; Layer-2 LLM caught the fabrication. This structural
+ * check closes that gap at zero LLM cost by cross-referencing the claim's
+ * day count against the dragon_tiger entry count.
+ *
+ * Returns an issue string when an unsupported "连续 N 日" claim is detected;
+ * null otherwise. Only runs for the hot_money role.
+ */
+function checkDragonTigerContinuity(content, role, rawData) {
+    if (role !== "hot_money" || !rawData || typeof rawData !== "object")
+        return null;
+    const data = rawData;
+    const dt = data.dragon_tiger;
+    if (!Array.isArray(dt))
+        return null;
+    // Match "连续 N 日/天/个交易日/涨停/连板" — supports Arabic (2-19) and
+    // Chinese numerals (两二三四…十). Requires the noun right after the number
+    // to be a time/limit-up word so phrases like "连续两笔买入" don't false-fire.
+    const regex = /连续\s*(?:([2-9]|1[0-9])|([两二三四五六七八九十]))\s*(?:个?交易日|日涨停|天涨停|日连板|涨停|连板|日大涨|天大涨|日阳线|天阳线)/g;
+    const claims = [];
+    let m;
+    while ((m = regex.exec(content)) !== null) {
+        const n = m[1] ? parseInt(m[1], 10) : CN_NUM[m[2]];
+        if (n && n >= 2)
+            claims.push(n);
+    }
+    if (claims.length === 0)
+        return null;
+    const maxClaim = Math.max(...claims);
+    if (dt.length >= maxClaim)
+        return null;
+    return `报告声称"连续 ${maxClaim} 日涨停"但龙虎榜只有 ${dt.length} 条记录（数据不支持"连续"论述，疑似编造）`;
+}
 /**
  * Hard-check a single analyst report for quality issues.
  * Returns a QualityGrade with identified issues.
@@ -186,6 +230,16 @@ function hardCheckReport(report, rawData) {
         const nullIssue = checkNullFieldSentinels(content, report.role, rawData);
         if (nullIssue)
             issues.push(nullIssue);
+    }
+    // Check 8: dragon_tiger continuity — when a hot_money report claims
+    // "连续 N 日涨停" but dragon_tiger has < N entries, the claim is
+    // unsupported (688163 regression: "连续两日" with only 1 dragon_tiger
+    // entry; 2026-06-13 had no data). Zero-LLM-cost fabrication detector
+    // complementary to Layer-2's semantic review.
+    if (rawData !== undefined) {
+        const continuityIssue = checkDragonTigerContinuity(content, report.role, rawData);
+        if (continuityIssue)
+            issues.push(continuityIssue);
     }
     // Determine grade based on issue count
     const grade = issues.length === 0 ? "A" :
