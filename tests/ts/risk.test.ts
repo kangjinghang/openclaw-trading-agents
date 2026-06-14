@@ -280,6 +280,69 @@ describe("Risk Module", () => {
       expect(calls.length).toBeGreaterThanOrEqual(1);
       expect(calls[0][0]).toMatchObject({ phase: "risk", severity: "warn" });
     });
+
+    it("does NOT warn on Sell direction (position_pct is clear ratio, not build ratio)", async () => {
+      // 688662 real-run finding: Sell-side position_pct=100% means "clear 100%",
+      // not "build 100%". extractPositionCap is irrelevant for sell-side, so the
+      // "no cap extracted" warning is a false positive.
+      const mockCreate = vi.mocked(mockClient.chat.completions.create);
+      mockCreate.mockResolvedValueOnce({
+        choices: [{
+          message: {
+            content: `### 1. 风险评分（0-100）
+50
+
+<!-- RISK_JUDGE: {"verdict": "pass", "reason": "ok", "hard_constraints": ["清仓比例100%不保留底仓", "首批60%必须在9:15-9:25集合竞价挂出", "跌破140元必须以跌停价挂单全部清仓"], "soft_constraints": [], "execution_preconditions": [], "de_risk_triggers": []} -->`,
+          },
+        }],
+        usage: { prompt_tokens: 600, completion_tokens: 200, total_tokens: 800 },
+      } as any);
+
+      const plan = mockTradingPlan();
+      plan.direction = "Sell";
+      plan.position_pct = 100;
+
+      await runRiskManager(
+        { rounds: [[]], risk_arguments: [], total_tokens: 0, total_cost_usd: 0 },
+        plan,
+        mockConfig,
+        mockClient,
+        mockTraceLogger
+      );
+
+      const calls = mockTraceLogger.recordWarning.mock.calls.filter((c: any[]) => c[0].fn === "extractPositionCap");
+      expect(calls.length).toBe(0);
+    });
+
+    it("does NOT warn on Underweight direction", async () => {
+      const mockCreate = vi.mocked(mockClient.chat.completions.create);
+      mockCreate.mockResolvedValueOnce({
+        choices: [{
+          message: {
+            content: `### 1. 风险评分（0-100）
+45
+
+<!-- RISK_JUDGE: {"verdict": "pass", "reason": "ok", "hard_constraints": ["减仓至30%以下", "跌破支撑立即清仓"], "soft_constraints": [], "execution_preconditions": [], "de_risk_triggers": []} -->`,
+          },
+        }],
+        usage: { prompt_tokens: 600, completion_tokens: 200, total_tokens: 800 },
+      } as any);
+
+      const plan = mockTradingPlan();
+      plan.direction = "Underweight";
+      plan.position_pct = 70;  // reduce to 70%
+
+      await runRiskManager(
+        { rounds: [[]], risk_arguments: [], total_tokens: 0, total_cost_usd: 0 },
+        plan,
+        mockConfig,
+        mockClient,
+        mockTraceLogger
+      );
+
+      const calls = mockTraceLogger.recordWarning.mock.calls.filter((c: any[]) => c[0].fn === "extractPositionCap");
+      expect(calls.length).toBe(0);
+    });
   });
 
   describe("runRiskDebate model routing", () => {

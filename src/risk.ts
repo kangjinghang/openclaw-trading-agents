@@ -303,8 +303,18 @@ export async function runRiskManager(
   // Risk produced hard constraints but none yielded a position-% cap → the
   // plan's position_pct is uncapped. This is the class behind the 600600
   // "judge says ≤10% but position stayed 15%" regression (a cap the regex
-  // couldn't extract). Only warn when there's a real position to cap.
-  if (judge && judge.hard_constraints.length > 0 && max_position_override === undefined && tradingPlan.position_pct > 0) {
+  // couldn't extract). Only warn when there's a real position to cap AND the
+  // direction is buy-side — for Sell/Underweight, position_pct is the clear
+  // ratio (100% = full exit), not a build ratio, so the cap concept doesn't
+  // apply and the warning is a false positive (688662 real-run finding).
+  const isSellSide = tradingPlan.direction === "Sell" || tradingPlan.direction === "Underweight";
+  if (
+    judge &&
+    judge.hard_constraints.length > 0 &&
+    max_position_override === undefined &&
+    tradingPlan.position_pct > 0 &&
+    !isSellSide
+  ) {
     traceLogger.recordWarning({
       phase: "risk",
       fn: "extractPositionCap",
