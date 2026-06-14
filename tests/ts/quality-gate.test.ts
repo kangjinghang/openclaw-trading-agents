@@ -1,7 +1,7 @@
 // tests/ts/quality-gate.test.ts
 
 import { describe, it, expect } from "vitest";
-import { validateAnalystReports, checkFieldCitations, checkNullFieldSentinels } from "../../src/quality-gate";
+import { validateAnalystReports, checkFieldCitations, checkNullFieldSentinels, checkDebateSummaryClean, checkResearchManagerConsistency } from "../../src/quality-gate";
 import { AnalystReport } from "../../src/types";
 
 function makeReport(role: string, content: string, direction = "看多", reason = "test"): AnalystReport {
@@ -540,5 +540,108 @@ describe("Check 8: dragon_tiger date continuity (hot_money fabrication guard)", 
     const result = validateAnalystReports(reports);  // no dataResults
     const grade = result.grades.find((g) => g.role === "hot_money")!;
     expect(grade.issues.some((i) => i.includes("连续"))).toBe(false);
+  });
+});
+
+describe("checkDebateSummaryClean", () => {
+  // Defense-in-depth for the P0-1 extractSummary pollution bug. The root
+  // cause (slice(-200) without stripping HTML comments) is fixed, but a
+  // second regression could re-introduce it; this check catches the symptom
+  // — HTML comment block remnants leaking into bull_summary / bear_summary.
+
+  it("returns null for a clean summary", () => {
+    const clean = "多头核心逻辑：1) 量价配合健康；2) 均线多头排列；3) 游资接力。";
+    expect(checkDebateSummaryClean(clean, "bull")).toBeNull();
+  });
+
+  it("flags a summary containing DEBATE_STATE remnant (688662 regression)", () => {
+    // Actual 688662 output: "Bull: olved_claim_ids": ["BEAR-1"], ... } -->"
+    const polluted =
+      'olved_claim_ids": ["BEAR-1"], "next_focus_claim_ids": ["BEAR-1"] } -->';
+    const issue = checkDebateSummaryClean(polluted, "bull");
+    expect(issue).not.toBeNull();
+    expect(issue).toContain("bull_summary");
+    // The polluted string contains next_focus_claim_ids (full match) and
+    // olved_claim_ids (truncated). At least one signature should fire.
+    expect(issue).toMatch(/claim_ids|DEBATE_STATE/);
+  });
+
+  it("flags a summary containing a VERDICT HTML comment", () => {
+    const polluted = "多头论据充分。<!-- VERDICT: {\"direction\": \"看多\"} -->";
+    const issue = checkDebateSummaryClean(polluted, "bear");
+    expect(issue).not.toBeNull();
+    expect(issue).toContain("bear_summary");
+    expect(issue).toContain("VERDICT");
+  });
+
+  it("flags a summary containing a top-level DEBATE_STATE marker", () => {
+    const polluted = "多头论证完整。<!-- DEBATE_STATE: {\"resolved_claim_ids\": []} -->";
+    expect(checkDebateSummaryClean(polluted, "bull")).not.toBeNull();
+  });
+
+  it("returns null for empty summary", () => {
+    expect(checkDebateSummaryClean("", "bull")).toBeNull();
+    expect(checkDebateSummaryClean("   ", "bear")).toBeNull();
+  });
+
+  it("does not flag JSON-like prose that lacks the structured-block signatures", () => {
+    // A summary that quotes "claim_ids" generically (no resolved_/next_ prefix)
+    // shouldn't false-fire — only the specific DEBATE_STATE field names matter.
+    const safe = "多头基于 BULL-1/BULL-2/BULL-3 三条 claim_ids 构建论据链。";
+    expect(checkDebateSummaryClean(safe, "bull")).toBeNull();
+  });
+});
+
+describe("checkResearchManagerConsistency", () => {
+  // Deterministic fallback for the C-prompt research_manager self-consistency
+  // rule (commit d771d09). Mirrors the prompt's three-tier thresholds:
+  //   diff ≤ 5  → extreme + moderate words forbidden
+  //   diff 6-15 → only extreme words forbidden
+  //   diff > 15 → no restriction
+
+  it("returns null when score gap is large (> 15)", () => {
+    // Even an extreme word is allowed when one side clearly dominates.
+    const reasoning = "空头论据压倒性占优，PE 334x 叠加 ROE 1% 完全无法支撑估值。";
+    expect(checkResearchManagerConsistency(reasoning, 80, 30)).toBeNull();
+  });
+
+  it("flags '压倒性' when scores are tied (688662 regression)", () => {
+    const reasoning = "空头论据压倒性占优，叠加 T+1 不对称下行风险。";
+    const issue = checkResearchManagerConsistency(reasoning, 50, 50);
+    expect(issue).not.toBeNull();
+    expect(issue).toContain("压倒性");
+    expect(issue).toContain("差仅 0");
+    expect(issue).toContain("基本均衡");
+  });
+
+  it("flags '碾压' when diff is 6-15 (extreme tier only)", () => {
+    const reasoning = "空头碾压多头，技术面 + 基本面共振。";
+    const issue = checkResearchManagerConsistency(reasoning, 60, 48);
+    expect(issue).not.toBeNull();
+    expect(issue).toContain("碾压");
+    expect(issue).toContain("适度优势");
+  });
+
+  it("returns null for neutral rhetoric at diff 0", () => {
+    const reasoning = "双方基本均衡，但 PE 334x 使天平略微向空头倾斜。";
+    expect(checkResearchManagerConsistency(reasoning, 50, 50)).toBeNull();
+  });
+
+  it("returns null for moderate rhetoric at diff 6-15", () => {
+    const reasoning = "空头适度优势，技术面超买叠加基本面高估。";
+    expect(checkResearchManagerConsistency(reasoning, 60, 48)).toBeNull();
+  });
+
+  it("returns null for empty reasoning", () => {
+    expect(checkResearchManagerConsistency("", 50, 50)).toBeNull();
+  });
+
+  it("flags multiple extreme words in one reasoning (lists all)", () => {
+    const reasoning = "空头压倒性占优，碾压多头，绝对优势。";
+    const issue = checkResearchManagerConsistency(reasoning, 50, 50);
+    expect(issue).not.toBeNull();
+    expect(issue).toContain("压倒性");
+    expect(issue).toContain("碾压");
+    expect(issue).toContain("绝对");
   });
 });

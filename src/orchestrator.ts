@@ -11,7 +11,7 @@ import { runBullBearDebate } from "./debate";
 import { runResearchManager } from "./research-manager";
 import { runTrader } from "./trader";
 import { runRiskDebate, runRiskManager } from "./risk";
-import { validateAnalystReports } from "./quality-gate";
+import { validateAnalystReports, checkDebateSummaryClean, checkResearchManagerConsistency } from "./quality-gate";
 import { runQualityReview, formatQualityReview } from "./quality-review";
 import { crossStageChecks } from "./cross-stage-checks";
 import {
@@ -1062,6 +1062,24 @@ export async function runFullAnalysis(
     });
   }
 
+  // Debate summary pollution detection (defense-in-depth for P0-1
+  // extractSummary fix). Catches HTML comment-block remnants leaking into
+  // bull_summary / bear_summary that Layer-1 doesn't see (Layer-1 only
+  // audits analyst reports).
+  for (const side of ["bull", "bear"] as const) {
+    const summary = side === "bull" ? debate.bull_summary : debate.bear_summary;
+    const pollutionIssue = checkDebateSummaryClean(summary, side);
+    if (pollutionIssue) {
+      health.add({
+        stage: "debate",
+        severity: "warn",
+        check: "summary_pollution",
+        message: pollutionIssue,
+        context: { side },
+      });
+    }
+  }
+
   if (signal?.aborted) throw new AbortError();
 
   // Phase 4: Research Manager
@@ -1069,6 +1087,29 @@ export async function runFullAnalysis(
   const researchDecision = await runResearchManager(analystReports, debate, quality.summary_text, config, openaiClient, traceLogger);
   log(`[4/7] 研究经理裁决: ${researchDecision.direction} (信心 ${researchDecision.confidence})`);
   tracker.emit("research");
+
+  // Research manager self-consistency: reasoning rhetoric must match the
+  // |bull_score - bear_score| gap. Deterministic fallback for the C-prompt
+  // rule — fires when the LLM ignores the prompt constraint (688662 had
+  // Bull 50 vs Bear 50 but reasoning said "空头压倒性占优").
+  const consistencyIssue = checkResearchManagerConsistency(
+    researchDecision.reasoning,
+    researchDecision.bull_score,
+    researchDecision.bear_score,
+  );
+  if (consistencyIssue) {
+    health.add({
+      stage: "research",
+      severity: "warn",
+      check: "reasoning_score_inconsistency",
+      message: consistencyIssue,
+      context: {
+        bull_score: researchDecision.bull_score,
+        bear_score: researchDecision.bear_score,
+        diff: Math.abs(researchDecision.bull_score - researchDecision.bear_score),
+      },
+    });
+  }
 
   if (signal?.aborted) throw new AbortError();
 

@@ -52,4 +52,42 @@ export declare function validateAnalystReports(reports: AnalystReport[], dataRes
     role: string;
     result: ScriptResult;
 }>): QualitySummary;
+/**
+ * Check debate summary (bull_summary / bear_summary) for structured-block
+ * pollution. Catches HTML comment-block remnants (DEBATE_STATE / VERDICT /
+ * specific JSON field names) that leak in when extractSummary's regex doesn't
+ * match the LLM's heading convention.
+ *
+ * Defense-in-depth for the P0-1 root-cause fix in src/debate.ts (strip HTML
+ * comments before slicing). If a future regression reintroduces the slice
+ * bug, this check still catches the symptom before it reaches the report.
+ *
+ * Regression: 688662 had `bull_summary` start with "olved_claim_ids" (sic —
+ * missing "res" prefix, a slice(-200) of LLM output that included the
+ * DEBATE_STATE JSON tail). Layer-1 didn't catch it because Layer-1 only
+ * audits analyst reports, not debate output.
+ *
+ * Returns an issue string when pollution is detected; null otherwise.
+ */
+export declare function checkDebateSummaryClean(summary: string, side: "bull" | "bear"): string | null;
+/**
+ * Check research_manager self-consistency: reasoning rhetoric strength must
+ * match the |bull_score - bear_score| gap. Catches "压倒性/碾压" used when
+ * scores are tied or close.
+ *
+ * Deterministic fallback for the C-prompt rule (commit d771d09). The prompt
+ * tells the LLM not to use extreme words at low score gaps; this function
+ * fires when the LLM ignores that instruction.
+ *
+ * Regression: 688662 research_manager reported Bull 50 vs Bear 50 (tied)
+ * but reasoning said "空头论据压倒性占优" — logical contradiction. Readers
+ * rely on reasoning rhetoric to gauge decision strength; "压倒性" implies
+ * strong supporting evidence that doesn't actually exist.
+ *
+ * Thresholds mirror the prompt's three-tier rule:
+ *   - diff ≤ 5  → extreme + moderate words forbidden
+ *   - diff 6-15 → only extreme words forbidden
+ *   - diff > 15 → no restriction
+ */
+export declare function checkResearchManagerConsistency(reasoning: string, bullScore: number, bearScore: number): string | null;
 //# sourceMappingURL=quality-gate.d.ts.map

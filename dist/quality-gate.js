@@ -5,6 +5,8 @@ exports.checkFieldCitations = checkFieldCitations;
 exports.checkNullFieldSentinels = checkNullFieldSentinels;
 exports.checkDragonTigerContinuity = checkDragonTigerContinuity;
 exports.validateAnalystReports = validateAnalystReports;
+exports.checkDebateSummaryClean = checkDebateSummaryClean;
+exports.checkResearchManagerConsistency = checkResearchManagerConsistency;
 /** Failure markers that indicate the LLM could not produce a real report. */
 const FAILURE_MARKERS = [
     "无法获取",
@@ -289,5 +291,80 @@ function validateAnalystReports(reports, dataResults) {
         warn_count: warnRoles.length,
         summary_text: lines.join("\n"),
     };
+}
+/**
+ * Check debate summary (bull_summary / bear_summary) for structured-block
+ * pollution. Catches HTML comment-block remnants (DEBATE_STATE / VERDICT /
+ * specific JSON field names) that leak in when extractSummary's regex doesn't
+ * match the LLM's heading convention.
+ *
+ * Defense-in-depth for the P0-1 root-cause fix in src/debate.ts (strip HTML
+ * comments before slicing). If a future regression reintroduces the slice
+ * bug, this check still catches the symptom before it reaches the report.
+ *
+ * Regression: 688662 had `bull_summary` start with "olved_claim_ids" (sic —
+ * missing "res" prefix, a slice(-200) of LLM output that included the
+ * DEBATE_STATE JSON tail). Layer-1 didn't catch it because Layer-1 only
+ * audits analyst reports, not debate output.
+ *
+ * Returns an issue string when pollution is detected; null otherwise.
+ */
+function checkDebateSummaryClean(summary, side) {
+    if (!summary || summary.trim().length === 0)
+        return null;
+    // Structured-block signatures that should never appear in a free-text
+    // summary. Listed separately so the issue message can name what leaked.
+    const signatures = [
+        { pattern: /DEBATE_STATE/, label: "DEBATE_STATE" },
+        { pattern: /<!--\s*VERDICT/, label: "VERDICT-comment" },
+        { pattern: /resolved_claim_ids/, label: "resolved_claim_ids" },
+        { pattern: /next_focus_claim_ids/, label: "next_focus_claim_ids" },
+        { pattern: /unresolved_claim_ids/, label: "unresolved_claim_ids" },
+        { pattern: /"verdict"\s*:/, label: '"verdict":' },
+    ];
+    const found = signatures.filter((s) => s.pattern.test(summary));
+    if (found.length === 0)
+        return null;
+    return `${side}_summary 含结构化块残片 [${found.map((s) => s.label).join("/")}]，可能未正确提取总结`;
+}
+/**
+ * Check research_manager self-consistency: reasoning rhetoric strength must
+ * match the |bull_score - bear_score| gap. Catches "压倒性/碾压" used when
+ * scores are tied or close.
+ *
+ * Deterministic fallback for the C-prompt rule (commit d771d09). The prompt
+ * tells the LLM not to use extreme words at low score gaps; this function
+ * fires when the LLM ignores that instruction.
+ *
+ * Regression: 688662 research_manager reported Bull 50 vs Bear 50 (tied)
+ * but reasoning said "空头论据压倒性占优" — logical contradiction. Readers
+ * rely on reasoning rhetoric to gauge decision strength; "压倒性" implies
+ * strong supporting evidence that doesn't actually exist.
+ *
+ * Thresholds mirror the prompt's three-tier rule:
+ *   - diff ≤ 5  → extreme + moderate words forbidden
+ *   - diff 6-15 → only extreme words forbidden
+ *   - diff > 15 → no restriction
+ */
+function checkResearchManagerConsistency(reasoning, bullScore, bearScore) {
+    if (!reasoning)
+        return null;
+    const diff = Math.abs(bullScore - bearScore);
+    if (diff > 15)
+        return null;
+    // Tier-1 extreme words: never allowed when gap < 15 points
+    const extremeWords = [
+        "压倒性", "碾压", "绝对", "一边倒", "完胜", "大胜", "暴打", "远胜", "远超",
+    ];
+    // Tier-2 moderate words: only allowed when gap > 5 points
+    const moderateWords = ["显著占优", "明显碾压", "明显占优"];
+    const forbidden = diff <= 5
+        ? [...extremeWords, ...moderateWords]
+        : extremeWords;
+    const found = forbidden.filter((w) => reasoning.includes(w));
+    if (found.length === 0)
+        return null;
+    const tier = diff <= 5 ? "基本均衡（差≤5）" : "适度优势（差6-15）";
+    return `决策理由使用极端词 [${found.join("/")}] 但多空评分差仅 ${diff} 分（${tier}），理由与分数不自洽`;
 }
 //# sourceMappingURL=quality-gate.js.map
