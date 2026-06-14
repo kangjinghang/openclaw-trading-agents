@@ -17,7 +17,10 @@ export declare function calculateQuickConfidence(reports: AnalystReport[], quali
         role: string;
         grade: string;
     }>;
-}): number;
+}, layer2?: {
+    credibility?: string;
+    fabrication_suspects?: string[];
+} | null): number;
 /** Structured progress log to stderr */
 /** Optional progress callback for OpenClaw onUpdate integration */
 export type ProgressCallback = (text: string, id?: string) => void;

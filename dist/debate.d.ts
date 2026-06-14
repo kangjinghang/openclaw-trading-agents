@@ -2,6 +2,10 @@ import OpenAI from "openai";
 import { TraceLogger } from "./trace-logger";
 import { TradingAgentsConfig, AnalystReport, DebateResult, DebateStatePayload } from "./types";
 /**
+ * Extract summary section from debate output.
+ */
+export declare function extractSummary(content: string): string;
+/**
  * Parse a `<!-- DEBATE_STATE: {...} -->` JSON block from LLM debate output.
  * Returns null on: missing block, malformed JSON, or non-object payload.
  * Missing optional fields are coerced to empty defaults so partial LLM output

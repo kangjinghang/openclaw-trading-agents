@@ -249,7 +249,7 @@ function generateAnalystConsensus(reports) {
 }
 /** Pre-run validation: check environment before starting analysis */
 /** Calculate quick-mode confidence based on analyst success rate and quality grades */
-function calculateQuickConfidence(reports, quality) {
+function calculateQuickConfidence(reports, quality, layer2) {
     const total = reports.length;
     if (total === 0)
         return 0.1;
@@ -260,9 +260,25 @@ function calculateQuickConfidence(reports, quality) {
     const goodGrades = quality.grades.filter(g => g.grade === "A" || g.grade === "B").length;
     const gradeRate = goodGrades / total;
     // Weighted: 60% success rate + 40% grade quality
-    // Capped at 0.85 (quick mode is inherently less thorough than full mode)
     const raw = 0.6 * successRate + 0.4 * gradeRate;
-    return Math.round(Math.min(raw, 0.85) * 100) / 100;
+    // Layer-2 (LLM semantic review) tightens the cap based on credibility and
+    // fabrication signals. Mirrors the prompt constraint shown to the portfolio
+    // manager so the algorithmic confidence path can't diverge from what the
+    // LLM was told. Without this, a "中" credibility run with fabrication could
+    // still report 0.85 (the structural-layer cap), contradicting the prompt.
+    let cap = 0.85; // quick mode is inherently less thorough than full mode
+    if (layer2) {
+        if (layer2.credibility === "低") {
+            cap = Math.min(cap, 0.3);
+        }
+        else if (layer2.credibility === "中") {
+            cap = Math.min(cap, 0.5);
+        }
+        if (layer2.fabrication_suspects && layer2.fabrication_suspects.length > 0) {
+            cap = Math.min(cap, 0.5);
+        }
+    }
+    return Math.round(Math.min(raw, cap) * 100) / 100;
 }
 /** Count successful analysts (not failed/skipped) */
 function countSucceededAnalysts(reports) {
@@ -775,7 +791,7 @@ async function runQuickAnalysis(ticker, date, config, openaiClient, signal, onPr
     for (const report of analystReports) {
         analystVerdicts[report.role] = report.verdict.direction;
     }
-    const confidence = calculateQuickConfidence(analystReports, quality);
+    const confidence = calculateQuickConfidence(analystReports, quality, qualityReview);
     // Warn when most analysts failed
     const succeeded = countSucceededAnalysts(analystReports);
     const totalAnalysts = analystReports.length;

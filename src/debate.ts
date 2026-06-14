@@ -41,10 +41,15 @@ function parseClaims(content: string, side: "bull" | "bear"): DebateClaim[] {
 /**
  * Extract summary section from debate output.
  */
-function extractSummary(content: string): string {
+export function extractSummary(content: string): string {
   const summaryRegex = /### (?:论据|风险)总结\s*\n([\s\S]*?)(?=\n<!--|$)/;
   const match = content.match(summaryRegex);
-  return match ? match[1].trim() : content.slice(-200).trim();
+  if (match) return match[1].trim();
+  // Fallback: strip HTML comment blocks (DEBATE_STATE / VERDICT / etc.) before
+  // taking the tail, otherwise JSON-block remnants can pollute the summary
+  // when the LLM doesn't follow the "### 论据总结" convention.
+  const stripped = content.replace(/<!--[\s\S]*?-->/g, "").trim();
+  return stripped.slice(-200).trim();
 }
 
 /**

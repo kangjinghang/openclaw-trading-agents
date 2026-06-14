@@ -1,7 +1,7 @@
 // tests/ts/debate.test.ts
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { runBullBearDebate, parseDebateState } from "../../src/debate";
+import { runBullBearDebate, parseDebateState, extractSummary } from "../../src/debate";
 import { TradingAgentsConfig, AnalystReport } from "../../src/types";
 import OpenAI from "openai";
 
@@ -513,5 +513,37 @@ describe("convergence_score and resolved_points", () => {
     // convergence = max(0, 0 - 0.3) = 0
     expect(result.convergence_score).toBe(0);
     expect(result.resolved_points).toEqual([]);
+  });
+});
+
+describe("extractSummary", () => {
+  it("returns the matched 论据总结 section", () => {
+    const content = "前置论述...\n\n### 论据总结\n\n这是看多核心逻辑。\n\n<!-- DEBATE_STATE: {} -->";
+    expect(extractSummary(content)).toBe("这是看多核心逻辑。");
+  });
+
+  it("returns the matched 风险总结 section", () => {
+    const content = "前置论述...\n\n### 风险总结\n\n空头风险点。\n\n<!-- DEBATE_STATE: {} -->";
+    expect(extractSummary(content)).toBe("空头风险点。");
+  });
+
+  it("strips HTML comment blocks before taking tail in fallback path", () => {
+    // When LLM doesn't follow the ### 论据总结 convention, the fallback
+    // must not leak DEBATE_STATE / VERDICT JSON remnants into the summary.
+    const content =
+      "Some argument text here that should survive.\n\n" +
+      '<!-- DEBATE_STATE: {"resolved_claim_ids": ["BEAR-1"], "next_focus_claim_ids": ["BEAR-1"]} -->\n' +
+      '<!-- VERDICT: {"direction": "看多", "reason": "..."} -->';
+    const summary = extractSummary(content);
+    expect(summary).not.toContain("DEBATE_STATE");
+    expect(summary).not.toContain("VERDICT");
+    expect(summary).not.toContain("resolved_claim_ids");
+    expect(summary).toContain("Some argument text");
+  });
+
+  it("fallback works on plain text without any HTML comments", () => {
+    const content = "Plain text without any HTML comments or headings.";
+    const summary = extractSummary(content);
+    expect(summary).toBe(content.slice(-200).trim());
   });
 });

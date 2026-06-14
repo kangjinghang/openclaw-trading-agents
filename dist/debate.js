@@ -34,6 +34,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.extractSummary = extractSummary;
 exports.parseDebateState = parseDebateState;
 exports.runBullBearDebate = runBullBearDebate;
 const llm_client_1 = require("./llm-client");
@@ -66,7 +67,13 @@ function parseClaims(content, side) {
 function extractSummary(content) {
     const summaryRegex = /### (?:论据|风险)总结\s*\n([\s\S]*?)(?=\n<!--|$)/;
     const match = content.match(summaryRegex);
-    return match ? match[1].trim() : content.slice(-200).trim();
+    if (match)
+        return match[1].trim();
+    // Fallback: strip HTML comment blocks (DEBATE_STATE / VERDICT / etc.) before
+    // taking the tail, otherwise JSON-block remnants can pollute the summary
+    // when the LLM doesn't follow the "### 论据总结" convention.
+    const stripped = content.replace(/<!--[\s\S]*?-->/g, "").trim();
+    return stripped.slice(-200).trim();
 }
 /**
  * Parse a `<!-- DEBATE_STATE: {...} -->` JSON block from LLM debate output.
