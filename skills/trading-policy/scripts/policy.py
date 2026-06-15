@@ -67,7 +67,12 @@ def _fetch_policy_eastmoney(code, lookback_days=30):
 
 
 def _fetch_macro_policy_cls(limit=20):
-    """Fetch macro policy telegrams from CLS (财联社)."""
+    """Fetch macro policy telegrams from CLS (财联社).
+
+    Raises on failure (instead of the old bare except: pass) so fetch_policy
+    can record the reason and fall back to akshare. A silent CLS outage would
+    otherwise leave macro_policy_news empty for days with no signal.
+    """
     import requests
     articles = []
     try:
@@ -92,8 +97,37 @@ def _fetch_macro_policy_cls(limit=20):
                 "content": content[:300],
                 "source": "财联社",
             })
-    except Exception:
-        pass
+    except Exception as e:
+        raise RuntimeError(f"CLS macro policy unavailable: {type(e).__name__}: {e}") from e
+    return articles
+
+
+def _fetch_macro_policy_akshare(limit=20):
+    """Fetch macro policy telegrams from akshare (东方财富全球财经快讯).
+
+    Fallback for when CLS is unavailable. Returns articles in the same shape
+    as the CLS path (date/title/content/source). Raises on failure so the
+    caller can record macro_policy_error.
+    """
+    try:
+        import akshare as ak
+        df = ak.stock_info_global_em()
+    except Exception as e:
+        raise RuntimeError(f"akshare macro policy unavailable: {type(e).__name__}: {e}") from e
+
+    articles = []
+    if df is None or len(df) == 0:
+        return articles
+    for _, row in df.head(limit).iterrows():
+        title = str(row.get("标题", "") or "")
+        content = str(row.get("摘要", "") or "")
+        pub_time = str(row.get("发布时间", "") or "")
+        articles.append({
+            "date": pub_time[:10] if pub_time else "",
+            "title": title,
+            "content": content[:300],
+            "source": "东方财富全球",
+        })
     return articles
 
 
@@ -107,10 +141,31 @@ def fetch_policy(ticker, date, lookback_days=30):
     except Exception as e:
         data["stock_policy_error"] = str(e)
 
+    # Macro policy: try CLS first, fall back to akshare. Record which source we
+    # used and any error so a silent CLS outage is observable (it previously
+    # left macro_policy_news empty for days via a bare except: pass).
+    macro_source = "none"
+    macro_articles = []
     try:
-        data["macro_policy_news"] = _fetch_macro_policy_cls()
+        macro_articles = _fetch_macro_policy_cls()
+        if macro_articles:
+            macro_source = "cls"
     except Exception as e:
         data["macro_policy_error"] = str(e)
+
+    if not macro_articles:
+        try:
+            macro_articles = _fetch_macro_policy_akshare()
+            if macro_articles:
+                macro_source = "akshare"
+            elif "macro_policy_error" not in data:
+                data["macro_policy_error"] = "all macro sources returned empty"
+        except Exception as e:
+            existing = data.get("macro_policy_error")
+            data["macro_policy_error"] = f"{existing}; akshare: {e}" if existing else str(e)
+
+    data["macro_policy_news"] = macro_articles
+    data["macro_policy_source"] = macro_source
 
     return data
 
@@ -124,7 +179,8 @@ def main():
 
     try:
         data = fetch_policy(args.ticker, args.date, args.lookback_days)
-        output_json(True, data=data, source="eastmoney+cls")
+        macro_src = data.get("macro_policy_source", "none")
+        output_json(True, data=data, source=f"eastmoney+{macro_src}")
     except Exception as e:
         output_json(False, error=str(e))
 
