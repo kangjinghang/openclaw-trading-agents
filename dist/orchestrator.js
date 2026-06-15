@@ -735,7 +735,7 @@ async function runQuickAnalysis(ticker, date, config, openaiClient, signal, onPr
     log(`开始 Quick 分析 ${ticker} (${date})`);
     validateEnvironment(config.report_dir);
     const health = new pipeline_health_1.PipelineHealth(runId);
-    const { analystReports, totalTokens, totalCostUsd, dataResults, companyName } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health, log, tracker);
+    const { analystReports, dataResults, companyName } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health, log, tracker);
     if (signal?.aborted)
         throw new errors_1.AbortError();
     haltIfAborted(health); // ≥6 data sources failed → don't run PM on empty analysts
@@ -782,8 +782,6 @@ async function runQuickAnalysis(ticker, date, config, openaiClient, signal, onPr
         role: "portfolio_manager",
         traceLogger,
     });
-    const allTokens = totalTokens + portfolioResult.usage.total_tokens;
-    const allCost = totalCostUsd + portfolioResult.costUsd;
     const portfolioVerdict = (0, llm_client_1.parseVerdict)(portfolioResult.content);
     let direction;
     let reasoning;
@@ -840,17 +838,25 @@ async function runQuickAnalysis(ticker, date, config, openaiClient, signal, onPr
         { stage: "analysts", key_decision: analystVerdictSummary(analystReports), detail_ref: "01_analysts/" },
         { stage: "portfolio_manager", key_decision: `${finalDecision.direction} (${(finalDecision.confidence * 100).toFixed(0)}%)` },
     ];
-    reportStore.save(ticker, date, "quick", result, durationMs, allTokens, allCost, runId, traceLogger.warnings, health.toJSON(), provenance);
+    // Use traceLogger.totalTokens / totalCostUsd as the single source of truth
+    // for persistence — it captures EVERY traced LLM call including the
+    // quality_review call, which a hand-rolled analysts+PM accumulator would
+    // silently omit. This matches full mode's accounting and keeps report.json
+    // and run_summary.json referencing the same value (no drift between the two
+    // write paths).
+    const persistTokens = traceLogger.totalTokens;
+    const persistCost = traceLogger.totalCostUsd;
+    reportStore.save(ticker, date, "quick", result, durationMs, persistTokens, persistCost, runId, traceLogger.warnings, health.toJSON(), provenance);
     saveRawData(detailDir, dataResults, "03_data");
     tracker.emit("save");
-    log(`完成 (${(durationMs / 1000).toFixed(1)}s)`, allTokens, allCost);
+    log(`完成 (${(durationMs / 1000).toFixed(1)}s)`, persistTokens, persistCost);
     // Write run summary for auditing
     const meta = {
         run_id: runId,
         trace_dir: traceDir,
         duration_ms: durationMs,
-        total_tokens: allTokens,
-        total_cost_usd: allCost,
+        total_tokens: persistTokens,
+        total_cost_usd: persistCost,
         llm_call_count: traceLogger.count,
         warnings: traceLogger.warnings,
         pipeline_health: health.toJSON(),
