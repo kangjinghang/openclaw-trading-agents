@@ -23,7 +23,7 @@
     "debate_rounds": { "type": "number", "default": 2 },
     "risk_debate_rounds": { "type": "number", "default": 1 },
     "max_risk_retries": { "type": "number", "default": 1 },
-    "llm_concurrency": { "type": "number", "default": 1, "description": "Parallel LLM calls. 1=safest, 3=faster but may hit rate limits" },
+    "llm_concurrency": { "type": "number", "default": 2, "description": "Parallel LLM calls. 1=safest, 2-3=faster but may hit rate limits on lower tiers" },
     "report_dir": { "type": "string", "default": "~/.openclaw/trading-reports" },
     "api_key": { "type": "string", "description": "API key for LLM calls (overrides OpenClaw host provider)" },
     "base_url": { "type": "string", "description": "Base URL for LLM API (used with api_key)" }
