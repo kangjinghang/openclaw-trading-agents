@@ -15,35 +15,57 @@ import time
 import requests
 
 
-# ── Whole-source error collector ─────────────────────────────────────
-# Scripts accumulate non-fatal errors here (e.g. a secondary data source that
-# failed but didn't break the whole fetch). output_json() surfaces them as a
-# top-level `_errors` array so a silent source outage is observable downstream
-# instead of masquerading as "no data". Per-record parse failures inside loops
-# should NOT use this — only whole-source/sub-source failures.
-_ERRORS = []
+# ── Whole-source call collector ──────────────────────────────────────
+# Scripts record per-source call results here (success AND failure).
+# output_json() surfaces them as a top-level `_calls` array so downstream
+# can compute per-source success rates and detect outages/rate-limits.
+# `_errors` (failure-only view) is kept for backward compat with code
+# that reads result.errors (commit d3e5d34).
+_CALLS = []
+
+
+def record_call(stage, success, error=None, duration_ms=None):
+    """Record a per-source call result (success or failure).
+
+    Args:
+        stage: source identifier, slash-separated for hierarchy
+               (e.g. "hot_money/northbound", "news/macro_cls"). Truncated to 60 chars.
+        success: True if the call yielded usable data
+        error: short error message if failed (truncated to 160 chars)
+        duration_ms: optional call duration in ms (for slow-source detection)
+    """
+    try:
+        _CALLS.append({
+            "stage": str(stage)[:60],
+            "success": bool(success),
+            "error": str(error)[:160] if error else None,
+            "duration_ms": int(duration_ms) if duration_ms is not None else None,
+        })
+    except Exception:
+        pass  # never crash the script over a stats record
 
 
 def record_error(stage, msg):
-    """Record a whole-source/sub-source failure (non-fatal).
+    """Backward-compatible alias: records a failed call. Existing call sites
+    that use record_error keep working; new code should prefer record_call."""
+    record_call(stage, success=False, error=msg)
 
-    Args:
-        stage: short label identifying which fetch failed (e.g. "macro_cls",
-               "dragon_tiger_ths"). Truncated to 40 chars.
-        msg: the error message. Truncated to 160 chars.
-    """
-    _ERRORS.append({"stage": str(stage)[:40], "error": str(msg)[:160]})
+
+def get_calls():
+    """Return accumulated calls (does not clear)."""
+    return list(_CALLS)
 
 
 def get_errors():
-    """Return accumulated errors (does not clear)."""
-    return list(_ERRORS)
+    """Backward-compat: return failure-only view of _CALLS, shaped like the
+    `_errors` JSON field emitted by output_json() — i.e. list of {stage, error}."""
+    return [{"stage": c["stage"], "error": c["error"]} for c in _CALLS if not c["success"]]
 
 
 def clear_errors():
-    """Clear accumulated errors. Call at the start of each fetch if reusing
-    the process across runs (tests do this)."""
-    del _ERRORS[:]
+    """Clear accumulated calls. Call at start of each fetch if reusing the
+    process across runs (tests do this)."""
+    del _CALLS[:]
 
 
 # ── Force IPv4 for eastmoney push2 (IPv6 connections get reset) ─────
@@ -204,22 +226,29 @@ def _safe_float(val):
 
 # ── Standard JSON output ────────────────────────────────────────────
 def output_json(success, data=None, error=None, source=None):
-    """Print standardized JSON to stdout and exit.
+    """Standard JSON output for data scripts.
 
-    Any errors recorded via record_error() during this run are surfaced as a
-    top-level `_errors` array (only when non-empty), so a non-fatal source
-    failure is visible to the caller without affecting the `success` flag.
+    Any errors recorded via record_error() or calls via record_call() during
+    this run are surfaced as top-level `_calls` (all results) and `_errors`
+    (failure-only view, backward compat).
     """
-    result = {"success": success}
+    payload = {"success": success}
     if data is not None:
-        result["data"] = data
-    if error is not None:
-        result["error"] = error
-    if source is not None:
-        result["_source"] = source
-    if _ERRORS:
-        result["_errors"] = get_errors()
-    print(json.dumps(result, ensure_ascii=False))
+        payload["data"] = data
+    if error:
+        payload["error"] = error
+    if source:
+        payload["source"] = source
+    if _CALLS:
+        payload["_calls"] = list(_CALLS)
+        # Backward compat: failure-only view for existing TS code that reads
+        # result.errors (commit d3e5d34 added this; we keep it working).
+        failed = [c for c in _CALLS if not c["success"]]
+        if failed:
+            payload["_errors"] = [
+                {"stage": c["stage"], "error": c["error"]} for c in failed
+            ]
+    print(json.dumps(payload, ensure_ascii=False))
     sys.exit(0 if success else 1)
 
 

@@ -6,6 +6,7 @@ and http_get (other sources). These tests inject a fake callable + a fake sleep
 so no real network or wall-clock delay is involved.
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -118,7 +119,7 @@ from http_helpers import record_error, get_errors, clear_errors, output_json  # 
 
 @pytest.fixture(autouse=False)
 def reset_errors():
-    """Clear the module-level error list before each collector test."""
+    """Clear the module-level call list before each collector test."""
     clear_errors()
     yield
     clear_errors()
@@ -129,14 +130,16 @@ def test_record_and_get_errors(reset_errors):
     record_error("dragon_tiger", "timeout")
     errs = get_errors()
     assert len(errs) == 2
-    assert errs[0] == {"stage": "macro_cls", "error": "JSONDecodeError: no json"}
-    assert errs[1] == {"stage": "dragon_tiger", "error": "timeout"}
+    assert errs[0]["stage"] == "macro_cls"
+    assert errs[0]["error"] == "JSONDecodeError: no json"
+    assert errs[1]["stage"] == "dragon_tiger"
+    assert errs[1]["error"] == "timeout"
 
 
 def test_error_fields_truncated(reset_errors):
     record_error("x" * 100, "y" * 300)
     errs = get_errors()
-    assert len(errs[0]["stage"]) == 40  # stage truncated to 40 chars
+    assert len(errs[0]["stage"]) == 60  # stage truncated to 60 chars
     assert len(errs[0]["error"]) == 160  # error truncated to 160 chars
 
 
@@ -175,5 +178,94 @@ def test_output_json_omits_errors_when_absent(capsys, reset_errors):
     import json
     d = json.loads(out)
     assert "_errors" not in d
+
+
+# ── record_call collector (new functionality) ────────────────────────────
+from http_helpers import record_call, get_calls  # noqa: E402
+
+
+@pytest.fixture(autouse=False)
+def reset_collector():
+    """Clear the module-level call list before each record_call test."""
+    clear_errors()
+    yield
+    clear_errors()
+
+
+@pytest.fixture(autouse=False)
+def reset_collector_isolated():
+    """Isolated fixture for record_call tests to prevent cross-test pollution."""
+    clear_errors()
+    yield
+    clear_errors()
+
+
+def test_record_call_logs_success(tmp_path, monkeypatch, reset_collector_isolated):
+    """record_call records successful calls with optional duration_ms."""
+    record_call("hot_money/northbound", success=True, duration_ms=1234)
+    calls = get_calls()
+    assert len(calls) == 1
+    assert calls[0]["stage"] == "hot_money/northbound"
+    assert calls[0]["success"] is True
+    assert calls[0]["duration_ms"] == 1234
+    assert calls[0]["error"] is None
+
+
+def test_record_call_logs_failure(tmp_path, monkeypatch, reset_collector_isolated):
+    record_call("news/macro_cls", success=False, error="404 not found")
+    calls = get_calls()
+    assert calls[0]["success"] is False
+    assert calls[0]["error"] == "404 not found"
+
+
+def test_record_error_is_alias_for_failed_record_call(tmp_path, monkeypatch, reset_collector_isolated):
+    """Backward compat: existing record_error call sites keep working."""
+    record_error("hot_money/fund_flow", "rate_limited")
+    calls = get_calls()
+    assert len(calls) == 1
+    assert calls[0]["success"] is False
+    assert calls[0]["error"] == "rate_limited"
+
+
+def test_output_json_includes_calls_array(capsys, monkeypatch, reset_collector_isolated):
+    """output_json must surface _calls so downstream can observe per-source results."""
+    record_call("test/source_a", success=True, duration_ms=100)
+    record_call("test/source_b", success=False, error="boom")
+    # output_json calls sys.exit; catch SystemExit so the test process survives.
+    with pytest.raises(SystemExit) as exc_info:
+        output_json(True, data={"x": 1})
+    assert exc_info.value.code == 0  # success=True means exit code 0
+    out = capsys.readouterr().out
+    d = json.loads(out)
+    assert "_calls" in d
+    assert len(d["_calls"]) == 2
+    assert d["_calls"][0]["stage"] == "test/source_a"
+    # Backward compat: _errors still emitted (failures only)
+    assert "_errors" in d
+    assert len(d["_errors"]) == 1
+    assert d["_errors"][0]["stage"] == "test/source_b"
+
+
+def test_record_call_truncates_long_stage(tmp_path, reset_collector_isolated):
+    """Defensive: stage longer than 60 chars is truncated, not crashed."""
+    long_stage = "x" * 100
+    record_call(long_stage, success=True)
+    calls = get_calls()
+    assert len(calls[0]["stage"]) == 60
+
+
+def test_record_call_swallows_internal_exception(tmp_path, reset_collector_isolated):
+    """If record_call itself fails (e.g. duration_ms not int-coercible), the
+    internal try/except must swallow it — never crash the calling script."""
+    # Pass a non-coercible duration_ms that would raise ValueError on int() —
+    # the try/except inside record_call must swallow it.
+    record_call("ok/source", success=True, duration_ms="not_a_number")
+    # If we reached this line without exception, the swallow worked.
+    # Note: the failed record is NOT appended (the exception aborted the dict
+    # construction before _CALLS.append), so get_calls() may be empty or have
+    # the record depending on where in the try block the exception fired.
+    calls = get_calls()
+    # The call failed to record because duration_ms="not_a_number" triggered
+    # the exception handling. This verifies the swallow worked.
 
 
