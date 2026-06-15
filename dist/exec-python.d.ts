@@ -31,6 +31,20 @@ export declare function writeCache(scriptPath: string, args: string[], result: S
  * @param cacheDir - Override cache directory (default: ~/.openclaw/cache)
  */
 export declare function execPython(scriptPath: string, args?: string[], stdinData?: any, pythonCmd?: string, timeoutMs?: number, useCache?: boolean, cacheDir?: string): Promise<ScriptResult>;
+/** Raw Python execution without caching (spawns the subprocess, captures
+ *  stdout/stderr, parses JSON). Exported so it can be referenced by the
+ *  indirection handle below. */
+export declare function execPythonRaw(scriptPath: string, args: string[], stdinData: any, pythonCmd: string, timeoutMs: number): Promise<ScriptResult>;
+/** Indirection over execPythonRaw so tests can swap `.run` to simulate
+ *  transient failures (e.g. a timeout-then-success sequence) without spawning
+ *  real subprocesses. execPython calls _execPythonRawHandle.run instead of the
+ *  bare execPythonRaw binding because vi.spyOn would only patch the export,
+ *  not the local call site — leaving the retry path untestable. Declared as a
+ *  mutable object (not reassigned) so test patches persist across the SUT's
+ *  reads of .run. */
+export declare const _execPythonRawHandle: {
+    run: typeof execPythonRaw;
+};
 /**
  * Execute a skill script from the skills directory
  * @param skillName - Name of the skill (e.g., 'trading-kline')

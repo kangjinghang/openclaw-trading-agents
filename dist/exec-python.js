@@ -34,11 +34,13 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports._execPythonRawHandle = void 0;
 exports.resolvePythonCmd = resolvePythonCmd;
 exports.resetPythonResolver = resetPythonResolver;
 exports.readCache = readCache;
 exports.writeCache = writeCache;
 exports.execPython = execPython;
+exports.execPythonRaw = execPythonRaw;
 exports.execSkillScript = execSkillScript;
 const child_process_1 = require("child_process");
 const crypto_1 = require("crypto");
@@ -161,14 +163,31 @@ async function execPython(scriptPath, args = [], stdinData = null, pythonCmd = '
             return cached;
         }
     }
-    const result = await execPythonRaw(scriptPath, args, stdinData, pythonCmd, timeoutMs);
+    // Call through the indirection handle so tests can swap _execPythonRawHandle.run
+    // to simulate transient failures (a direct call to the bare execPythonRaw
+    // binding cannot be intercepted by vi.spyOn, which patches the export only).
+    let result = await exports._execPythonRawHandle.run(scriptPath, args, stdinData, pythonCmd, timeoutMs);
+    // Retry once on a TIMEOUT only. Timeouts are usually transient (a slow
+    // mootdx/akshare upstream, a momentary network blip) and the data scripts
+    // carry their own internal source fallback (kline: mootdx→akshare) that a
+    // fresh process gets a clean shot at. Other failures (non-zero exit, JSON
+    // parse error) are NOT retried: those indicate a real fault (broken script,
+    // changed upstream schema) and retrying would just double the diagnostic
+    // time. Observed: 600519's kline call timed out once at 30s, succeeded on
+    // the next day's run — exactly the transient case this covers.
+    if (!result.success && typeof result.error === 'string' && result.error.includes('timed out')) {
+        console.error(`  [exec-python] timeout, retrying once: ${path.basename(scriptPath)} ${args.join(' ')}`);
+        result = await exports._execPythonRawHandle.run(scriptPath, args, stdinData, pythonCmd, timeoutMs);
+    }
     // Cache successful results
     if (useCache && result.success && stdinData === null) {
         writeCache(scriptPath, args, result, cacheDir);
     }
     return result;
 }
-/** Raw Python execution without caching */
+/** Raw Python execution without caching (spawns the subprocess, captures
+ *  stdout/stderr, parses JSON). Exported so it can be referenced by the
+ *  indirection handle below. */
 function execPythonRaw(scriptPath, args, stdinData, pythonCmd, timeoutMs) {
     return new Promise((resolve) => {
         // PYTHONUTF8=1 + -X utf8 force Python 3.7+ to use UTF-8 for stdout/stderr.
@@ -257,6 +276,14 @@ function execPythonRaw(scriptPath, args, stdinData, pythonCmd, timeoutMs) {
                         result.technical_indicators = raw.technical_indicators;
                     }
                 }
+                // Surface non-fatal source/sub-source failures recorded by the script
+                // (http_helpers.record_error → output_json _errors array) so a silent
+                // partial outage is observable. Works for both data-script format and
+                // generic JSON output, since output_json always writes _errors at the
+                // top level when non-empty.
+                if (Array.isArray(raw._errors)) {
+                    result.errors = raw._errors;
+                }
                 resolve(result);
             }
             catch (error) {
@@ -278,6 +305,14 @@ function execPythonRaw(scriptPath, args, stdinData, pythonCmd, timeoutMs) {
         });
     });
 }
+/** Indirection over execPythonRaw so tests can swap `.run` to simulate
+ *  transient failures (e.g. a timeout-then-success sequence) without spawning
+ *  real subprocesses. execPython calls _execPythonRawHandle.run instead of the
+ *  bare execPythonRaw binding because vi.spyOn would only patch the export,
+ *  not the local call site — leaving the retry path untestable. Declared as a
+ *  mutable object (not reassigned) so test patches persist across the SUT's
+ *  reads of .run. */
+exports._execPythonRawHandle = { run: execPythonRaw };
 /**
  * Execute a skill script from the skills directory
  * @param skillName - Name of the skill (e.g., 'trading-kline')
