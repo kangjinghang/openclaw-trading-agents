@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional
 
 # Add skills/_shared to Python path for http_helpers
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../_shared"))
+import http_helpers
 from http_helpers import record_call, output_json
 
 
@@ -762,13 +763,17 @@ def main():
         count = stdin_input.get("count", 120)
         if ticker:
             result = fetch(ticker, count)
-            print(output_json(result))
+            # Attach per-source call records so downstream (exec-python) can observe them
+            result["_calls"] = http_helpers.get_calls()
+            print(json.dumps(result, ensure_ascii=False))
             sys.exit(0 if result["success"] else 1)
 
     # Parse command line arguments
     args = parser.parse_args()
     result = fetch(args.ticker, args.count)
-    print(output_json(result))
+    # Attach per-source call records so downstream (exec-python) can observe them
+    result["_calls"] = http_helpers.get_calls()
+    print(json.dumps(result, ensure_ascii=False))
     sys.exit(0 if result["success"] else 1)
 
 
