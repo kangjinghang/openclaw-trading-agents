@@ -13,7 +13,7 @@ import {
   RiskAssessment,
   RiskJudge,
 } from "./types";
-import { LLM_CALL_STAGGER_MS, DEFAULT_CONCURRENCY } from "./constants";
+import { LLM_CALL_STAGGER_MS, DEFAULT_LLM_CONCURRENCY } from "./constants";
 import * as path from "path";
 
 const SKILLS_DIR = path.resolve(__dirname, "../skills");
@@ -202,7 +202,7 @@ export async function runRiskDebate(
   const planText = `方向：${tradingPlan.direction}\n目标价：${tradingPlan.target_price}\n止损：${tradingPlan.stop_loss}\n仓位：${tradingPlan.position_pct}%\n执行计划：${tradingPlan.execution_plan}`;
 
   const riskArguments: RiskArgument[] = new Array(RISK_ROLES.length);
-  const concurrency = config.llm_concurrency || DEFAULT_CONCURRENCY;
+  const concurrency = config.llm_concurrency || DEFAULT_LLM_CONCURRENCY;
   const rateLimitCoordinator = new RateLimitCoordinator();
 
   await pool(

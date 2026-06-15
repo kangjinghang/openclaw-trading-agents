@@ -4,8 +4,10 @@ import { runQuickAnalysis, runFullAnalysis } from "./orchestrator";
 import { TradingAgentsConfig, QuickAnalysisResult, FullAnalysisResult } from "./types";
 import { listReports } from "./dashboard-api";
 import { filterReports, formatHistoryCards } from "./history-format";
+import { DEFAULT_LLM_CONCURRENCY } from "./constants";
 import * as path from "path";
 import * as os from "os";
+import * as fs from "fs";
 
 const DEFAULT_CONFIG: TradingAgentsConfig = {
   models: { analyst: "glm-4.7-flash", debater: "glm-4.7", decision: "glm-4.7", risk: "glm-4.7" },
@@ -13,7 +15,7 @@ const DEFAULT_CONFIG: TradingAgentsConfig = {
   risk_debate_rounds: 1,
   max_risk_retries: 1,
   report_dir: "~/.openclaw/trading-reports",
-  llm_concurrency: 1,
+  llm_concurrency: DEFAULT_LLM_CONCURRENCY,
 };
 
 function resolveConfig(userConfig?: Partial<TradingAgentsConfig>): TradingAgentsConfig {
@@ -230,7 +232,6 @@ export default {
     const logger = api.logger || console;
     logger.info?.(`[trading-agents] config: models.analyst=${config.models.analyst} llm_concurrency=${config.llm_concurrency} api_key=${config.api_key ? "***set***" : "(from host)"} base_url=${config.base_url || "(from host)"}`);
     // Ensure report directory exists
-    const fs = require("fs");
     try { fs.mkdirSync(config.report_dir, { recursive: true }); } catch {}
     let client: OpenAI | undefined;
     async function getClient(): Promise<OpenAI> {

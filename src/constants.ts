@@ -21,8 +21,17 @@ export const DATA_FETCH_STAGGER_MS = 1500;
 /** Stagger jitter between LLM calls (0~2000ms, for API rate limit avoidance) */
 export const LLM_CALL_STAGGER_MS = 2000;
 
-/** Default concurrency for parallel operations */
+/** Default concurrency for parallel operations (data fetch + LLM calls) */
 export const DEFAULT_CONCURRENCY = 2;
+
+/**
+ * Default LLM concurrency used when config omits `llm_concurrency`. A single
+ * source of truth shared by the plugin entry (src/index.ts), the standalone
+ * CLI (src/cli.ts), and the `config.llm_concurrency || …` fallbacks in the
+ * orchestrator / risk phase. Tuned conservative for rate-limited GLM tiers;
+ * raise it for providers with higher headroom.
+ */
+export const DEFAULT_LLM_CONCURRENCY = 2;
 
 /** TTL for data script cache entries (4 hours — covers repeated runs same day) */
 export const CACHE_TTL_MS = 4 * 60 * 60 * 1000;

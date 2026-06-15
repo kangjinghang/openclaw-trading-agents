@@ -1,7 +1,14 @@
 import OpenAI from "openai";
 import { TraceLogger } from "./trace-logger";
 import { LLMCallTrace } from "./types";
-/** Cost per 1M tokens (input, output) */
+/** Cost per 1M tokens (input, output), in USD.
+ *
+ * GLM prices are the official ZhiPu tiers (CNY/M, input/output) converted to
+ * USD at ~¥7.2/$. GLM-4.7-Flash is free under the basic tier (1 concurrency);
+ * we carry a nominal figure so a run reports a small but nonzero cost instead
+ * of misleadingly showing $0 when the model actually consumed quota. Override
+ * by adding an entry here when ZhiPu updates pricing.
+ */
 export declare const MODEL_COSTS: Record<string, {
     input: number;
     output: number;

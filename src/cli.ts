@@ -14,6 +14,7 @@ import OpenAI from "openai";
 import { runQuickAnalysis, runFullAnalysis } from "./orchestrator";
 import { TradingAgentsConfig } from "./types";
 import { AbortError, EnvironmentError } from "./errors";
+import { DEFAULT_LLM_CONCURRENCY } from "./constants";
 import { toMarkdown, toHtml } from "./report-formatter";
 
 /** Parsed CLI arguments */
@@ -85,7 +86,7 @@ export function parseArgs(argv: string[]): CliArgs {
       risk_debate_rounds: riskDebateRounds,
       max_risk_retries: 1,
       report_dir: reportDir,
-      llm_concurrency: 3,
+      llm_concurrency: DEFAULT_LLM_CONCURRENCY,
     },
   };
 }

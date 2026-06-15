@@ -237,6 +237,28 @@ describe('Integration Test: End-to-End Quick Analysis (7 Analysts)', { timeout: 
     expect(result.final.direction).toBe('Hold');
   });
 
+  it('should abort the pipeline when a majority of data sources fail', async () => {
+    // 6 of 7 scripts fail → crosses the data_collection abort gate (≥6 failed).
+    // Previously the pipeline kept running PM on an empty analyst set, wasting
+    // LLM budget and writing a useless "0 analysts" report. It must now throw
+    // EnvironmentError before any LLM call.
+    vi.mocked(execPython).mockImplementation(async (scriptPath: string) => {
+      if (scriptPath.includes('trading-fundamentals')) {
+        return { success: true, data: { ticker: '600519', valuation: { name: '测试' } } };
+      }
+      return { success: false, error: 'Script failed' };
+    });
+
+    const mockCreate = createMockLLM('看多', 'should not run', 'Buy', 'should not run');
+    mockClient.chat.completions.create = mockCreate;
+
+    await expect(
+      runQuickAnalysis('600519', '2026-06-05', config, mockClient)
+    ).rejects.toThrow(/管道中止/);
+    // PM (and every downstream LLM call) must have been skipped.
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
   it('should handle Hold direction', async () => {
     vi.mocked(execPython).mockResolvedValue({
       success: true,

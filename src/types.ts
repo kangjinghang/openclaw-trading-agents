@@ -135,8 +135,8 @@ export interface CrossStageIssue {
 export interface PipelineIssue {
   /** Pipeline stage where the issue was detected. */
   stage: "data_collection" | "template_render" | "analyst_output" | "quality_gate" | "quality_review" | "debate" | "research" | "cross_stage";
-  /** abort = stop pipeline; skip = skip this item; warn = record only. */
-  severity: "abort" | "skip" | "warn";
+  /** abort = stop pipeline; skip = skip this item; warn = record only; error = serious but non-fatal (e.g. self-contradictory report). */
+  severity: "abort" | "skip" | "warn" | "error";
   /** Short check name (e.g. "placeholders_remaining"). */
   check: string;
   /** Human-readable description. */
