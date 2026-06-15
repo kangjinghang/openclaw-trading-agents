@@ -107,3 +107,73 @@ def test_custom_retry_on_opts_in():
     ) == "ok"
     assert f.calls == 2
     assert len(sleeps) == 1
+
+
+# ── Error collector (record_error / get_errors / output_json _errors) ──
+# These pin the contract that whole-source failures recorded via record_error
+# surface in output_json's top-level _errors array WITHOUT affecting `success`,
+# so a partial outage is observable instead of masquerading as "no data".
+from http_helpers import record_error, get_errors, clear_errors, output_json  # noqa: E402
+
+
+@pytest.fixture(autouse=False)
+def reset_errors():
+    """Clear the module-level error list before each collector test."""
+    clear_errors()
+    yield
+    clear_errors()
+
+
+def test_record_and_get_errors(reset_errors):
+    record_error("macro_cls", "JSONDecodeError: no json")
+    record_error("dragon_tiger", "timeout")
+    errs = get_errors()
+    assert len(errs) == 2
+    assert errs[0] == {"stage": "macro_cls", "error": "JSONDecodeError: no json"}
+    assert errs[1] == {"stage": "dragon_tiger", "error": "timeout"}
+
+
+def test_error_fields_truncated(reset_errors):
+    record_error("x" * 100, "y" * 300)
+    errs = get_errors()
+    assert len(errs[0]["stage"]) == 40  # stage truncated to 40 chars
+    assert len(errs[0]["error"]) == 160  # error truncated to 160 chars
+
+
+def test_get_errors_returns_copy_not_reference(reset_errors):
+    record_error("s1", "e1")
+    snapshot = get_errors()
+    snapshot.append({"stage": "tamper", "error": "x"})
+    # Mutating the returned list must not affect the internal collector
+    assert len(get_errors()) == 1
+
+
+def test_clear_errors(reset_errors):
+    record_error("s1", "e1")
+    record_error("s2", "e2")
+    clear_errors()
+    assert get_errors() == []
+
+
+def test_output_json_includes_errors_when_present(capsys, reset_errors):
+    record_error("macro_cls", "down")
+    # output_json calls sys.exit; catch SystemExit so the test process survives.
+    with pytest.raises(SystemExit):
+        output_json(True, data={"k": "v"}, source="test")
+    out = capsys.readouterr().out
+    import json
+    d = json.loads(out)
+    assert d["success"] is True  # errors do NOT flip success
+    assert d["_errors"] == [{"stage": "macro_cls", "error": "down"}]
+
+
+def test_output_json_omits_errors_when_absent(capsys, reset_errors):
+    # No record_error calls → _errors must be absent (not an empty array)
+    with pytest.raises(SystemExit):
+        output_json(True, data={"k": "v"})
+    out = capsys.readouterr().out
+    import json
+    d = json.loads(out)
+    assert "_errors" not in d
+
+

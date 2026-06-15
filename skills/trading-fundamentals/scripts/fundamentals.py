@@ -9,7 +9,7 @@ import os
 
 # Add parent skills dir to path for shared imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
-from http_helpers import tencent_quote, em_get, output_json, normalize_ticker
+from http_helpers import tencent_quote, em_get, output_json, normalize_ticker, record_error
 
 
 def fetch_fundamentals(ticker, date):
@@ -338,7 +338,8 @@ def _fetch_financial_health(code, periods=4):
     """
     try:
         import akshare as ak
-    except Exception:
+    except Exception as e:
+        record_error("financial_health_akshare", e)
         return None
 
     # Exchange prefix: 6/9→sh, 8→bj, else sz (mirrors http_helpers tencent logic)

@@ -8,7 +8,7 @@ import os
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
-from http_helpers import em_get, http_get, eastmoney_datacenter, output_json, normalize_ticker
+from http_helpers import em_get, http_get, eastmoney_datacenter, output_json, normalize_ticker, record_error
 
 import requests
 
@@ -42,7 +42,8 @@ def _fetch_northbound():
                 for i in range(max(0, len(times) - 10), len(times))
             ],
         }
-    except Exception:
+    except Exception as e:
+        record_error("northbound", e)
         return None
 
 
@@ -67,7 +68,8 @@ def _fetch_fund_flow(code, date):
             result["large_net"] = float(last[4])
             result["super_net"] = float(last[5])
         return result
-    except Exception:
+    except Exception as e:
+        record_error("fund_flow", e)
         return None
 
 
@@ -89,7 +91,8 @@ def _fetch_hot_stocks(date):
              "reason": row.get("reason", ""), "change_pct": row.get("zhangfu", "")}
             for row in rows[:20]
         ]
-    except Exception:
+    except Exception as e:
+        record_error("hot_stocks", e)
         return None
 
 
@@ -119,7 +122,8 @@ def _fetch_dragon_tiger(code, date, lookback=30):
             }
             for row in data
         ]
-    except Exception:
+    except Exception as e:
+        record_error("dragon_tiger", e)
         return []
 
 
@@ -141,7 +145,8 @@ def _fetch_sector_fund_flow(top_n=8):
     try:
         r = em_get(url, params=params, timeout=15)
         items = r.json().get("data", {}).get("diff", []) or []
-    except Exception:
+    except Exception as e:
+        record_error("sector_fund_flow", e)
         return None
 
     if not items:

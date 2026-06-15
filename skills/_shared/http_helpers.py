@@ -15,6 +15,37 @@ import time
 import requests
 
 
+# ── Whole-source error collector ─────────────────────────────────────
+# Scripts accumulate non-fatal errors here (e.g. a secondary data source that
+# failed but didn't break the whole fetch). output_json() surfaces them as a
+# top-level `_errors` array so a silent source outage is observable downstream
+# instead of masquerading as "no data". Per-record parse failures inside loops
+# should NOT use this — only whole-source/sub-source failures.
+_ERRORS = []
+
+
+def record_error(stage, msg):
+    """Record a whole-source/sub-source failure (non-fatal).
+
+    Args:
+        stage: short label identifying which fetch failed (e.g. "macro_cls",
+               "dragon_tiger_ths"). Truncated to 40 chars.
+        msg: the error message. Truncated to 160 chars.
+    """
+    _ERRORS.append({"stage": str(stage)[:40], "error": str(msg)[:160]})
+
+
+def get_errors():
+    """Return accumulated errors (does not clear)."""
+    return list(_ERRORS)
+
+
+def clear_errors():
+    """Clear accumulated errors. Call at the start of each fetch if reusing
+    the process across runs (tests do this)."""
+    del _ERRORS[:]
+
+
 # ── Force IPv4 for eastmoney push2 (IPv6 connections get reset) ─────
 if socket.has_ipv6:
     _orig_getaddrinfo = socket.getaddrinfo
@@ -35,16 +66,27 @@ def _with_retry(fn, *, attempts=3, base_delay=0.5, factor=2.0,
                 retry_on=None, _sleep=time.sleep):
     """Call fn() with exponential-backoff retry on transient (fast) errors.
 
-    By default retries only connection-level errors (requests.ConnectionError)
-    — these fail fast (<1s), so 3 attempts stay well within the 30s script
-    budget. Timeouts are deliberately NOT retried by default: a single timeout
-    already nears the budget, and retrying it would blow the deadline. Pass
-    ``retry_on`` to override (e.g. opt into retrying JSONDecodeError).
+    By default retries connection-level errors and HTTP errors — both are fast
+    to surface (<1s) and transient (a flapping upstream or a temporary bad
+    gateway), so 3 attempts stay well within the 30s script budget. Timeouts
+    are deliberately NOT retried by default: a single timeout already nears the
+    budget, and retrying it would blow the deadline. Pass ``retry_on`` to
+    override.
+
+    Note: requests does not raise HTTPError for 4xx/5xx unless the caller also
+    invokes raise_for_status(). To get 5xx retries, wrap the get + raise in the
+    fn passed to _with_retry (see http_get_checked below). A JSONDecodeError
+    from r.json() similarly only fires if json parsing happens inside fn —
+    callers that parse .json() themselves will not benefit from that retry and
+    must handle it (e.g. the CLS macro fallback in news.py/policy.py).
 
     ``_sleep`` is injectable for testing.
     """
     if retry_on is None:
-        retry_on = (requests.exceptions.ConnectionError,)
+        retry_on = (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.HTTPError,
+        )
     last_exc = None
     for attempt in range(attempts):
         try:
@@ -162,7 +204,12 @@ def _safe_float(val):
 
 # ── Standard JSON output ────────────────────────────────────────────
 def output_json(success, data=None, error=None, source=None):
-    """Print standardized JSON to stdout and exit."""
+    """Print standardized JSON to stdout and exit.
+
+    Any errors recorded via record_error() during this run are surfaced as a
+    top-level `_errors` array (only when non-empty), so a non-fatal source
+    failure is visible to the caller without affecting the `success` flag.
+    """
     result = {"success": success}
     if data is not None:
         result["data"] = data
@@ -170,6 +217,8 @@ def output_json(success, data=None, error=None, source=None):
         result["error"] = error
     if source is not None:
         result["_source"] = source
+    if _ERRORS:
+        result["_errors"] = get_errors()
     print(json.dumps(result, ensure_ascii=False))
     sys.exit(0 if success else 1)
 
