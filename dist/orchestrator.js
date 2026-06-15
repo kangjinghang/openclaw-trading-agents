@@ -524,6 +524,20 @@ const ANALYST_CONFIGS = [
 function scriptTimeout(cfg) {
     return cfg.timeoutMs ?? constants_1.PYTHON_SCRIPT_TIMEOUT_MS;
 }
+/**
+ * Halt the pipeline when an abort-severity health issue was registered during
+ * the analyst phase (e.g. ≥6 of 7 data sources failed). Previously, after the
+ * data gate tripped, the orchestrator kept running PM / debate / risk with an
+ * EMPTY analyst set — burning LLM budget on a guaranteed-useless report and
+ * writing a "0 analysts" summary to disk. Throwing here propagates to the
+ * CLI/plugin error handlers (which already format EnvironmentError cleanly).
+ */
+function haltIfAborted(health) {
+    if (!health.hasAbort)
+        return;
+    const aborts = health.issues.filter(i => i.severity === "abort");
+    throw new errors_1.EnvironmentError(`管道中止：${aborts.map(i => `[${i.stage}/${i.check}] ${i.message}`).join("; ")}`);
+}
 /** Save raw data source outputs to the report directory for traceability */
 function saveRawData(detailDir, dataResults, subDirName) {
     const dataDir = path.join(detailDir, subDirName);
@@ -619,7 +633,7 @@ async function runAnalystPhase(ticker, date, config, openaiClient, traceLogger, 
     log("[2/4] 分析师阶段 7 个分析师...");
     const promptsBaseDir = path.join(SKILLS_DIR, "trading-analysis", "prompts");
     const analystReports = new Array(ANALYST_CONFIGS.length);
-    const concurrency = config.llm_concurrency || constants_2.DEFAULT_CONCURRENCY;
+    const concurrency = config.llm_concurrency || constants_2.DEFAULT_LLM_CONCURRENCY;
     const rateLimitCoordinator = new llm_client_1.RateLimitCoordinator();
     // Live analyst vote tracking for progress updates
     const votes = {};
@@ -724,6 +738,7 @@ async function runQuickAnalysis(ticker, date, config, openaiClient, signal, onPr
     const { analystReports, totalTokens, totalCostUsd, dataResults, companyName } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health, log, tracker);
     if (signal?.aborted)
         throw new errors_1.AbortError();
+    haltIfAborted(health); // ≥6 data sources failed → don't run PM on empty analysts
     // ── Quality Gate ──────────────────────────────────────────────────
     const quality = (0, quality_gate_1.validateAnalystReports)(analystReports, dataResults);
     // Layer-2 LLM credibility review (optional; degrades to Layer-1 on skip/failure)
@@ -881,6 +896,7 @@ async function runFullAnalysis(ticker, date, config, openaiClient, signal, onPro
     const { analystReports, dataResults, companyName } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health, log, tracker);
     if (signal?.aborted)
         throw new errors_1.AbortError();
+    haltIfAborted(health); // ≥6 data sources failed → don't run debate/research/risk on empty analysts
     // Quality Gate
     const quality = (0, quality_gate_1.validateAnalystReports)(analystReports, dataResults);
     // Layer-2 LLM credibility review (optional; degrades to Layer-1 on skip/failure)
@@ -1075,9 +1091,12 @@ async function runFullAnalysis(ticker, date, config, openaiClient, signal, onPro
     // conservative-reject overruled, retries exhausted, …) at a glance.
     const latestClose = extractLatestClose(dataResults);
     const crossIssues = (0, cross_stage_checks_1.crossStageChecks)(result, latestClose);
-    // CP6: Cross-stage — register all issues
+    // CP6: Cross-stage — register all issues. CrossStageIssue.severity is
+    // "warn"|"error"; PipelineIssue carries the same vocab, so the error-level
+    // anomalies (e.g. reject_has_plan — a self-contradictory report) surface
+    // distinctly in pipeline_health instead of being flattened to "warn".
     for (const issue of crossIssues) {
-        health.add({ stage: "cross_stage", severity: issue.severity === "error" ? "warn" : "warn",
+        health.add({ stage: "cross_stage", severity: issue.severity,
             check: issue.check, message: issue.message });
     }
     const fullProvenance = [

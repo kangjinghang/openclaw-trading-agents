@@ -18,14 +18,16 @@ class DataFetchError(Exception):
 def detect_market(ticker: str) -> int:
     """
     Detect market from ticker code.
+    Shanghai: 6xx (main board) and 68x (STAR / 科创板) both start with "6".
+    Shenzhen: 0xx (main) and 3xx (ChiNext / 创业板).
 
     Args:
         ticker: Stock ticker code (e.g., "600519", "000001")
 
     Returns:
-        1 for Shanghai (6xx, 68x), 0 for Shenzhen (0xx, 3xx)
+        1 for Shanghai, 0 for Shenzhen
     """
-    if ticker.startswith('6') or ticker.startswith('68'):
+    if ticker.startswith('6'):   # 6xx main board + 68x STAR market
         return 1  # Shanghai
     elif ticker.startswith('0') or ticker.startswith('3'):
         return 0  # Shenzhen

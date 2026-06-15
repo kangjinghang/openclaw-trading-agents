@@ -104,8 +104,15 @@ def _parse_news_time(time_str):
     return None
 
 
-def _categorize_news(articles, reference_date_str):
-    """Categorize articles into time layers based on reference date."""
+def _categorize_news(articles, reference_date_str, lookback_days=7):
+    """Categorize articles into time layers based on reference date.
+
+    The history layer spans ``lookback_days`` so callers that pass a wider
+    window (e.g. the policy role uses --lookback-days 14) actually retain
+    older articles instead of always clipping at 7 days. The realtime/extended
+    layers (6h / 24h) are fixed regardless of lookback — they describe
+    freshness, not the fetch window.
+    """
     try:
         ref_date = datetime.strptime(reference_date_str, "%Y-%m-%d")
     except (ValueError, TypeError):
@@ -114,7 +121,7 @@ def _categorize_news(articles, reference_date_str):
     now = ref_date.replace(hour=23, minute=59, second=59)
     cutoff_6h = now - timedelta(hours=6)
     cutoff_24h = now - timedelta(hours=24)
-    cutoff_7d = now - timedelta(days=7)
+    cutoff_history = now - timedelta(days=max(1, lookback_days))
 
     layers = {
         "realtime_6h": [],
@@ -132,10 +139,10 @@ def _categorize_news(articles, reference_date_str):
             layers["realtime_6h"].append(article)
         elif pub_time >= cutoff_24h:
             layers["extended_24h"].append(article)
-        elif pub_time >= cutoff_7d:
+        elif pub_time >= cutoff_history:
             layers["history_7d"].append(article)
         else:
-            # Older than 7 days, skip from layers but keep in flat list
+            # Older than the lookback window, skip from layers but keep in flat list
             pass
 
     stats = {
@@ -157,8 +164,8 @@ def fetch_news(ticker, date, lookback_days=7):
         articles = _fetch_news_eastmoney(code)
         data["stock_news"] = articles
 
-        # Categorize into time layers
-        layers, stats = _categorize_news(articles, date)
+        # Categorize into time layers (history window = lookback_days)
+        layers, stats = _categorize_news(articles, date, lookback_days)
         data["news_layers"] = layers
         data["layer_stats"] = stats
     except Exception as e:

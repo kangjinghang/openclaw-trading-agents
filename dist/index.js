@@ -41,15 +41,17 @@ const typebox_1 = require("@sinclair/typebox");
 const orchestrator_1 = require("./orchestrator");
 const dashboard_api_1 = require("./dashboard-api");
 const history_format_1 = require("./history-format");
+const constants_1 = require("./constants");
 const path = __importStar(require("path"));
 const os = __importStar(require("os"));
+const fs = __importStar(require("fs"));
 const DEFAULT_CONFIG = {
     models: { analyst: "glm-4.7-flash", debater: "glm-4.7", decision: "glm-4.7", risk: "glm-4.7" },
     debate_rounds: 2,
     risk_debate_rounds: 1,
     max_risk_retries: 1,
     report_dir: "~/.openclaw/trading-reports",
-    llm_concurrency: 1,
+    llm_concurrency: constants_1.DEFAULT_LLM_CONCURRENCY,
 };
 function resolveConfig(userConfig) {
     const reportDir = userConfig?.report_dir ?? DEFAULT_CONFIG.report_dir;
@@ -251,7 +253,6 @@ exports.default = {
         const logger = api.logger || console;
         logger.info?.(`[trading-agents] config: models.analyst=${config.models.analyst} llm_concurrency=${config.llm_concurrency} api_key=${config.api_key ? "***set***" : "(from host)"} base_url=${config.base_url || "(from host)"}`);
         // Ensure report directory exists
-        const fs = require("fs");
         try {
             fs.mkdirSync(config.report_dir, { recursive: true });
         }

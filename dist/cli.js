@@ -18,6 +18,7 @@ exports.parseArgs = parseArgs;
 const openai_1 = __importDefault(require("openai"));
 const orchestrator_1 = require("./orchestrator");
 const errors_1 = require("./errors");
+const constants_1 = require("./constants");
 const report_formatter_1 = require("./report-formatter");
 /** Parse CLI arguments into a structured object. Throws on invalid input. */
 function parseArgs(argv) {
@@ -76,7 +77,7 @@ function parseArgs(argv) {
             risk_debate_rounds: riskDebateRounds,
             max_risk_retries: 1,
             report_dir: reportDir,
-            llm_concurrency: 3,
+            llm_concurrency: constants_1.DEFAULT_LLM_CONCURRENCY,
         },
     };
 }

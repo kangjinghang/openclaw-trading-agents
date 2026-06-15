@@ -6,12 +6,23 @@ import { LLMCallTrace, Verdict } from "./types";
 import { LLMError } from "./errors";
 import { LLM_MAX_RETRIES, LLM_TIMEOUT_MS, LLM_DEFAULT_MAX_TOKENS, LLM_RETRY_DELAY_MS, RATE_LIMIT_BASE_DELAY_MS, RATE_LIMIT_MAX_DELAY_MS } from "./constants";
 
-/** Cost per 1M tokens (input, output) */
+/** Cost per 1M tokens (input, output), in USD.
+ *
+ * GLM prices are the official ZhiPu tiers (CNY/M, input/output) converted to
+ * USD at ~¥7.2/$. GLM-4.7-Flash is free under the basic tier (1 concurrency);
+ * we carry a nominal figure so a run reports a small but nonzero cost instead
+ * of misleadingly showing $0 when the model actually consumed quota. Override
+ * by adding an entry here when ZhiPu updates pricing.
+ */
 export const MODEL_COSTS: Record<string, { input: number; output: number }> = {
   "gpt-4o": { input: 2.5, output: 10 },
   "gpt-4o-mini": { input: 0.15, output: 0.6 },
   "claude-sonnet-4-6": { input: 3, output: 15 },
   "claude-opus-4-8": { input: 15, output: 75 },
+  // ZhiPu GLM — official promo tier (¥2 / ¥8 per M tokens, [0,32K) input)
+  "glm-4.7": { input: 2 / 7.2, output: 8 / 7.2 },
+  // flash is free at the basic tier; nominal fallback (~1/5 of paid flash rate)
+  "glm-4.7-flash": { input: 0.06, output: 0.22 },
 };
 
 export interface LLMCallOptions {
@@ -41,6 +52,10 @@ function generateTraceId(): string {
   return `trace-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 }
 
+/** Models whose missing price entry has already been warned about this
+ *  process — avoids spamming the log once per LLM call. */
+const _warnedMissingCost = new Set<string>();
+
 /** Calculate cost in USD based on model and token usage */
 function calculateCost(
   model: string,
@@ -49,12 +64,16 @@ function calculateCost(
 ): number {
   const costs = MODEL_COSTS[model];
   if (!costs) {
-    // Default to gpt-4o pricing if model not found
-    const defaultCosts = MODEL_COSTS["gpt-4o"];
-    return (
-      (promptTokens / 1_000_000) * defaultCosts.input +
-      (completionTokens / 1_000_000) * defaultCosts.output
-    );
+    // Unknown model: report $0 and warn ONCE per model (per-process) so a
+    // reviewer sees the cost column is not authoritative. Previously this
+    // silently fell back to gpt-4o pricing, overstating cost ~50x for the
+    // default GLM models (which were absent from the table) and producing
+    // a misleading total_cost_usd in run_summary / dashboard / CLI output.
+    if (!_warnedMissingCost.has(model)) {
+      _warnedMissingCost.add(model);
+      console.error(`  [LLM] cost unknown for model "${model}" — reporting $0 (add an entry to MODEL_COSTS for accurate accounting)`);
+    }
+    return 0;
   }
   return (
     (promptTokens / 1_000_000) * costs.input +

@@ -4,12 +4,35 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.toMarkdown = toMarkdown;
 exports.toHtml = toHtml;
 /**
+ * Escape the five HTML-significant characters. Used on every LLM-generated
+ * string before it is interpolated into HTML, so a model (or a poisoned data
+ * field) emitting `<script>` / `<img onerror>` cannot execute when the report
+ * is opened in a browser. Markdown structure is re-applied afterwards by
+ * markdownToHtml(); for plain interpolations the caller escapes directly.
+ */
+function escapeHtml(s) {
+    return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+/**
  * Minimal Markdown → HTML converter for LLM-generated text.
  * Handles: headings, bold, lists, horizontal rules, paragraphs.
+ *
+ * Escapes HTML entities FIRST so any literal markup in the LLM output is
+ * rendered as inert text rather than executed when the report opens in a
+ * browser (stored-XSS defense). Markdown emphasis characters are then
+ * re-applied on the escaped text.
  */
 function markdownToHtml(md) {
-    // Remove VERDICT HTML comments
-    let html = md.replace(/<!--[\s\S]*?-->/g, "");
+    // Escape HTML first — subsequent markdown passes only re-introduce the
+    // limited, allowlisted tags below (<hr><hN><strong><li><ul><p><br>).
+    let html = escapeHtml(md);
+    // Remove VERDICT HTML comments (now entity-escaped to &lt;!-- … --&gt;)
+    html = html.replace(/&lt;!--[\s\S]*?--&gt;/g, "");
     // Horizontal rules
     html = html.replace(/^---\s*$/gm, "<hr>");
     // Headings (### before ## before #)
@@ -269,9 +292,9 @@ function toHtml(result) {
 </table>`;
     }
     html += `
-<blockquote>${result.final.reasoning}</blockquote>`;
+<blockquote>${escapeHtml(result.final.reasoning)}</blockquote>`;
     if (result.final.key_risks?.length) {
-        html += `<p><strong>关键风险</strong>: ${result.final.key_risks.join(" / ")}</p>`;
+        html += `<p><strong>关键风险</strong>: ${result.final.key_risks.map(escapeHtml).join(" / ")}</p>`;
     }
     html += `
 </div>
@@ -282,7 +305,7 @@ function toHtml(result) {
 <tr><th>分析师</th><th>方向</th><th>理由</th></tr>`;
     for (const report of result.analysts) {
         html += `
-<tr><td>${report.role}</td><td class="verdict">${dirBadge(report.verdict.direction)}</td><td>${report.verdict.reason}</td></tr>`;
+<tr><td>${escapeHtml(report.role)}</td><td class="verdict">${dirBadge(report.verdict.direction)}</td><td>${escapeHtml(report.verdict.reason)}</td></tr>`;
     }
     html += `
 </table>
@@ -296,27 +319,30 @@ function toHtml(result) {
             html += `<h3>第 ${round.round} 轮</h3>`;
             html += `<div class="card"><strong>多头论点</strong>:`;
             for (const c of round.bull_claims) {
-                html += `<br>• <strong>${c.topic}</strong> <span style="color:#6b7280">(信心 ${Math.round(c.confidence * 100)}%)</span>: ${c.evidence.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")}`;
+                // Escape first, then re-apply bold — so literal < > in LLM text is
+                // neutralized but the allowlisted <strong> tag still renders.
+                const ev = escapeHtml(c.evidence).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+                html += `<br>• <strong>${escapeHtml(c.topic)}</strong> <span style="color:#6b7280">(信心 ${Math.round(c.confidence * 100)}%)</span>: ${ev}`;
             }
             html += `</div>`;
             html += `<div class="card"><strong>空头论点</strong>:`;
             for (const c of round.bear_claims) {
-                html += `<br>• <strong>${c.topic}</strong> <span style="color:#6b7280">(信心 ${Math.round(c.confidence * 100)}%)</span>: ${c.evidence.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")}`;
+                const ev = escapeHtml(c.evidence).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+                html += `<br>• <strong>${escapeHtml(c.topic)}</strong> <span style="color:#6b7280">(信心 ${Math.round(c.confidence * 100)}%)</span>: ${ev}`;
             }
             html += `</div>`;
         }
-        const bullClean = full.debate.bull_summary
-            .replace(/<!--[\s\S]*?-->/g, "")
+        // Escape before each markdown pass: the comment-strip regex runs on the
+        // escaped string (&lt;!--), and the bold converter only re-introduces the
+        // allowlisted <strong> tag.
+        const cleanSummary = (s) => escapeHtml(s)
+            .replace(/&lt;!--[\s\S]*?--&gt;/g, "")
             .replace(/^#{1,3}\s+.*$/gm, "")
             .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
             .replace(/\n+/g, "<br>")
             .trim();
-        const bearClean = full.debate.bear_summary
-            .replace(/<!--[\s\S]*?-->/g, "")
-            .replace(/^#{1,3}\s+.*$/gm, "")
-            .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-            .replace(/\n+/g, "<br>")
-            .trim();
+        const bullClean = cleanSummary(full.debate.bull_summary);
+        const bearClean = cleanSummary(full.debate.bear_summary);
         html += `
 <blockquote><strong>多头总结</strong>: ${bullClean}<br><strong>空头总结</strong>: ${bearClean}</blockquote>
 </div>`;
@@ -334,7 +360,7 @@ function toHtml(result) {
 <tr><td>多头得分</td><td>${rd.bull_score}</td></tr>
 <tr><td>空头得分</td><td>${rd.bear_score}</td></tr>
 </table>
-<blockquote>${rd.reasoning}</blockquote>
+<blockquote>${escapeHtml(rd.reasoning)}</blockquote>
 </div>`;
     }
     // Trading plan
@@ -357,14 +383,14 @@ ${markdownToHtml(cleanExecutionPlan(tp.execution_plan))}
 <h2>风控评估 ${dirBadge(ra.status)}</h2>
 <div class="card">
 <p>风险评分: <strong>${ra.risk_score}/100</strong></p>
-<p>${ra.reasoning}</p>`;
+<p>${escapeHtml(ra.reasoning)}</p>`;
         const j = ra.judge;
         if (j) {
             const constraintHtml = (title, items) => {
                 if (!items || items.length === 0)
                     return "";
-                const lis = items.map((c) => `<li>${c}</li>`).join("");
-                return `<p><strong>${title}</strong></p><ul>${lis}</ul>`;
+                const lis = items.map((c) => `<li>${escapeHtml(c)}</li>`).join("");
+                return `<p><strong>${escapeHtml(title)}</strong></p><ul>${lis}</ul>`;
             };
             html += constraintHtml("硬约束（必须遵守）", j.hard_constraints);
             html += constraintHtml("软建议", j.soft_constraints);

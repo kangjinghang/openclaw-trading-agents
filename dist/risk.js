@@ -198,7 +198,7 @@ async function runRiskDebate(tradingPlan, analystReports, config, openaiClient, 
         .join("\n\n");
     const planText = `方向：${tradingPlan.direction}\n目标价：${tradingPlan.target_price}\n止损：${tradingPlan.stop_loss}\n仓位：${tradingPlan.position_pct}%\n执行计划：${tradingPlan.execution_plan}`;
     const riskArguments = new Array(exports.RISK_ROLES.length);
-    const concurrency = config.llm_concurrency || constants_1.DEFAULT_CONCURRENCY;
+    const concurrency = config.llm_concurrency || constants_1.DEFAULT_LLM_CONCURRENCY;
     const rateLimitCoordinator = new llm_client_1.RateLimitCoordinator();
     await pool(exports.RISK_ROLES, async ({ role, instructions }, idx) => {
         await rateLimitCoordinator.waitIfNeeded();

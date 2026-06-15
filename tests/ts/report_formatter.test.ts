@@ -196,5 +196,58 @@ describe("report-formatter", () => {
       expect(html).toContain("<strong>目标价格</strong>");
       expect(html).toContain("<strong>止损价格</strong>");
     });
+
+    it("should escape LLM-generated text to prevent stored XSS", () => {
+      // Inject script payloads into every LLM-origin text field that ends up
+      // interpolated into the HTML report. None of these may reach the output
+      // verbatim — they must be entity-escaped so the report is safe to open.
+      const xss = '<script>alert(1)</script><img src=x onerror=alert(1)>';
+      const poisoned: FullAnalysisResult = {
+        ...fullResult,
+        final: {
+          ...fullResult.final,
+          reasoning: xss,
+          key_risks: [xss],
+        },
+        analysts: [
+          { role: "market", content: "x", verdict: { direction: "看多", reason: xss }, data_sources_used: ["kline"] },
+        ],
+        debate: {
+          ...fullResult.debate,
+          rounds: [
+            {
+              round: 1,
+              bull_claims: [{ id: "BULL-1", side: "bull", topic: xss, evidence: xss, confidence: 0.9 }],
+              bear_claims: [],
+            },
+          ],
+          bull_summary: xss,
+          bear_summary: xss,
+        },
+        research_decision: { ...fullResult.research_decision, reasoning: xss },
+        risk_assessment: {
+          ...fullResult.risk_assessment,
+          reasoning: xss,
+          judge: {
+            verdict: "pass",
+            reason: xss,
+            hard_constraints: [xss],
+            soft_constraints: [],
+            execution_preconditions: [],
+            de_risk_triggers: [],
+          },
+        },
+      };
+      const html = toHtml(poisoned);
+      // No executable markup may reach the output as a live tag. The payload
+      // text may appear (entity-encoded inside &lt;…&gt;), but never as a
+      // real <script>/<img> tag or as an unescaped onerror= attribute on a
+      // real element.
+      expect(html).not.toContain("<script>");
+      expect(html).not.toContain("<img src=x onerror");
+      // The payload text must instead be neutralized as entities.
+      expect(html).toContain("&lt;script&gt;");
+      expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+    });
   });
 });
