@@ -7,7 +7,13 @@ Supports mootdx (primary) and akshare (fallback) data sources.
 import sys
 import json
 import argparse
+import os
+import time
 from typing import Dict, Any, Optional
+
+# Add skills/_shared to Python path for http_helpers
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../_shared"))
+from http_helpers import record_call, output_json
 
 
 class DataFetchError(Exception):
@@ -667,6 +673,7 @@ def fetch(ticker: str, count: int = 120) -> Dict[str, Any]:
     last_error = None
 
     for source in SOURCES:
+        start = time.monotonic()
         try:
             if source == "mootdx":
                 data = fetch_from_mootdx(ticker, count)
@@ -674,6 +681,10 @@ def fetch(ticker: str, count: int = 120) -> Dict[str, Any]:
                 data = fetch_from_akshare(ticker, count)
             else:
                 continue
+
+            # Record successful fetch from this source
+            record_call(f"kline/{source}", success=True,
+                        duration_ms=(time.monotonic() - start) * 1000)
 
             # Pre-compute VPA indicators
             try:
@@ -695,9 +706,13 @@ def fetch(ticker: str, count: int = 120) -> Dict[str, Any]:
                 "_source": source
             }
         except DataFetchError as e:
+            record_call(f"kline/{source}", success=False, error=str(e),
+                        duration_ms=(time.monotonic() - start) * 1000)
             last_error = str(e)
             continue
         except Exception as e:
+            record_call(f"kline/{source}", success=False, error=str(e),
+                        duration_ms=(time.monotonic() - start) * 1000)
             last_error = str(e)
             continue
 
@@ -747,13 +762,13 @@ def main():
         count = stdin_input.get("count", 120)
         if ticker:
             result = fetch(ticker, count)
-            print(json.dumps(result, ensure_ascii=False))
+            print(output_json(result))
             sys.exit(0 if result["success"] else 1)
 
     # Parse command line arguments
     args = parser.parse_args()
     result = fetch(args.ticker, args.count)
-    print(json.dumps(result, ensure_ascii=False))
+    print(output_json(result))
     sys.exit(0 if result["success"] else 1)
 
 
