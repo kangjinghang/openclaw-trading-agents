@@ -4,7 +4,7 @@ import OpenAI, { RateLimitError, APIError } from "openai";
 import { TraceLogger } from "./trace-logger";
 import { LLMCallTrace, Verdict } from "./types";
 import { LLMError } from "./errors";
-import { LLM_MAX_RETRIES, LLM_TIMEOUT_MS, LLM_DEFAULT_MAX_TOKENS, LLM_RETRY_DELAY_MS, RATE_LIMIT_BASE_DELAY_MS, RATE_LIMIT_MAX_DELAY_MS } from "./constants";
+import { LLM_MAX_RETRIES, LLM_TIMEOUT_MS, LLM_TOTAL_DEADLINE_MS, LLM_DEFAULT_MAX_TOKENS, LLM_RETRY_DELAY_MS, RATE_LIMIT_BASE_DELAY_MS, RATE_LIMIT_MAX_DELAY_MS } from "./constants";
 
 /** Cost per 1M tokens (input, output), in USD.
  *
@@ -161,8 +161,21 @@ export async function callLLM(
   } = options;
 
   let lastError: unknown;
+  // Total deadline across all retry attempts — caps worst-case blocking time
+  // even if every attempt times out. Without this, 3 attempts × LLM_TIMEOUT_MS
+  // plus backoff could stall a worker for ~15 min (observed on 300681). When the
+  // deadline elapses we stop retrying and surface whatever we have.
+  const deadlineStart = Date.now();
 
   for (let attempt = 0; attempt <= LLM_MAX_RETRIES; attempt++) {
+    // Give up if the overall deadline has already elapsed (skip even starting
+    // another attempt that would just time out). The trace for the attempt that
+    // crossed the line is flagged with deadline_hit so it's diagnosable.
+    const deadlineHit = Date.now() - deadlineStart >= LLM_TOTAL_DEADLINE_MS;
+    if (deadlineHit && attempt > 0) {
+      break;
+    }
+
     const traceId = generateTraceId();
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
@@ -227,6 +240,7 @@ export async function callLLM(
           duration_ms: durationMs,
           usage,
           cost_usd: costUsd,
+          ...(deadlineHit ? { deadline_hit: true } : {}),
         },
       };
 
@@ -237,8 +251,8 @@ export async function callLLM(
         return { content, usage, costUsd, traceId };
       }
 
-      // Empty response — retry if attempts remain
-      if (attempt < LLM_MAX_RETRIES) {
+      // Empty response — retry if attempts remain (and deadline hasn't elapsed)
+      if (attempt < LLM_MAX_RETRIES && Date.now() - deadlineStart < LLM_TOTAL_DEADLINE_MS) {
         console.error(`  [LLM] ${phase}/${role} returned empty content, retrying (${attempt + 1}/${LLM_MAX_RETRIES})...`);
         // Brief pause before retry to avoid immediate re-hit
         await new Promise((r) => setTimeout(r, LLM_RETRY_DELAY_MS + Math.random() * LLM_RETRY_DELAY_MS));
@@ -268,6 +282,7 @@ export async function callLLM(
           duration_ms: durationMs,
           usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
           cost_usd: 0,
+          ...(deadlineHit ? { deadline_hit: true } : {}),
         },
       };
 
@@ -275,8 +290,10 @@ export async function callLLM(
 
       lastError = error;
 
-      // API error — retry if attempts remain
-      if (attempt < LLM_MAX_RETRIES) {
+      // API error — retry if attempts remain (and deadline hasn't elapsed).
+      // Skipping the retry pause when the deadline is up keeps us from padding
+      // an already-too-long stall with backoff delays that can no longer help.
+      if (attempt < LLM_MAX_RETRIES && Date.now() - deadlineStart < LLM_TOTAL_DEADLINE_MS) {
         const errMsg = error instanceof Error ? error.message : String(error);
         const delay = retryDelayMs(error, attempt);
         console.error(`  [LLM] ${phase}/${role} API error: ${errMsg}, retrying in ${(delay / 1000).toFixed(1)}s (${attempt + 1}/${LLM_MAX_RETRIES})...`);
@@ -289,10 +306,14 @@ export async function callLLM(
     }
   }
 
-  // All retries exhausted
+  // All retries exhausted (or deadline elapsed)
   if (lastError) {
     const msg = lastError instanceof Error ? lastError.message : String(lastError);
-    throw new LLMError(msg, phase, role, lastError);
+    const elapsed = Date.now() - deadlineStart;
+    const deadlineNote = elapsed >= LLM_TOTAL_DEADLINE_MS
+      ? ` (stopped after ${LLM_TOTAL_DEADLINE_MS / 1000}s total deadline)`
+      : "";
+    throw new LLMError(msg + deadlineNote, phase, role, lastError);
   }
 
   // All retries returned empty content — log warning and return empty result

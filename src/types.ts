@@ -172,6 +172,11 @@ export interface LLMCallTrace {
       total_tokens: number;
     };
     cost_usd: number;
+    /** True when this call only stopped because the LLM_TOTAL_DEADLINE_MS
+     *  budget elapsed (callLLM gave up mid-retry-loop). Lets a reviewer
+     *  distinguish "model was slow" from "we hard-stopped it" when reading
+     *  a trace. Absent on normal calls. */
+    deadline_hit?: boolean;
   };
 }
 
@@ -198,6 +203,10 @@ export interface ScriptResult {
   _source?: string;
   vpa?: string;
   technical_indicators?: string;
+  /** Non-fatal source/sub-source failures recorded by the Python script via
+   *  http_helpers.record_error(). Surfaced so a silent partial outage (e.g. a
+   *  secondary data feed down) is observable without affecting `success`. */
+  errors?: Array<{ stage: string; error: string }>;
 }
 
 // ── Phase 3: Debate types ──

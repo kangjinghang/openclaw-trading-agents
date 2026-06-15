@@ -3,8 +3,23 @@
 /** Maximum retries for empty LLM responses */
 export const LLM_MAX_RETRIES = 2;
 
-/** Timeout per LLM call (5 minutes) */
-export const LLM_TIMEOUT_MS = 5 * 60 * 1000;
+/** Timeout per single LLM call attempt (2 minutes).
+ *
+ * Was 5 minutes — but a single hung call blocking a worker for 5 min, then
+ * retried up to 2 more times, made the worst case ~15 min (observed: 300681
+ * full run took 36 min after one fundamentals call hung the full 5 min).
+ * 2 min is generous for any model that is actually responding; a call that
+ * hasn't returned by then is effectively hung and should abort so the retry
+ * loop or the total deadline can take over. */
+export const LLM_TIMEOUT_MS = 2 * 60 * 1000;
+
+/** Total deadline across all retry attempts for one logical callLLM (8 minutes).
+ *
+ * Caps the worst-case blocking time even when every attempt times out and
+ * retries: with LLM_TIMEOUT_MS=2min and LLM_MAX_RETRIES=2, three attempts could
+ * otherwise run ~6-7 min plus backoff. This hard ceiling makes callLLM give up
+ * deterministically rather than compound slow retries into a long stall. */
+export const LLM_TOTAL_DEADLINE_MS = 8 * 60 * 1000;
 
 /** Default max tokens for LLM responses */
 export const LLM_DEFAULT_MAX_TOKENS = 16000;
