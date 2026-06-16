@@ -97,12 +97,70 @@ def fetch(ticker, **params):
 - **mootdx**: Uses TCP direct connection (not HTTP), more stable.
 - **akshare**: Aggregates multiple sources including Eastmoney. Acts as universal fallback.
 
-## Known Issues (2026-06)
+## Data Source Health Monitoring
 
-| Issue | Affected Scripts | Impact | Mitigation |
-|-------|-----------------|--------|------------|
-| `push2.eastmoney.com` IPv6 TLS reset | trading-sector | Industry ranking may return empty | IPv4 forced in `http_helpers.py`; graceful empty fallback |
-| Baidu Stock `getrelatedblock` API 403 | trading-sector | Concept blocks return `null` | No fallback available; data simply omitted |
-| Eastmoney `stock_info` sub-source error | trading-fundamentals | Non-critical warning in stderr | Other sub-sources (tencent, mootdx) provide equivalent data |
+Every data script records each call to a sub-source via `http_helpers.record_call(stage, success, error, duration_ms)`, capturing both successes and failures. `output_json()` surfaces the accumulated records as a top-level `_calls` array. The orchestrator collects all `_calls` and dispatches them along two paths:
 
-All scripts wrap API calls in `try/except` and return `{"success": true, "data": {...}}` with empty arrays for failed sub-sources. The analysis pipeline continues even when individual data sources are unavailable.
+1. **Per-run view**: failed calls are pushed to `pipeline_health` (with `check: "source_call_failed"`), visible in `report.json.pipeline_health` for that specific run.
+2. **Cross-run persistence**: all calls are appended to `~/.openclaw/trading-reports/_source-health.json`, a ring buffer of the last 20 calls per source, with derived stats like `success_rate` / `last_error` / `avg_duration_ms`.
+
+Backward compatibility: `record_error(stage, msg)` is an alias for `record_call(stage, success=False, error=msg)`; existing call sites keep working. `output_json` emits both `_errors` (failure-only, legacy shape) and `_calls` (full records, new shape).
+
+### Stage Naming Convention
+
+Format: `<role>/<sub_source>` (slash-separated for hierarchical aggregation — e.g. `hot_money/*` gives the overall hot_money health). 21 sub-sources total:
+
+| Role | Sub-source stages | Primary / Fallback |
+|---|---|---|
+| `kline` | `kline/mootdx`, `kline/akshare` | mootdx primary → akshare fallback |
+| `fundamentals` | `fundamentals/tencent`, `fundamentals/mootdx`, `fundamentals/em_push2`, `fundamentals/em_datacenter`, `fundamentals/em_quarterly`, `fundamentals/em_consensus`, `fundamentals/akshare` | Multi-source assembly; `em_push2` ↔ `em_datacenter` is the industry/name fallback pair (datacenter kicks in when push2 is rate-limited) |
+| `news` | `news/stock_em`, `news/macro_cls`, `news/macro_akshare` | macro_cls → macro_akshare chained fallback |
+| `policy` | `policy/stock_em`, `policy/macro_cls`, `policy/macro_akshare` | Same as news |
+| `sentiment` | `sentiment/hot_rank`, `sentiment/zt_pool` | Both Eastmoney |
+| `hot_money` | `hot_money/northbound`, `hot_money/fund_flow`, `hot_money/hot_stocks`, `hot_money/dragon_tiger`, `hot_money/sector_fund_flow` | All Eastmoney; `fund_flow` and `sector_fund_flow` are most exposed to push2 rate-limiting |
+| `lockup` | `lockup/ann_em`, `lockup/reduce_em` | Both Eastmoney |
+
+### Observation Surfaces (3 ways)
+
+**1. CLI (recommended for daily use)**:
+```bash
+npm run source-health              # Table output (default, failing sources first)
+npm run source-health -- --json    # JSON output (script-friendly)
+npm run source-health -- --failing # Only sources with recent failures
+REPORT_DIR=/custom/path npm run source-health   # Custom report path
+```
+
+**2. Dashboard**: "Data source health" card at the top of the detail tab. Sources with failures are flagged with a red `!`, sorted by `success_rate` ascending (worst first).
+
+**3. report.json**: each run's `pipeline_health` array contains `{check: "source_call_failed", context: {source, error}}` warnings for failed sub-sources in that run.
+
+### Design References
+
+- Design spec: `docs/superpowers/specs/2026-06-15-data-source-health-design.md`
+- Implementation plan: `docs/superpowers/plans/2026-06-15-data-source-health.md`
+- Core module: `src/source-health-store.ts` (`SourceHealthStore` class + `computeStats` pure function)
+- Python collector: `skills/_shared/http_helpers.py` (`record_call` / `record_error` / `get_calls`)
+
+## Known Issues (based on _source-health.json cross-run observation, 2026-06)
+
+> The issues below come from real-run `_source-health.json` data + the `stability-audit.zh.md` report. Failed sources **do not block the pipeline** — scripts return empty data, analysis continues; monitoring makes failures visible and diagnosable.
+
+| Issue | Affected sub-sources (stage names) | Symptoms (observed) | Mitigation |
+|-------|-----------------------------------|---------------------|------------|
+| CLS `cls.cn/nodeapi/telegraphList` endpoint dead | `news/macro_cls`, `policy/macro_cls` | JSON parse failure / 404; 0/2 success rate | Commit `10017ee` added akshare fallback; when akshare is also missing, macro_news stays at 0 |
+| `akshare` module not installed (some environments) | `news/macro_akshare`, `policy/macro_akshare`, `fundamentals/akshare`, `sentiment/hot_rank`, `sentiment/zt_pool` | "No module named 'akshare'"; multiple sub-sources at 0/N | `pip install akshare>=1.15`; missing module starves downstream analysts of macro/zt_pool data |
+| `push2.eastmoney.com` IP rate-limiting (Connection aborted) | `fundamentals/em_push2`, `hot_money/fund_flow`, `hot_money/sector_fund_flow` | Intermittent failures; same IP banned for ~15min+ | `http_helpers.py` forces IPv4 + ≥1s throttle; fundamentals falls back to `datacenter-web.eastmoney.com` (not subject to push2 rate-limit); scripts degrade gracefully via try/except |
+| `push2.eastmoney.com` IPv6 TLS reset (legacy) | `trading-sector` (separate skill, not yet health-tracked) | Industry ranking may return empty | Same: IPv4 forced |
+| Baidu Stock `getrelatedblock` API returns 403 (since 2026-06) | `trading-sector` (separate skill) | Concept blocks return `null` | No fallback; data omitted |
+| `zt_pool` no data on non-trading days (expected behavior) | `sentiment/zt_pool` | Weekends/holidays 0/N | Auto-falls-back to most recent trading day; if even that data is too stale, the call still fails until next trading day |
+| `financial_health` akshare sub-source unstable | `fundamentals/akshare`, `fundamentals/akshare_internal` | Intermittent failures (depends on akshare financial-report endpoint) | Degrades to None; analyst prompt requires `[数据缺失: financial_health]` sentinel (commit `a8d033b`) |
+
+All scripts wrap API calls in `try/except` and return `{"success": true, "data": {...}}` with empty arrays for failed sub-sources. The analysis pipeline continues even when individual data sources are unavailable. `_source-health.json` makes failures visible — run `npm run source-health` for a one-line global status check.
+
+## Diagnostic Workflow (investigating a data source failure)
+
+1. Run `npm run source-health -- --failing` to see which sources failed recently
+2. Inspect each failing source's `last_error` field to identify the cause
+3. Match against the "Known Issues" table above to find the right mitigation
+4. If it's a new issue (not in the table), inspect the full history in `_source-health.json` (CLI with `--json`)
+5. After a fix, run `trading_quick` again, then `source-health` to verify the source's `success_rate` recovers
