@@ -5,45 +5,47 @@ import argparse
 import json
 import sys
 import os
+import time
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
-from http_helpers import em_get, http_get, output_json, normalize_ticker
+from http_helpers import em_get, http_get, output_json, normalize_ticker, record_call
 
 _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
 
 def _fetch_news_eastmoney(code, page_size=50):
     """Fetch individual stock news from Eastmoney search API."""
-    url = "https://search-api-web.eastmoney.com/search/jsonp"
-    inner_param = {
-        "uid": "",
-        "keyword": code,
-        "type": ["cmsArticleWebOld"],
-        "client": "web",
-        "clientType": "web",
-        "clientVersion": "curr",
-        "param": {
-            "cmsArticleWebOld": {
-                "searchScope": "default",
-                "sort": "default",
-                "pageIndex": 1,
-                "pageSize": page_size,
-                "preTag": "",
-                "postTag": "",
-            }
-        },
-    }
-    params = {
-        "cb": "callback",
-        "param": json.dumps(inner_param, ensure_ascii=False),
-        "_": "1",
-    }
-    headers = {
-        "Referer": "https://so.eastmoney.com/",
-        "User-Agent": _UA,
-    }
+    start = time.monotonic()
     try:
+        url = "https://search-api-web.eastmoney.com/search/jsonp"
+        inner_param = {
+            "uid": "",
+            "keyword": code,
+            "type": ["cmsArticleWebOld"],
+            "client": "web",
+            "clientType": "web",
+            "clientVersion": "curr",
+            "param": {
+                "cmsArticleWebOld": {
+                    "searchScope": "default",
+                    "sort": "default",
+                    "pageIndex": 1,
+                    "pageSize": page_size,
+                    "preTag": "",
+                    "postTag": "",
+                }
+            },
+        }
+        params = {
+            "cb": "callback",
+            "param": json.dumps(inner_param, ensure_ascii=False),
+            "_": "1",
+        }
+        headers = {
+            "Referer": "https://so.eastmoney.com/",
+            "User-Agent": _UA,
+        }
         resp = em_get(url, params=params, headers=headers, timeout=15)
         text = resp.text
         text = text[text.index("(") + 1: text.rindex(")")]
@@ -56,8 +58,12 @@ def _fetch_news_eastmoney(code, page_size=50):
                 "time": item.get("date", ""),
                 "source": item.get("mediaName", "东方财富"),
             })
+        record_call("news/stock_em", success=True,
+                    duration_ms=(time.monotonic() - start) * 1000)
         return articles
-    except Exception:
+    except Exception as e:
+        record_call("news/stock_em", success=False, error=str(e),
+                    duration_ms=(time.monotonic() - start) * 1000)
         return []
 
 
@@ -70,6 +76,7 @@ def _fetch_global_news_cls(limit=10):
     downstream instead of masquerading as "no macro news".
     """
     import requests
+    start = time.monotonic()
     articles = []
     try:
         url = "https://www.cls.cn/nodeapi/telegraphList"
@@ -93,13 +100,13 @@ def _fetch_global_news_cls(limit=10):
                 "time": pub_time,
                 "source": "财联社",
             })
+        record_call("news/macro_cls", success=True,
+                    duration_ms=(time.monotonic() - start) * 1000)
+        return articles
     except Exception as e:
-        # Re-raise so fetch_news can record the reason and fall back. Previously
-        # this was a bare `except: pass` which silently dropped CLS outages —
-        # when the endpoint returned non-JSON (later 404), every report lost
-        # its macro leg for days with no signal.
+        record_call("news/macro_cls", success=False, error=str(e),
+                    duration_ms=(time.monotonic() - start) * 1000)
         raise RuntimeError(f"CLS macro news unavailable: {type(e).__name__}: {e}") from e
-    return articles
 
 
 def _fetch_global_news_akshare(limit=10):
@@ -110,15 +117,20 @@ def _fetch_global_news_akshare(limit=10):
     shape the CLS path produces so downstream prompts are source-agnostic.
     Returns an empty list on failure (caller records macro_news_error).
     """
+    start = time.monotonic()
     try:
         import akshare as ak
         df = ak.stock_info_global_em()
     except Exception as e:
+        record_call("news/macro_akshare", success=False, error=str(e),
+                    duration_ms=(time.monotonic() - start) * 1000)
         raise RuntimeError(f"akshare macro news unavailable: {type(e).__name__}: {e}") from e
 
     articles = []
     # df may be empty if the upstream is having a bad day — guard before iterating.
     if df is None or len(df) == 0:
+        record_call("news/macro_akshare", success=False, error="empty result",
+                    duration_ms=(time.monotonic() - start) * 1000)
         return articles
     for _, row in df.head(limit).iterrows():
         title = str(row.get("标题", "") or "")
@@ -130,6 +142,8 @@ def _fetch_global_news_akshare(limit=10):
             "time": pub_time[:16],  # trim to YYYY-MM-DD HH:MM if present
             "source": "东方财富全球",
         })
+    record_call("news/macro_akshare", success=True,
+                duration_ms=(time.monotonic() - start) * 1000)
     return articles
 
 
