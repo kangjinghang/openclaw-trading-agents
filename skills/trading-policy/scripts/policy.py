@@ -17,6 +17,7 @@ _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 def _fetch_policy_eastmoney(code, lookback_days=30):
     """Fetch policy-related news from Eastmoney search API."""
     start = time.monotonic()
+    articles = []
     try:
         url = "https://search-api-web.eastmoney.com/search/jsonp"
         inner_param = {
