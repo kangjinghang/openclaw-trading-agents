@@ -9,7 +9,8 @@ import os
 
 # Add parent skills dir to path for shared imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
-from http_helpers import tencent_quote, em_get, output_json, normalize_ticker, record_error
+from http_helpers import tencent_quote, em_get, output_json, normalize_ticker, record_error, record_call
+import time
 
 
 def fetch_fundamentals(ticker, date):
@@ -18,6 +19,7 @@ def fetch_fundamentals(ticker, date):
     data = {"ticker": code, "date": date}
 
     # 1. Tencent: real-time valuation
+    start = time.monotonic()
     try:
         tq = tencent_quote([code])
         if code in tq:
@@ -33,10 +35,15 @@ def fetch_fundamentals(ticker, date):
                 "turnover_pct": q["turnover_pct"],
                 "change_pct": q["change_pct"],
             }
+        record_call("fundamentals/tencent", success=True,
+                    duration_ms=(time.monotonic() - start) * 1000)
     except Exception as e:
+        record_call("fundamentals/tencent", success=False, error=str(e),
+                    duration_ms=(time.monotonic() - start) * 1000)
         data["valuation_error"] = str(e)
 
     # 2. mootdx: quarterly financial snapshot (expanded fields)
+    start = time.monotonic()
     try:
         from mootdx.quotes import Quotes
         market = 1 if code.startswith("6") else 0
@@ -74,12 +81,17 @@ def fetch_fundamentals(ticker, date):
 
             if snapshot:
                 data["financial_snapshot"] = snapshot
+        record_call("fundamentals/mootdx", success=True,
+                    duration_ms=(time.monotonic() - start) * 1000)
     except Exception as e:
+        record_call("fundamentals/mootdx", success=False, error=str(e),
+                    duration_ms=(time.monotonic() - start) * 1000)
         data["financial_snapshot_error"] = str(e)
 
     # 3. Eastmoney: basic stock info (industry, company name)
     #    Primary: push2 API. Fallback: datacenter API (immune to push2 rate-limit).
     info = {}
+    start = time.monotonic()
     try:
         market_code = 1 if code.startswith("6") else 0
         url = "https://push2.eastmoney.com/api/qt/stock/get"
@@ -101,13 +113,18 @@ def fetch_fundamentals(ticker, date):
                 info["float_shares"] = d["f85"]
             if d.get("f116"):
                 info["total_mv"] = d["f116"]
+        record_call("fundamentals/em_push2", success=True,
+                    duration_ms=(time.monotonic() - start) * 1000)
     except Exception as e:
+        record_call("fundamentals/em_push2", success=False, error=str(e),
+                    duration_ms=(time.monotonic() - start) * 1000)
         data["stock_info_push2_error"] = str(e)
 
     # Fallback: datacenter API (uses datacenter-web.eastmoney.com which is
     # NOT subject to push2's per-IP rate-limiting). Only runs when push2
     # failed to return industry info.
     if not info.get("industry"):
+        start = time.monotonic()
         try:
             url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
             params = {
@@ -125,7 +142,11 @@ def fetch_fundamentals(ticker, date):
                     info["industry"] = item["BOARD_NAME"]
                 if item.get("SECURITY_NAME_ABBR"):
                     info["name"] = item["SECURITY_NAME_ABBR"]
+            record_call("fundamentals/em_datacenter", success=True,
+                        duration_ms=(time.monotonic() - start) * 1000)
         except Exception as e2:
+            record_call("fundamentals/em_datacenter", success=False, error=str(e2),
+                        duration_ms=(time.monotonic() - start) * 1000)
             data["stock_info_datacenter_error"] = str(e2)
 
     if info:
@@ -134,15 +155,25 @@ def fetch_fundamentals(ticker, date):
         data["stock_info_error"] = "both push2 and datacenter returned no data"
 
     # 4. Eastmoney Datacenter: quarterly financial trends (last 4 quarters)
+    start = time.monotonic()
     try:
         data["quarterly_trends"] = _fetch_quarterly_financials(code)
+        record_call("fundamentals/em_quarterly", success=True,
+                    duration_ms=(time.monotonic() - start) * 1000)
     except Exception as e:
+        record_call("fundamentals/em_quarterly", success=False, error=str(e),
+                    duration_ms=(time.monotonic() - start) * 1000)
         data["quarterly_trends_error"] = str(e)
 
     # 5. Eastmoney: consensus EPS / target price / ratings
+    start = time.monotonic()
     try:
         data["consensus_eps"] = _fetch_consensus_eps(code)
+        record_call("fundamentals/em_consensus", success=True,
+                    duration_ms=(time.monotonic() - start) * 1000)
     except Exception as e:
+        record_call("fundamentals/em_consensus", success=False, error=str(e),
+                    duration_ms=(time.monotonic() - start) * 1000)
         data["consensus_eps_error"] = str(e)
 
     # 6. Derived forward-valuation metrics (need both valuation + consensus).
@@ -167,9 +198,14 @@ def fetch_fundamentals(ticker, date):
     #    trend, capex/FCF. Pre-computed and lean (~4 periods × ~10 numbers)
     #    rather than dumping raw statements — avoids LLM arithmetic errors
     #    and saves context vs TradingAgents' raw-table approach.
+    start = time.monotonic()
     try:
         data["financial_health"] = _fetch_financial_health(code)
+        record_call("fundamentals/akshare", success=True,
+                    duration_ms=(time.monotonic() - start) * 1000)
     except Exception as e:
+        record_call("fundamentals/akshare", success=False, error=str(e),
+                    duration_ms=(time.monotonic() - start) * 1000)
         data["financial_health_error"] = str(e)
 
     return data
@@ -339,7 +375,7 @@ def _fetch_financial_health(code, periods=4):
     try:
         import akshare as ak
     except Exception as e:
-        record_error("financial_health_akshare", e)
+        record_call("fundamentals/akshare_internal", success=False, error=str(e))
         return None
 
     # Exchange prefix: 6/9→sh, 8→bj, else sz (mirrors http_helpers tencent logic)
