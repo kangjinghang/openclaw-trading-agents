@@ -100,12 +100,70 @@ def fetch(ticker, **params):
 - **mootdx**：使用 TCP 直连（非 HTTP），更稳定。
 - **akshare**：聚合多个数据源（含东方财富），可作为通用备源。
 
-## 已知问题（2026-06）
+## 数据源健康监控
 
-| 问题 | 影响脚本 | 影响 | 缓解措施 |
-|------|---------|------|---------|
-| `push2.eastmoney.com` IPv6 TLS 重置 | trading-sector | 行业排名可能返回空数据 | `http_helpers.py` 强制 IPv4；优雅降级返回空数据 |
-| 百度股市通 `getrelatedblock` API 返回 403 | trading-sector | 概念板块返回 `null` | 暂无备源；数据省略 |
-| 东方财富 `stock_info` 子源报错 | trading-fundamentals | stderr 中出现非关键警告 | 其他子源（腾讯、mootdx）提供等价数据 |
+每个数据脚本调用数据源时通过 `http_helpers.record_call(stage, success, error, duration_ms)` 记录**每次调用结果**（成功+失败均记），`output_json()` 把累积记录作为顶层 `_calls` 数组输出。orchestrator 收集所有 `_calls`，分两路派发：
 
-所有脚本使用 `try/except` 包裹 API 调用，对失败的子源返回 `{"success": true, "data": {...}}` 中对应的空数组。即使个别数据源不可用，分析管道仍会继续运行。
+1. **本 run 视图**：失败调用推到 `pipeline_health`（`check: "source_call_failed"`），可在 `report.json.pipeline_health` 看到，每次分析报告独立可见
+2. **跨 run 持久化**：所有调用追加到 `~/.openclaw/trading-reports/_source-health.json`，环形 buffer 每 source 最近 20 次，含 `success_rate` / `last_error` / `avg_duration_ms` 等派生统计
+
+向后兼容：`record_error(stage, msg)` 是 `record_call(stage, success=False, error=msg)` 的别名，旧调用点继续工作；`output_json` 同时输出 `_errors`（只失败，老格式）和 `_calls`（全部，新格式）。
+
+### Stage 命名规范
+
+格式 `<role>/<sub_source>`（slash 分层便于聚合，如 `hot_money/*` 可看整个 hot_money 健康度）。共 21 个子源：
+
+| Role | 子源 stage | 主备关系 |
+|---|---|---|
+| `kline` | `kline/mootdx`、`kline/akshare` | mootdx 主 → akshare 备 |
+| `fundamentals` | `fundamentals/tencent`、`fundamentals/mootdx`、`fundamentals/em_push2`、`fundamentals/em_datacenter`、`fundamentals/em_quarterly`、`fundamentals/em_consensus`、`fundamentals/akshare` | 多源拼装；`em_push2` 与 `em_datacenter` 是行业/公司名 fallback 对（前者限流后切后者） |
+| `news` | `news/stock_em`、`news/macro_cls`、`news/macro_akshare` | macro_cls → macro_akshare 链式 fallback |
+| `policy` | `policy/stock_em`、`policy/macro_cls`、`policy/macro_akshare` | 同 news |
+| `sentiment` | `sentiment/hot_rank`、`sentiment/zt_pool` | 均东方财富 |
+| `hot_money` | `hot_money/northbound`、`hot_money/fund_flow`、`hot_money/hot_stocks`、`hot_money/dragon_tiger`、`hot_money/sector_fund_flow` | 均东方财富（fund_flow/sector_fund_flow 受 push2 限流影响大） |
+| `lockup` | `lockup/ann_em`、`lockup/reduce_em` | 均东方财富 |
+
+### 观测方式（3 个面）
+
+**1. CLI（推荐日常使用）**：
+```bash
+npm run source-health              # 表格输出（默认，按失败源在前排序）
+npm run source-health -- --json    # JSON 输出（脚本友好）
+npm run source-health -- --failing # 只看最近有失败的 source
+REPORT_DIR=/custom/path npm run source-health   # 自定义 report 路径
+```
+
+**2. Dashboard**：detail tab 顶部"数据源健康"卡片，红色 `!` 标识有失败的 source，按 `success_rate` 升序排（最差的在前）。
+
+**3. report.json**：每次分析的 `pipeline_health` 数组含 `{check: "source_call_failed", context: {source, error}}` warn，记录本次 run 的失败子源。
+
+### 设计参考
+
+- 设计 spec：`docs/superpowers/specs/2026-06-15-data-source-health-design.md`
+- 实施 plan：`docs/superpowers/plans/2026-06-15-data-source-health.md`
+- 核心模块：`src/source-health-store.ts`（`SourceHealthStore` 类 + `computeStats` 纯函数）
+- Python 收集器：`skills/_shared/http_helpers.py`（`record_call` / `record_error` / `get_calls`）
+
+## 已知问题（基于 _source-health.json 跨 run 观察，2026-06）
+
+> 以下问题来自真实运行 `_source-health.json` 数据 + `stability-audit.zh.md` 报告。失效源**不阻塞 pipeline** ——脚本返回空数据，分析继续；监控让失效可见、可诊断。
+
+| 问题 | 影响子源（stage 名） | 表现（实测） | 缓解措施 |
+|------|--------------------|------------|---------|
+| 财联社 `cls.cn/nodeapi/telegraphList` 接口失效 | `news/macro_cls`、`policy/macro_cls` | JSON 解析失败 / 404；2/2 失败 | commit `10017ee` 加 akshare 备源 fallback；当 akshare 也缺失时 macro_news 恒为 0 |
+| `akshare` 模块未安装（部分环境） | `news/macro_akshare`、`policy/macro_akshare`、`fundamentals/akshare`、`sentiment/hot_rank`、`sentiment/zt_pool` | "No module named 'akshare'"；多个子源 0/N | `pip install akshare>=1.15`；缺失时影响下游分析师缺宏观腿/涨停情绪池 |
+| `push2.eastmoney.com` IP 限流（Connection aborted） | `fundamentals/em_push2`、`hot_money/fund_flow`、`hot_money/sector_fund_flow` | 间歇性失败；同 IP 持续 ~15min+ | `http_helpers.py` 强制 IPv4 + ≥1s 节流；fundamentals 切到 `datacenter-web.eastmoney.com`（不受 push2 限流）；script 内 try/except 优雅降级 |
+| `push2.eastmoney.com` IPv6 TLS 重置（旧问题） | `trading-sector`（独立 skill，未走 health 追踪） | 行业排名可能返回空 | 同上：强制 IPv4 |
+| 百度股市通 `getrelatedblock` API 返回 403（2026-06 起） | `trading-sector`（独立 skill） | 概念板块返回 `null` | 暂无备源；数据省略 |
+| `zt_pool` 非交易日无数据（正常行为） | `sentiment/zt_pool` | 周末/节假日 0/N | 非交易日自动回溯最近交易日；如当日数据日期过远仍失败，需要等下个交易日 |
+| `financial_health` akshare 子源不稳定 | `fundamentals/akshare`、`fundamentals/akshare_internal` | 间歇性失败（依赖 akshare 财报接口） | 优雅降级到 None；analyst prompt 要求标 `[数据缺失: financial_health]` 哨兵（commit `a8d033b`） |
+
+所有脚本使用 `try/except` 包裹 API 调用，对失败的子源返回 `{"success": true, "data": {...}}` 中对应的空数组。即使个别数据源不可用，分析管道仍会继续运行。`_source-health.json` 让失效可见，可主动诊断（`npm run source-health` 一行命令即可看全局状态）。
+
+## 诊断流程（数据源失效排查）
+
+1. 跑 `npm run source-health -- --failing` 看哪些 source 最近失败
+2. 看每个失败 source 的 `last_error` 字段定位原因
+3. 对照上面"已知问题"表，找匹配的缓解措施
+4. 若是新问题（不在表里），看 `_source-health.json` 完整 history（CLI 加 `--json`）
+5. 修复后跑 `trading_quick`，再跑 `source-health` 验证 source `success_rate` 回升
