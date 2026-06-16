@@ -284,6 +284,13 @@ function execPythonRaw(scriptPath, args, stdinData, pythonCmd, timeoutMs) {
                 if (Array.isArray(raw._errors)) {
                     result.errors = raw._errors;
                 }
+                // Pass through per-source call results (success + failure) emitted by
+                // http_helpers.record_call() → output_json() `_calls`. Preferred over
+                // `errors` for computing per-source success rates (data-source health
+                // tracker; see docs/superpowers/specs/2026-06-15-data-source-health-design.md).
+                if (Array.isArray(raw._calls)) {
+                    result.calls = raw._calls;
+                }
                 resolve(result);
             }
             catch (error) {

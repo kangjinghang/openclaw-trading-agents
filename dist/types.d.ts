@@ -186,6 +186,17 @@ export interface FallbackWarning {
     detail: string;
     severity: "warn" | "error";
 }
+/** Per-source call result emitted by Python data scripts via `_calls` array. */
+export interface SourceCall {
+    /** Source identifier, slash-separated for hierarchy (e.g. "hot_money/northbound"). */
+    stage: string;
+    /** True if the call yielded usable data. */
+    success: boolean;
+    /** Short error message if failed; null/undefined if succeeded. */
+    error?: string | null;
+    /** Call duration in ms (for slow-source detection). */
+    duration_ms?: number | null;
+}
 /** Result from a Python data script */
 export interface ScriptResult {
     success: boolean;
@@ -196,11 +207,16 @@ export interface ScriptResult {
     technical_indicators?: string;
     /** Non-fatal source/sub-source failures recorded by the Python script via
      *  http_helpers.record_error(). Surfaced so a silent partial outage (e.g. a
-     *  secondary data feed down) is observable without affecting `success`. */
+     *  secondary data feed down) is observable without affecting `success`.
+     *  Backward-compat view of `calls` (failure-only); prefer reading `calls`. */
     errors?: Array<{
         stage: string;
         error: string;
     }>;
+    /** All per-source call results (success + failure). Preferred over `errors`
+     *  for computing per-source success rates and detecting outages/rate-limits.
+     *  Emitted by Python via http_helpers.record_call() → output_json() `_calls`. */
+    calls?: SourceCall[];
 }
 /** A single debate claim with structured evidence. */
 export interface DebateClaim {
