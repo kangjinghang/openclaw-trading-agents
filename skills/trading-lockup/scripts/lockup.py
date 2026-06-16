@@ -5,10 +5,11 @@ import argparse
 import json
 import sys
 import os
+import time
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
-from http_helpers import eastmoney_datacenter, http_get, output_json, normalize_ticker
+from http_helpers import eastmoney_datacenter, http_get, output_json, normalize_ticker, record_call
 
 _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
@@ -113,6 +114,7 @@ def _fetch_announcements(code, date, lookback_days=60):
     filtered out (already in lockup_history/upcoming). Returns top-8 by
     (importance, date) desc.
     """
+    start = time.monotonic()
     url = "https://np-anotice-stock.eastmoney.com/api/security/ann"
     params = {
         "ann_type": "A", "stock_list": code, "sr": "-1",
@@ -124,9 +126,11 @@ def _fetch_announcements(code, date, lookback_days=60):
         resp = http_get(url, params=params, headers=headers, timeout=10)
         payload = resp.json()
         if not payload.get("success"):
+            record_call("lockup/ann_em", success=False, error="API returned no success", duration_ms=(time.monotonic() - start) * 1000)
             return []
         items = payload.get("data", {}).get("list", []) or []
-    except Exception:
+    except Exception as e:
+        record_call("lockup/ann_em", success=False, error=str(e), duration_ms=(time.monotonic() - start) * 1000)
         return []
 
     cutoff = datetime.strptime(date, "%Y-%m-%d") - timedelta(days=lookback_days)
@@ -154,7 +158,36 @@ def _fetch_announcements(code, date, lookback_days=60):
             "url": f"https://data.eastmoney.com/notices/detail/{code}/{art_code}.html" if art_code else "",
         })
     events.sort(key=lambda x: (x["importance"], x["date"]), reverse=True)
+    record_call("lockup/ann_em", success=True, duration_ms=(time.monotonic() - start) * 1000)
     return events[:8]
+
+
+def _fetch_reduce_em(code):
+    """Fetch Eastmoney reduce holdings information."""
+    start = time.monotonic()
+    try:
+        data = eastmoney_datacenter(
+            "RPT_REDUCED_HOLDINGS",
+            filter_str=f'(SECURITY_CODE="{code}")(REDUCE_DATE>={datetime.now().strftime("%Y-%m-%d")})',
+            page_size=10,
+            sort_columns="REDUCE_DATE",
+            sort_types="-1",
+        )
+        result = [
+            {
+                "date": str(row.get("REDUCE_DATE", ""))[:10],
+                "reducing_shareholder": row.get("REDUCING_SHAREHOLDER", ""),
+                "reducing_shares": row.get("REDUCING_SHARES", ""),
+                "reducing_ratio": row.get("REDUCING_RATIO", ""),
+                "reduce_reason": row.get("REDUCE_REASON", ""),
+            }
+            for row in data
+        ]
+        record_call("lockup/reduce_em", success=True, duration_ms=(time.monotonic() - start) * 1000)
+        return result
+    except Exception as e:
+        record_call("lockup/reduce_em", success=False, error=str(e), duration_ms=(time.monotonic() - start) * 1000)
+        return []
 
 
 def fetch_lockup(ticker, date):
@@ -166,6 +199,7 @@ def fetch_lockup(ticker, date):
     data["lockup_upcoming"] = _fetch_lockup_upcoming(code, date)
     data["insider_transactions"] = _fetch_insider_transactions(code)
     data["announcements"] = _fetch_announcements(code, date)
+    data["reduce_holdings"] = _fetch_reduce_em(code)
 
     # Compute pressure rating
     upcoming = data.get("lockup_upcoming", [])
