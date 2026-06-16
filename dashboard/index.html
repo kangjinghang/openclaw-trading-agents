@@ -806,11 +806,70 @@ async function loadAnalysts(report) {
 
 // ── Full mode detail panel ──
 
+// Module-level cache of the most recently fetched source-health state, so the
+// period dropdown can re-render the table without a refetch. Reset to null on
+// every `loadFullDetail` call; populated once the `/api/source-health` fetch
+// resolves.
+let sourceHealthState = null;
+
+// ── Period filter helpers (mirror src/source-health-store.ts) ──
+// Accepting ~25 lines of duplication vs introducing a build step. Keep these
+// in sync with the TS source if semantics change.
+const PERIOD_UNITS_DASH = { d: 1, w: 7, m: 30, y: 365 };
+const PERIOD_MAX_DAYS_DASH = 36500;
+
+function parsePeriodDash(period) {
+  // Returns null (no filter), ISO since string, or undefined (parse failure).
+  if (period === undefined || period === '' || period === 'all') return null;
+  const m = /^(\d+)([dwmy])$/.exec(period);
+  if (!m) return undefined;
+  const v = Number(m[1]);
+  const unit = m[2];
+  if (!Number.isFinite(v) || v <= 0) return undefined;
+  const days = v * PERIOD_UNITS_DASH[unit];
+  if (!Number.isFinite(days) || days > PERIOD_MAX_DAYS_DASH) return undefined;
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function filterHistorySinceDash(history, since) {
+  return history.filter((r) => r.ts >= since);
+}
+
+function computeStatsDash(history) {
+  if (!history || history.length === 0) {
+    return { total_calls: 0, total_success: 0, success_rate: 0,
+      last_success_ts: null, last_error_ts: null, last_error: null, avg_duration_ms: null };
+  }
+  const succ = history.filter((h) => h.success);
+  const fail = history.filter((h) => !h.success);
+  const durs = history.map((h) => h.duration_ms).filter((d) => typeof d === 'number' && !Number.isNaN(d));
+  return {
+    total_calls: history.length,
+    total_success: succ.length,
+    success_rate: succ.length / history.length,
+    last_success_ts: succ.length ? succ[succ.length - 1].ts : null,
+    last_error_ts: fail.length ? fail[fail.length - 1].ts : null,
+    last_error: fail.length ? (fail[fail.length - 1].error || null) : null,
+    avg_duration_ms: durs.length ? Math.round(durs.reduce((a, b) => a + b, 0) / durs.length) : null,
+  };
+}
+
+function periodLabelDash(periodStr) {
+  if (periodStr === 'all' || periodStr === null) return '全部';
+  const m = /^(\d+)([dwmy])$/.exec(periodStr);
+  if (!m) return '全部';
+  const n = Number(m[1]);
+  const word = { d: '天', w: '周', m: '月', y: '年' }[m[2]];
+  return `最近 ${n} ${word}`;
+}
+
 /** Render the cross-run source health card (data source health tracker).
  *  Reads from /api/source-health → returns the global _source-health.json
- *  state. Ticker-agnostic — surfaces per-source success rate trends. */
+ *  state. Ticker-agnostic — surfaces per-source success rate trends.
+ *  Caches `state` in `sourceHealthState` so the dropdown can re-render. */
 function renderSourceHealthCard(state) {
   if (!state || !state.sources || Object.keys(state.sources).length === 0) {
+    sourceHealthState = null;
     return `
       <section class="card" style="margin-bottom:16px;">
         <h3>📊 数据源健康（跨 run）</h3>
@@ -820,15 +879,90 @@ function renderSourceHealthCard(state) {
     `;
   }
 
-  const rows = Object.entries(state.sources)
-    .sort(([an, a], [bn, b]) => {
-      const af = a.stats.success_rate < 1 ? 0 : 1;
-      const bf = b.stats.success_rate < 1 ? 0 : 1;
-      if (af !== bf) return af - bf;
-      return a.stats.success_rate - b.stats.success_rate;
-    })
+  sourceHealthState = state;
+
+  const periodOptions = [
+    { value: 'all', label: '全部' },
+    { value: '1y', label: '1 年' },
+    { value: '30d', label: '30 天' },
+    { value: '7d', label: '7 天' },
+    { value: '3d', label: '3 天' },
+  ];
+
+  return `
+    <section class="card" style="margin-bottom:16px;" id="source-health-card">
+      <h3>📊 数据源健康（跨 run，<span id="source-health-period-label">全部</span>）
+        <span style="font-size:0.75em;color:var(--text3);font-weight:normal">
+          — 更新: ${state.updated_at || '(never)'} | CLI: <code>npm run source-health -- --period 7d</code>
+        </span>
+        <span style="float:right;font-size:0.85em;font-weight:normal;color:var(--text2)">
+          周期:
+          <select id="source-health-period" style="font-size:0.95em;padding:1px 4px"
+                  onchange="renderSourceHealthTable(this.value)">
+            ${periodOptions
+              .map((o, i) => `<option value="${o.value}"${i === 0 ? ' selected' : ''}>${o.label}</option>`)
+              .join('')}
+          </select>
+        </span>
+      </h3>
+      <table style="width:100%;border-collapse:collapse;font-size:0.9em;">
+        <thead>
+          <tr style="text-align:left;border-bottom:2px solid var(--border);color:var(--text2)">
+            <th style="padding:6px 8px">Source</th>
+            <th style="padding:6px 8px;text-align:right">Success</th>
+            <th style="padding:6px 8px">Last Error</th>
+            <th style="padding:6px 8px">Last Call</th>
+          </tr>
+        </thead>
+        <tbody id="source-health-tbody"></tbody>
+      </table>
+    </section>
+    <!-- Initial table render happens in loadFullDetail after innerHTML is
+         attached. Inline <script> tags don't execute via innerHTML. -->
+  `;
+}
+
+/**
+ * Re-render the source health table body for a given period. Pulled out so the
+ * dropdown's `onchange` can call it without re-fetching `/api/source-health`.
+ * Reads from `sourceHealthState`. No-op if state was never populated.
+ */
+function renderSourceHealthTable(periodStr) {
+  if (!sourceHealthState) return;
+  const tbody = document.getElementById('source-health-tbody');
+  const labelEl = document.getElementById('source-health-period-label');
+  if (!tbody) return;
+  if (labelEl) labelEl.textContent = periodLabelDash(periodStr);
+
+  const since = parsePeriodDash(periodStr);
+  // Ignore invalid period (shouldn't happen from a fixed dropdown, but be safe).
+  if (since === undefined) return;
+
+  const rows = Object.entries(sourceHealthState.sources)
     .map(([name, entry]) => {
-      const s = entry.stats;
+      const filtered = since === null ? entry.history : filterHistorySinceDash(entry.history, since);
+      return { name, filtered, periodEmpty: filtered.length === 0 };
+    })
+    .sort((a, b) => {
+      // Period-empty rows go to the bottom; within each bucket, failing first.
+      if (a.periodEmpty !== b.periodEmpty) return a.periodEmpty ? 1 : -1;
+      const sa = computeStatsDash(a.filtered);
+      const sb = computeStatsDash(b.filtered);
+      const af = sa.success_rate < 1 ? 0 : 1;
+      const bf = sb.success_rate < 1 ? 0 : 1;
+      if (af !== bf) return af - bf;
+      return sa.success_rate - sb.success_rate;
+    })
+    .map(({ name, filtered, periodEmpty }) => {
+      if (periodEmpty) {
+        return `
+          <tr style="border-bottom:1px solid var(--border);color:var(--text3)">
+            <td style="padding:4px 8px">  ${name}</td>
+            <td colspan="3" style="padding:4px 8px;font-style:italic">(no data in period)</td>
+          </tr>
+        `;
+      }
+      const s = computeStatsDash(filtered);
       const failing = s.success_rate < 1;
       const color = failing ? '#c0392b' : '#16a085';
       const indicator = failing ? '! ' : '✓ ';
@@ -850,24 +984,7 @@ function renderSourceHealthCard(state) {
     })
     .join('');
 
-  return `
-    <section class="card" style="margin-bottom:16px;">
-      <h3>📊 数据源健康（跨 run，最近 20 次/source）
-        <span style="font-size:0.75em;color:var(--text3);font-weight:normal">— 更新: ${state.updated_at || '(never)'} | CLI: <code>npm run source-health</code></span>
-      </h3>
-      <table style="width:100%;border-collapse:collapse;font-size:0.9em;">
-        <thead>
-          <tr style="text-align:left;border-bottom:2px solid var(--border);color:var(--text2)">
-            <th style="padding:6px 8px">Source</th>
-            <th style="padding:6px 8px;text-align:right">Success</th>
-            <th style="padding:6px 8px">Last Error</th>
-            <th style="padding:6px 8px">Last Call</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </section>
-  `;
+  tbody.innerHTML = rows;
 }
 
 async function loadFullDetail(report) {
@@ -996,6 +1113,14 @@ async function loadFullDetail(report) {
     }
 
     panel.innerHTML = html || `<div style="color:var(--text3)">${t('noDetail')}</div>`;
+
+    // Initial render of the source-health table body (the section skeleton is
+    // in `html`; the rows are computed by renderSourceHealthTable because the
+    // dropdown reuses the same function). No-op if the card wasn't rendered
+    // (e.g. no source-health data yet — renderSourceHealthCard set state=null).
+    if (sourceHealthState) {
+      renderSourceHealthTable('all');
+    }
   } catch (e) {
     panel.innerHTML = `<div style="color:var(--red)">${t('errorPrefix')}${e.message}</div>`;
   }

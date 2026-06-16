@@ -105,7 +105,7 @@ def fetch(ticker, **params):
 每个数据脚本调用数据源时通过 `http_helpers.record_call(stage, success, error, duration_ms)` 记录**每次调用结果**（成功+失败均记），`output_json()` 把累积记录作为顶层 `_calls` 数组输出。orchestrator 收集所有 `_calls`，分两路派发：
 
 1. **本 run 视图**：失败调用推到 `pipeline_health`（`check: "source_call_failed"`），可在 `report.json.pipeline_health` 看到，每次分析报告独立可见
-2. **跨 run 持久化**：所有调用追加到 `~/.openclaw/trading-reports/_source-health.json`，环形 buffer 每 source 最近 20 次，含 `success_rate` / `last_error` / `avg_duration_ms` 等派生统计
+2. **跨 run 持久化**：所有调用追加到 `~/.openclaw/trading-reports/_source-health.json`，环形 buffer 每 source 最近 2000 次（覆盖 1+ 年），含 `success_rate` / `last_error` / `avg_duration_ms` 等派生统计。CLI 和 dashboard 都支持按周期过滤（3d / 7d / 30d / 1y / all），在读取时通过 `filterHistorySince` 动态重算 stats——无需按日聚合即可观察长期稳定性
 
 向后兼容：`record_error(stage, msg)` 是 `record_call(stage, success=False, error=msg)` 的别名，旧调用点继续工作；`output_json` 同时输出 `_errors`（只失败，老格式）和 `_calls`（全部，新格式）。
 
@@ -127,13 +127,19 @@ def fetch(ticker, **params):
 
 **1. CLI（推荐日常使用）**：
 ```bash
-npm run source-health              # 表格输出（默认，按失败源在前排序）
-npm run source-health -- --json    # JSON 输出（脚本友好）
-npm run source-health -- --failing # 只看最近有失败的 source
-REPORT_DIR=/custom/path npm run source-health   # 自定义 report 路径
+npm run source-health                            # 表格输出（默认，全历史，按失败源在前排序）
+npm run source-health -- --period 7d             # 只看最近 7 天（同样支持 3d / 30d / 90d / 1y / all）
+npm run source-health -- --period=30d            # 等号写法（与空格写法等价）
+npm run source-health -- --json                  # JSON 输出（脚本友好）
+npm run source-health -- --json --period 30d     # JSON + 周期过滤（顶层含 period: {filter, since} 字段）
+npm run source-health -- --failing               # 只看最近有失败的 source
+npm run source-health -- --failing --period 30d  # 失败过滤 + 周期过滤
+REPORT_DIR=/custom/path npm run source-health    # 自定义 report 路径
 ```
 
-**2. Dashboard**：detail tab 顶部"数据源健康"卡片，红色 `!` 标识有失败的 source，按 `success_rate` 升序排（最差的在前）。
+> **`--period` 语义**：ring buffer 现在覆盖每 source 最近 2000 次调用（约 1+ 年），不传 `--period` 即看全量。传 `--period 7d` 会先把每个 source 的 history 过滤为 `ts >= (now - 7d)` 再重算 stats，所以可以观察长期稳定性趋势（机房 vs 家里数据源表现差异等）。period 内 0 次调用的 source 显示 `(no data in period)` 而非 `0/0 (0%)`，避免误判为"该 source 不存在"。
+
+**2. Dashboard**：detail tab 顶部"数据源健康"卡片，红色 `!` 标识有失败的 source，按 `success_rate` 升序排（最差的在前）。卡片标题右侧有周期下拉（全部 / 1 年 / 30 天 / 7 天 / 3 天），切换时表格内容就地刷新（无需重新 fetch）。period 内 0 次调用的 source 行显示 `(no data in period)`。
 
 **3. report.json**：每次分析的 `pipeline_health` 数组含 `{check: "source_call_failed", context: {source, error}}` warn，记录本次 run 的失败子源。
 
@@ -166,4 +172,5 @@ REPORT_DIR=/custom/path npm run source-health   # 自定义 report 路径
 2. 看每个失败 source 的 `last_error` 字段定位原因
 3. 对照上面"已知问题"表，找匹配的缓解措施
 4. 若是新问题（不在表里），看 `_source-health.json` 完整 history（CLI 加 `--json`）
+   - 想看长期趋势（机房 vs 家里环境差异），加 `--period 30d` 或 `--period 1y` 看更长窗口
 5. 修复后跑 `trading_quick`，再跑 `source-health` 验证 source `success_rate` 回升

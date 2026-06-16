@@ -712,6 +712,7 @@ export function readSourceHealth(reportDir: string): SourceHealthFile | null {
 | 启动时预警注入 | 当用户决定阈值时 | orchestrator 开头读 source-health.json，连续失败 N 次推 warn |
 | 自动跳过失效源 | 当"只观测不控制"不够时 | source-health.json 加 `skip_until` 字段，orchestrator 跳过 |
 | 绝对累计 stats（不只最近 20 次） | 当需要长趋势时 | 加 `lifetime_stats` 字段，appendCalls 时更新 |
+| ↳ **已实现（替代方案）**：2026-06-16 通过 ring buffer 扩容（`BUFFER_SIZE` 20→2000，覆盖 1+ 年）+ 读时 `parsePeriod`/`filterHistorySince` 过滤实现，未引入 `lifetime_stats` 按日聚合。CLI 加 `--period 3d\|7d\|30d\|1y\|all`，dashboard 加周期下拉。保留了 error/duration_ms 细粒度，schema v1 不变（无 migration）。详见 `docs/data-sources.zh.md` 数据源健康监控章节。 |
 | macro_news 多源 fallback | 单独项目 | 加新浪/东财要闻源，按 `_calls` 数据驱动 fallback |
 
 ---

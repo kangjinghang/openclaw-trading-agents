@@ -50,8 +50,22 @@ export interface SourceHealthFile {
   sources: Record<string, SourceHealthEntry>;
 }
 
-/** Ring buffer size per source. */
-const BUFFER_SIZE = 20;
+/**
+ * Ring buffer size per source. Sized to cover 1+ year of history so that
+ * multi-period stats (3d / 7d / 30d / 1y / all) can be computed read-time via
+ * `filterHistorySince` without per-day aggregation.
+ *
+ * Coverage at this cap:
+ *   - 1 run/day  → ~5.5 years
+ *   - 5 runs/day → ~13 months
+ *   - 20 runs/day → ~100 days
+ *
+ * Worst-case file size at 22 sources × 2000 records × ~150 bytes ≈ 6.3 MB raw
+ * (8 MB pretty JSON); atomic write (tmp + rename) keeps partial writes from
+ * surfacing. orchestrator only calls `appendCalls` once per ~5-10 min, so I/O
+ * is not a bottleneck.
+ */
+export const BUFFER_SIZE = 2000;
 
 /** File schema version (bump on breaking shape changes; add migration logic). */
 const SCHEMA_VERSION = 1;
@@ -91,6 +105,67 @@ export function computeStats(history: SourceCallRecord[]): SourceStats {
         ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length)
         : null,
   };
+}
+
+/**
+ * Days-per-unit table for `parsePeriod`. `m` is a 30-day alias (calendar-month
+ * semantics would require a reference date — overkill for health stats).
+ */
+const PERIOD_UNITS: Record<string, number> = {
+  d: 1,
+  w: 7,
+  m: 30,
+  y: 365,
+};
+
+/** Sanity clamp: anything over 100 years is treated as a typo. */
+const PERIOD_MAX_DAYS = 36500;
+
+/**
+ * Parse a period token (e.g. `"7d"`, `"1y"`, `"all"`) into either:
+ *   - `null`    → no filter (the entire ring buffer; `"all"` / undefined / empty)
+ *   - `string`  → ISO timestamp of the inclusive lower bound (`since`)
+ *   - `undefined` → parse failure (CLI should reject and exit)
+ *
+ * ISO since is derived from `Date.now() - days*86400_000`, NOT from a calendar
+ * reference, so 1m = 30d (not "same day last month") for consistency with the
+ * downstream ISO string compare in `filterHistorySince`.
+ */
+export function parsePeriod(
+  period: string | undefined,
+): string | null | undefined {
+  if (period === undefined || period === "" || period === "all") {
+    return null;
+  }
+  const match = /^(\d+)([dwmy])$/.exec(period);
+  if (!match) return undefined;
+  const value = Number(match[1]);
+  const unit = match[2];
+  if (!Number.isFinite(value) || value <= 0) return undefined;
+  const days = value * PERIOD_UNITS[unit];
+  if (!Number.isFinite(days) || days > PERIOD_MAX_DAYS) return undefined;
+  const sinceMs = Date.now() - days * 24 * 60 * 60 * 1000;
+  return new Date(sinceMs).toISOString();
+}
+
+/**
+ * Pure filter: keep records whose `ts` is `>= since` (inclusive lower bound).
+ *
+ * ISO 8601 timestamps have the desirable property that lexicographic order
+ * matches chronological order **provided both operands are the same shape**
+ * (both date-only, or both full RFC3339 with the same timezone suffix).
+ * `parsePeriod` returns full ISO (with `Z`), which sorts correctly against
+ * both date-only prefixes (`"2026-06-15..."` >= `"2026-06-01"`) and full
+ * timestamps (`"2026-06-15T10:00:00Z"` >= `"2026-06-01T00:00:00.000Z"`).
+ *
+ * No `Date.parse` involved — stays robust to malformed inputs (returns the
+ * record, never throws).
+ */
+export function filterHistorySince(
+  history: SourceCallRecord[],
+  since: string,
+): SourceCallRecord[] {
+  return history.filter((r) => r.ts >= since);
 }
 
 /**

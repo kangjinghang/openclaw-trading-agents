@@ -40,12 +40,53 @@ export interface SourceHealthFile {
     sources: Record<string, SourceHealthEntry>;
 }
 /**
+ * Ring buffer size per source. Sized to cover 1+ year of history so that
+ * multi-period stats (3d / 7d / 30d / 1y / all) can be computed read-time via
+ * `filterHistorySince` without per-day aggregation.
+ *
+ * Coverage at this cap:
+ *   - 1 run/day  → ~5.5 years
+ *   - 5 runs/day → ~13 months
+ *   - 20 runs/day → ~100 days
+ *
+ * Worst-case file size at 22 sources × 2000 records × ~150 bytes ≈ 6.3 MB raw
+ * (8 MB pretty JSON); atomic write (tmp + rename) keeps partial writes from
+ * surfacing. orchestrator only calls `appendCalls` once per ~5-10 min, so I/O
+ * is not a bottleneck.
+ */
+export declare const BUFFER_SIZE = 2000;
+/**
  * Pure function: derive stats from a history array. Exported for unit testing.
  * Handles empty history, missing duration_ms, and ordering (last_success_ts /
  * last_error_ts are derived from array order, not recomputed max — assumes the
  * caller appends in chronological order).
  */
 export declare function computeStats(history: SourceCallRecord[]): SourceStats;
+/**
+ * Parse a period token (e.g. `"7d"`, `"1y"`, `"all"`) into either:
+ *   - `null`    → no filter (the entire ring buffer; `"all"` / undefined / empty)
+ *   - `string`  → ISO timestamp of the inclusive lower bound (`since`)
+ *   - `undefined` → parse failure (CLI should reject and exit)
+ *
+ * ISO since is derived from `Date.now() - days*86400_000`, NOT from a calendar
+ * reference, so 1m = 30d (not "same day last month") for consistency with the
+ * downstream ISO string compare in `filterHistorySince`.
+ */
+export declare function parsePeriod(period: string | undefined): string | null | undefined;
+/**
+ * Pure filter: keep records whose `ts` is `>= since` (inclusive lower bound).
+ *
+ * ISO 8601 timestamps have the desirable property that lexicographic order
+ * matches chronological order **provided both operands are the same shape**
+ * (both date-only, or both full RFC3339 with the same timezone suffix).
+ * `parsePeriod` returns full ISO (with `Z`), which sorts correctly against
+ * both date-only prefixes (`"2026-06-15..."` >= `"2026-06-01"`) and full
+ * timestamps (`"2026-06-15T10:00:00Z"` >= `"2026-06-01T00:00:00.000Z"`).
+ *
+ * No `Date.parse` involved — stays robust to malformed inputs (returns the
+ * record, never throws).
+ */
+export declare function filterHistorySince(history: SourceCallRecord[], since: string): SourceCallRecord[];
 /**
  * Persistent cross-run store of per-source call results. One instance per
  * pipeline run; reads/writes a single JSON file at `<reportDir>/_source-health.json`.

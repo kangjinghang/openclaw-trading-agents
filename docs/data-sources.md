@@ -102,7 +102,7 @@ def fetch(ticker, **params):
 Every data script records each call to a sub-source via `http_helpers.record_call(stage, success, error, duration_ms)`, capturing both successes and failures. `output_json()` surfaces the accumulated records as a top-level `_calls` array. The orchestrator collects all `_calls` and dispatches them along two paths:
 
 1. **Per-run view**: failed calls are pushed to `pipeline_health` (with `check: "source_call_failed"`), visible in `report.json.pipeline_health` for that specific run.
-2. **Cross-run persistence**: all calls are appended to `~/.openclaw/trading-reports/_source-health.json`, a ring buffer of the last 20 calls per source, with derived stats like `success_rate` / `last_error` / `avg_duration_ms`.
+2. **Cross-run persistence**: all calls are appended to `~/.openclaw/trading-reports/_source-health.json`, a ring buffer of the last 2000 calls per source (covering 1+ year), with derived stats like `success_rate` / `last_error` / `avg_duration_ms`. Both the CLI and the dashboard support period filtering (3d / 7d / 30d / 1y / all); stats are recomputed read-time via `filterHistorySince` — no per-day aggregation needed to observe long-term stability.
 
 Backward compatibility: `record_error(stage, msg)` is an alias for `record_call(stage, success=False, error=msg)`; existing call sites keep working. `output_json` emits both `_errors` (failure-only, legacy shape) and `_calls` (full records, new shape).
 
@@ -124,13 +124,19 @@ Format: `<role>/<sub_source>` (slash-separated for hierarchical aggregation — 
 
 **1. CLI (recommended for daily use)**:
 ```bash
-npm run source-health              # Table output (default, failing sources first)
-npm run source-health -- --json    # JSON output (script-friendly)
-npm run source-health -- --failing # Only sources with recent failures
-REPORT_DIR=/custom/path npm run source-health   # Custom report path
+npm run source-health                            # Table output (default, all history, failing sources first)
+npm run source-health -- --period 7d             # Last 7 days only (also: 3d / 30d / 90d / 1y / all)
+npm run source-health -- --period=30d            # Equals-sign form (equivalent to space form)
+npm run source-health -- --json                  # JSON output (script-friendly)
+npm run source-health -- --json --period 30d     # JSON + period filter (top-level includes period: {filter, since})
+npm run source-health -- --failing               # Only sources with recent failures
+npm run source-health -- --failing --period 30d  # Failing filter + period filter
+REPORT_DIR=/custom/path npm run source-health    # Custom report path
 ```
 
-**2. Dashboard**: "Data source health" card at the top of the detail tab. Sources with failures are flagged with a red `!`, sorted by `success_rate` ascending (worst first).
+> **`--period` semantics**: the ring buffer now holds the last 2000 calls per source (~1+ year); omitting `--period` shows the full buffer. Passing `--period 7d` first filters each source's history to `ts >= (now - 7d)` then recomputes stats, so you can observe long-term stability trends (e.g. datacenter vs home-network behavior differences). Sources with 0 calls inside the period display `(no data in period)` instead of `0/0 (0%)` to avoid misreading them as "source doesn't exist".
+
+**2. Dashboard**: "Data source health" card at the top of the detail tab. Sources with failures are flagged with a red `!`, sorted by `success_rate` ascending (worst first). The card title has a period dropdown (All / 1 year / 30 days / 7 days / 3 days); switching it re-renders the table in place (no refetch). Sources with 0 calls in the period show `(no data in period)`.
 
 **3. report.json**: each run's `pipeline_health` array contains `{check: "source_call_failed", context: {source, error}}` warnings for failed sub-sources in that run.
 
@@ -163,4 +169,5 @@ All scripts wrap API calls in `try/except` and return `{"success": true, "data":
 2. Inspect each failing source's `last_error` field to identify the cause
 3. Match against the "Known Issues" table above to find the right mitigation
 4. If it's a new issue (not in the table), inspect the full history in `_source-health.json` (CLI with `--json`)
+   - For long-term trends (e.g. datacenter vs home-network differences), add `--period 30d` or `--period 1y` for a wider window
 5. After a fix, run `trading_quick` again, then `source-health` to verify the source's `success_rate` recovers

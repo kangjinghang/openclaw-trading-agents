@@ -8,6 +8,9 @@ import * as os from "os";
 import {
   SourceHealthStore,
   computeStats,
+  parsePeriod,
+  filterHistorySince,
+  BUFFER_SIZE,
   type SourceCallRecord,
 } from "../../src/source-health-store";
 
@@ -129,20 +132,29 @@ describe("SourceHealthStore", () => {
     expect(state.sources["test/x"].stats.last_error).toBe("e");
   });
 
-  it("ring buffer caps at 20 entries (FIFO eviction)", () => {
-    for (let i = 0; i < 25; i++) {
-      store.appendCalls(
-        [{ stage: "test/x", success: i % 2 === 0, duration_ms: i }],
-        `t${i}`,
-        `r${i}`,
-        `ts${i}`,
-      );
+  it("ring buffer caps at BUFFER_SIZE entries (FIFO eviction)", () => {
+    // Batch all records into a single appendCalls call: one atomic write
+    // (matches how orchestrator uses it — one run → one appendCalls with all
+    // source calls). 2005 individual appendCalls would work but exceeds the
+    // default 5s test timeout because each call fsyncs independently.
+    const calls = [];
+    for (let i = 0; i < BUFFER_SIZE + 5; i++) {
+      calls.push({
+        stage: "test/x",
+        success: i % 2 === 0,
+        duration_ms: i,
+      });
     }
+    store.appendCalls(calls, "t-shared", "r-batch");
+
     const state = store.read();
-    expect(state.sources["test/x"].history).toHaveLength(20);
-    // Oldest 5 dropped; first remaining should be i=5
-    expect(state.sources["test/x"].history[0].ticker).toBe("t5");
-    expect(state.sources["test/x"].history[19].ticker).toBe("t24");
+    expect(state.sources["test/x"].history).toHaveLength(BUFFER_SIZE);
+    // appendCalls pushes one-at-a-time then applies slice(-BUFFER_SIZE) after
+    // each push, so the first 5 records (i=0..4) are evicted; verify via
+    // duration_ms since all records share the same ticker/run_id in batched form.
+    const durations = state.sources["test/x"].history.map((h) => h.duration_ms);
+    expect(durations[0]).toBe(5);
+    expect(durations[BUFFER_SIZE - 1]).toBe(BUFFER_SIZE + 4);
   });
 
   it("appendCalls() with empty array does not write file", () => {
@@ -189,5 +201,139 @@ describe("SourceHealthStore", () => {
     const state = store2.read();
     expect(state.sources["kline/mootdx"].history[0].ticker).toBe("688662");
     expect(state.sources["kline/mootdx"].history[0].duration_ms).toBe(1234);
+  });
+});
+
+describe("parsePeriod", () => {
+  // null = no filter (all / undefined / empty)
+  it("returns null for 'all'", () => {
+    expect(parsePeriod("all")).toBeNull();
+  });
+  it("returns null for undefined", () => {
+    expect(parsePeriod(undefined)).toBeNull();
+  });
+  it("returns null for empty string", () => {
+    expect(parsePeriod("")).toBeNull();
+  });
+
+  // string = ISO since timestamp
+  it("parses '7d' as 7-day window ending at now", () => {
+    const before = Date.now();
+    const since = parsePeriod("7d");
+    const after = Date.now();
+    expect(typeof since).toBe("string");
+    // since should be ~7 days before now (allow clock skew across the call)
+    const sinceMs = new Date(since as string).getTime();
+    const expectedLo = before - 7 * 24 * 60 * 60 * 1000 - 5000;
+    const expectedHi = after - 7 * 24 * 60 * 60 * 1000 + 5000;
+    expect(sinceMs).toBeGreaterThanOrEqual(expectedLo);
+    expect(sinceMs).toBeLessThanOrEqual(expectedHi);
+  });
+  it("parses '3d', '30d', '90d'", () => {
+    for (const p of ["3d", "30d", "90d"]) {
+      const since = parsePeriod(p);
+      expect(typeof since).toBe("string");
+      // sanity: the day count is encoded in the delta
+      const days = Number(p.replace("d", ""));
+      const deltaMs = Date.now() - new Date(since as string).getTime();
+      const deltaDays = deltaMs / (24 * 60 * 60 * 1000);
+      expect(deltaDays).toBeGreaterThan(days - 0.5);
+      expect(deltaDays).toBeLessThan(days + 0.5);
+    }
+  });
+  it("parses '1y' as ~365 days", () => {
+    const since = parsePeriod("1y");
+    expect(typeof since).toBe("string");
+    const deltaDays =
+      (Date.now() - new Date(since as string).getTime()) / (24 * 60 * 60 * 1000);
+    expect(deltaDays).toBeGreaterThan(364);
+    expect(deltaDays).toBeLessThan(366);
+  });
+  it("parses '1w' as 7 days (alias)", () => {
+    const since = parsePeriod("1w");
+    expect(typeof since).toBe("string");
+    const deltaDays =
+      (Date.now() - new Date(since as string).getTime()) / (24 * 60 * 60 * 1000);
+    expect(deltaDays).toBeGreaterThan(6.5);
+    expect(deltaDays).toBeLessThan(7.5);
+  });
+  it("parses '6m' as 30*6 = 180 days (alias)", () => {
+    const since = parsePeriod("6m");
+    expect(typeof since).toBe("string");
+    const deltaDays =
+      (Date.now() - new Date(since as string).getTime()) / (24 * 60 * 60 * 1000);
+    expect(deltaDays).toBeGreaterThan(179);
+    expect(deltaDays).toBeLessThan(181);
+  });
+
+  // undefined = parse failure (invalid input)
+  it("returns undefined for unknown literal 'invalid'", () => {
+    expect(parsePeriod("invalid")).toBeUndefined();
+  });
+  it("returns undefined for unknown unit '5x'", () => {
+    expect(parsePeriod("5x")).toBeUndefined();
+  });
+  it("returns undefined for zero '0d'", () => {
+    expect(parsePeriod("0d")).toBeUndefined();
+  });
+  it("returns undefined for negative '-3d'", () => {
+    expect(parsePeriod("-3d")).toBeUndefined();
+  });
+  it("returns undefined for value exceeding sanity clamp '40000d'", () => {
+    expect(parsePeriod("40000d")).toBeUndefined();
+  });
+});
+
+describe("filterHistorySince", () => {
+  it("returns full history when all ts >= since", () => {
+    const history: SourceCallRecord[] = [
+      { ts: "2026-06-15T10:00:00Z", ticker: "t", run_id: "r", success: true },
+      { ts: "2026-06-16T10:00:00Z", ticker: "t", run_id: "r", success: true },
+    ];
+    const out = filterHistorySince(history, "2026-06-01");
+    expect(out).toHaveLength(2);
+  });
+  it("returns empty when all ts < since", () => {
+    const history: SourceCallRecord[] = [
+      { ts: "2026-05-01T10:00:00Z", ticker: "t", run_id: "r", success: true },
+      { ts: "2026-05-02T10:00:00Z", ticker: "t", run_id: "r", success: true },
+    ];
+    const out = filterHistorySince(history, "2026-06-01");
+    expect(out).toHaveLength(0);
+  });
+  it("returns subset for mixed ts", () => {
+    const history: SourceCallRecord[] = [
+      { ts: "2026-05-01T10:00:00Z", ticker: "t", run_id: "r", success: true },
+      { ts: "2026-06-15T10:00:00Z", ticker: "t", run_id: "r", success: true },
+      { ts: "2026-06-20T10:00:00Z", ticker: "t", run_id: "r", success: true },
+    ];
+    const out = filterHistorySince(history, "2026-06-01");
+    expect(out).toHaveLength(2);
+    expect(out[0].ts).toBe("2026-06-15T10:00:00Z");
+    expect(out[1].ts).toBe("2026-06-20T10:00:00Z");
+  });
+  it("includes record whose ts exactly equals since (>= boundary)", () => {
+    const history: SourceCallRecord[] = [
+      { ts: "2026-06-01", ticker: "t", run_id: "r", success: true },
+      { ts: "2026-06-02", ticker: "t", run_id: "r", success: true },
+    ];
+    const out = filterHistorySince(history, "2026-06-01");
+    expect(out).toHaveLength(2);
+  });
+  it("returns empty for empty history", () => {
+    const out = filterHistorySince([], "2026-06-01");
+    expect(out).toHaveLength(0);
+  });
+  it("ISO lexicographic compare works as expected (Z-suffix after date-only since)", () => {
+    // Demonstrates the "ISO string dictionary order == time order" property the
+    // filter relies on (no Date.parse needed): '2026-06-15T10:00:00Z' >= '2026-06-01'
+    expect("2026-06-15T10:00:00Z" >= "2026-06-01").toBe(true);
+    expect("2026-05-31T23:59:59Z" >= "2026-06-01").toBe(false);
+
+    const history: SourceCallRecord[] = [
+      { ts: "2026-06-15T10:00:00Z", ticker: "t", run_id: "r", success: true },
+    ];
+    const out = filterHistorySince(history, "2026-06-01");
+    expect(out).toHaveLength(1);
   });
 });
