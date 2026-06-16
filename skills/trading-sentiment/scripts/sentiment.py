@@ -5,9 +5,10 @@ import argparse
 import json
 import sys
 import os
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
-from http_helpers import em_get, output_json, normalize_ticker
+from http_helpers import em_get, output_json, normalize_ticker, record_call
 
 
 # ── Sentiment keyword dictionaries ──────────────────────────────
@@ -95,6 +96,7 @@ def _check_hot_rank_position(hot_rank, code):
 
 def _fetch_hot_rank(date):
     """Fetch hot stock rankings from Eastmoney."""
+    start = time.monotonic()
     try:
         url = "https://push2.eastmoney.com/api/qt/clist/get"
         params = {
@@ -106,12 +108,15 @@ def _fetch_hot_rank(date):
         r = em_get(url, params=params, timeout=10)
         d = r.json()
         items = d.get("data", {}).get("diff", [])
-        return [
+        result = [
             {"code": item.get("f12"), "name": item.get("f14"),
              "change_pct": item.get("f3", 0), "price": item.get("f2", 0)}
             for item in items[:20]
         ]
-    except Exception:
+        record_call("sentiment/hot_rank", success=True, duration_ms=(time.monotonic() - start) * 1000)
+        return result
+    except Exception as e:
+        record_call("sentiment/hot_rank", success=False, error=str(e), duration_ms=(time.monotonic() - start) * 1000)
         return None
 
 
@@ -129,14 +134,15 @@ def _fetch_zt_pool(date, code=None):
     """
     import datetime as _dt
     from collections import Counter
-
+    start = time.monotonic()
+    df = None
+    actual = None
     try:
         base = _dt.datetime.strptime(date.replace("-", ""), "%Y%m%d")
     except ValueError:
+        record_call("sentiment/zt_pool", success=False, error="Invalid date format", duration_ms=(time.monotonic() - start) * 1000)
         return None
 
-    df = None
-    actual = None
     for offset in range(5):
         candidate = (base - _dt.timedelta(days=offset)).strftime("%Y%m%d")
         try:
@@ -150,6 +156,7 @@ def _fetch_zt_pool(date, code=None):
             break
 
     if df is None:
+        record_call("sentiment/zt_pool", success=False, error="No trading day found in 5-day window", duration_ms=(time.monotonic() - start) * 1000)
         return None
 
     # Column lookup by keyword — naming/order varies across akshare versions.
@@ -209,6 +216,7 @@ def _fetch_zt_pool(date, code=None):
     except Exception:
         pass
 
+    record_call("sentiment/zt_pool", success=True, duration_ms=(time.monotonic() - start) * 1000)
     return result
 
 
