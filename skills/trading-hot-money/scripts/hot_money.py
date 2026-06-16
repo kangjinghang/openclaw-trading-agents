@@ -5,16 +5,18 @@ import argparse
 import json
 import sys
 import os
+import time
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
-from http_helpers import em_get, http_get, eastmoney_datacenter, output_json, normalize_ticker, record_error
+from http_helpers import em_get, http_get, eastmoney_datacenter, output_json, normalize_ticker, record_call, record_error
 
 import requests
 
 
 def _fetch_northbound():
     """Fetch northbound capital flow from 同花顺 hsgtApi."""
+    start = time.monotonic()
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/117.0.0.0 Safari/537.36",
         "Host": "data.hexin.cn",
@@ -28,10 +30,11 @@ def _fetch_northbound():
         hgt = d.get("hgt", [])
         sgt = d.get("sgt", [])
         if not times:
+            record_call("hot_money/northbound", success=False, error="No data returned", duration_ms=(time.monotonic() - start) * 1000)
             return None
         hgt_close = float(hgt[-1]) if hgt else 0
         sgt_close = float(sgt[-1]) if sgt else 0
-        return {
+        result = {
             "hgt_close": hgt_close,
             "sgt_close": sgt_close,
             "total": hgt_close + sgt_close,
@@ -42,13 +45,16 @@ def _fetch_northbound():
                 for i in range(max(0, len(times) - 10), len(times))
             ],
         }
+        record_call("hot_money/northbound", success=True, duration_ms=(time.monotonic() - start) * 1000)
+        return result
     except Exception as e:
-        record_error("northbound", e)
+        record_call("hot_money/northbound", success=False, error=str(e), duration_ms=(time.monotonic() - start) * 1000)
         return None
 
 
 def _fetch_fund_flow(code, date):
     """Fetch individual stock fund flow from 东财 push2."""
+    start = time.monotonic()
     secid = f"1.{code}" if code.startswith("6") else f"0.{code}"
     try:
         url = "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get"
@@ -61,20 +67,23 @@ def _fetch_fund_flow(code, date):
         d = r.json()
         klines = d.get("data", {}).get("klines", [])
         if not klines:
+            record_call("hot_money/fund_flow", success=False, error="No klines data", duration_ms=(time.monotonic() - start) * 1000)
             return None
         last = klines[-1].split(",")
         result = {"main_net": float(last[1]) if len(last) > 1 else 0}
         if len(last) >= 6:
             result["large_net"] = float(last[4])
             result["super_net"] = float(last[5])
+        record_call("hot_money/fund_flow", success=True, duration_ms=(time.monotonic() - start) * 1000)
         return result
     except Exception as e:
-        record_error("fund_flow", e)
+        record_call("hot_money/fund_flow", success=False, error=str(e), duration_ms=(time.monotonic() - start) * 1000)
         return None
 
 
 def _fetch_hot_stocks(date):
     """Fetch hot stocks with topic attribution from 同花顺."""
+    start = time.monotonic()
     try:
         url = (
             f"http://zx.10jqka.com.cn/event/api/getharden/"
@@ -84,21 +93,25 @@ def _fetch_hot_stocks(date):
         r = http_get(url, headers=headers, timeout=10)
         data = r.json()
         if data.get("errocode", 0) != 0:
+            record_call("hot_money/hot_stocks", success=False, error="API error code: " + str(data.get("errocode")), duration_ms=(time.monotonic() - start) * 1000)
             return None
         rows = data.get("data") or []
-        return [
+        result = [
             {"code": row.get("code"), "name": row.get("name"),
              "reason": row.get("reason", ""), "change_pct": row.get("zhangfu", "")}
             for row in rows[:20]
         ]
+        record_call("hot_money/hot_stocks", success=True, duration_ms=(time.monotonic() - start) * 1000)
+        return result
     except Exception as e:
-        record_error("hot_stocks", e)
+        record_call("hot_money/hot_stocks", success=False, error=str(e), duration_ms=(time.monotonic() - start) * 1000)
         return None
 
 
 def _fetch_dragon_tiger(code, date, lookback=30):
     """Fetch dragon-tiger board appearances with buy/sell amounts."""
     start_dt = (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=lookback)).strftime("%Y-%m-%d")
+    start = time.monotonic()
     try:
         data = eastmoney_datacenter(
             "RPT_DAILYBILLBOARD_DETAILSNEW",
@@ -108,8 +121,9 @@ def _fetch_dragon_tiger(code, date, lookback=30):
             sort_types="-1",
         )
         if not data:
+            record_call("hot_money/dragon_tiger", success=False, error="No data returned", duration_ms=(time.monotonic() - start) * 1000)
             return []
-        return [
+        result = [
             {
                 "date": str(row.get("TRADE_DATE", ""))[:10],
                 "reason": row.get("EXPLANATION", ""),
@@ -122,8 +136,10 @@ def _fetch_dragon_tiger(code, date, lookback=30):
             }
             for row in data
         ]
+        record_call("hot_money/dragon_tiger", success=True, duration_ms=(time.monotonic() - start) * 1000)
+        return result
     except Exception as e:
-        record_error("dragon_tiger", e)
+        record_call("hot_money/dragon_tiger", success=False, error=str(e), duration_ms=(time.monotonic() - start) * 1000)
         return []
 
 
@@ -135,6 +151,7 @@ def _fetch_sector_fund_flow(top_n=8):
     weak (弱势) camps. Source: push2 clist fs=m:90+t:2 (行业板块, ~90 boards)
     with f62 (main net inflow), f184 (main net pct), f136 (super-large net).
     """
+    start = time.monotonic()
     url = "https://push2.eastmoney.com/api/qt/clist/get"
     params = {
         "pn": "1", "pz": "100", "po": "1", "np": "1",
@@ -146,10 +163,11 @@ def _fetch_sector_fund_flow(top_n=8):
         r = em_get(url, params=params, timeout=15)
         items = r.json().get("data", {}).get("diff", []) or []
     except Exception as e:
-        record_error("sector_fund_flow", e)
+        record_call("hot_money/sector_fund_flow", success=False, error=str(e), duration_ms=(time.monotonic() - start) * 1000)
         return None
 
     if not items:
+        record_call("hot_money/sector_fund_flow", success=False, error="No items returned", duration_ms=(time.monotonic() - start) * 1000)
         return None
 
     boards = [
@@ -163,12 +181,13 @@ def _fetch_sector_fund_flow(top_n=8):
         for it in items
     ]
     boards_sorted = sorted(boards, key=lambda x: x["main_net_yi"], reverse=True)
-
-    return {
+    result = {
         "inflow_top": boards_sorted[:top_n],
         "outflow_top": list(reversed(boards_sorted[-top_n:])),
         "total_boards": len(boards_sorted),
     }
+    record_call("hot_money/sector_fund_flow", success=True, duration_ms=(time.monotonic() - start) * 1000)
+    return result
 
 
 def fetch_hot_money(ticker, date):
