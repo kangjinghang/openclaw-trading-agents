@@ -1,0 +1,179 @@
+{
+  "version": 1,
+  "updated_at": "2026-06-15T10:00:19.000Z",
+  "sources": {
+    "test/full": {
+      "history": [
+        {
+          "ts": "2026-06-15T10:00:00.000Z",
+          "ticker": "t0",
+          "run_id": "r0",
+          "success": false,
+          "duration_ms": 100,
+          "error": "fail"
+        },
+        {
+          "ts": "2026-06-15T10:00:01.000Z",
+          "ticker": "t1",
+          "run_id": "r1",
+          "success": true,
+          "duration_ms": 110,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:02.000Z",
+          "ticker": "t2",
+          "run_id": "r2",
+          "success": true,
+          "duration_ms": 120,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:03.000Z",
+          "ticker": "t3",
+          "run_id": "r3",
+          "success": false,
+          "duration_ms": 130,
+          "error": "fail"
+        },
+        {
+          "ts": "2026-06-15T10:00:04.000Z",
+          "ticker": "t4",
+          "run_id": "r4",
+          "success": true,
+          "duration_ms": 140,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:05.000Z",
+          "ticker": "t5",
+          "run_id": "r5",
+          "success": true,
+          "duration_ms": 150,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:06.000Z",
+          "ticker": "t6",
+          "run_id": "r6",
+          "success": false,
+          "duration_ms": 160,
+          "error": "fail"
+        },
+        {
+          "ts": "2026-06-15T10:00:07.000Z",
+          "ticker": "t7",
+          "run_id": "r7",
+          "success": true,
+          "duration_ms": 170,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:08.000Z",
+          "ticker": "t8",
+          "run_id": "r8",
+          "success": true,
+          "duration_ms": 180,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:09.000Z",
+          "ticker": "t9",
+          "run_id": "r9",
+          "success": false,
+          "duration_ms": 190,
+          "error": "fail"
+        },
+        {
+          "ts": "2026-06-15T10:00:10.000Z",
+          "ticker": "t10",
+          "run_id": "r10",
+          "success": true,
+          "duration_ms": 200,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:11.000Z",
+          "ticker": "t11",
+          "run_id": "r11",
+          "success": true,
+          "duration_ms": 210,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:12.000Z",
+          "ticker": "t12",
+          "run_id": "r12",
+          "success": false,
+          "duration_ms": 220,
+          "error": "fail"
+        },
+        {
+          "ts": "2026-06-15T10:00:13.000Z",
+          "ticker": "t13",
+          "run_id": "r13",
+          "success": true,
+          "duration_ms": 230,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:14.000Z",
+          "ticker": "t14",
+          "run_id": "r14",
+          "success": true,
+          "duration_ms": 240,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:15.000Z",
+          "ticker": "t15",
+          "run_id": "r15",
+          "success": false,
+          "duration_ms": 250,
+          "error": "fail"
+        },
+        {
+          "ts": "2026-06-15T10:00:16.000Z",
+          "ticker": "t16",
+          "run_id": "r16",
+          "success": true,
+          "duration_ms": 260,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:17.000Z",
+          "ticker": "t17",
+          "run_id": "r17",
+          "success": true,
+          "duration_ms": 270,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:18.000Z",
+          "ticker": "t18",
+          "run_id": "r18",
+          "success": false,
+          "duration_ms": 280,
+          "error": "fail"
+        },
+        {
+          "ts": "2026-06-15T10:00:19.000Z",
+          "ticker": "t19",
+          "run_id": "r19",
+          "success": true,
+          "duration_ms": 290,
+          "error": null
+        }
+      ],
+      "stats": {
+        "total_calls": 20,
+        "total_success": 13,
+        "success_rate": 0.65,
+        "last_success_ts": "2026-06-15T10:00:19.000Z",
+        "last_error_ts": "2026-06-15T10:00:18.000Z",
+        "last_error": "fail",
+        "avg_duration_ms": 195
+      }
+    }
+  }
+}

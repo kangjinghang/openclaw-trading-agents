@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "updated_at": "2026-06-15T10:00:00.000Z",
+  "sources": {
+    "test/source_a": {
+      "history": [
+        {"ts": "2026-06-15T10:00:00.000Z", "ticker": "000001", "run_id": "r1", "success": true, "duration_ms": 100, "error": null},
+        {"ts": "2026-06-15T10:00:00.000Z", "ticker": "000001", "run_id": "r1", "success": false, "duration_ms": 200, "error": "rate_limited"},
+        {"ts": "2026-06-15T10:00:00.000Z", "ticker": "000002", "run_id": "r2", "success": true, "duration_ms": 150, "error": null}
+      ],
+      "stats": {
+        "total_calls": 3,
+        "total_success": 2,
+        "success_rate": 0.667,
+        "last_success_ts": "2026-06-15T10:00:00.000Z",
+        "last_error_ts": "2026-06-15T10:00:00.000Z",
+        "last_error": "rate_limited",
+        "avg_duration_ms": 150
+      }
+    }
+  }
+}

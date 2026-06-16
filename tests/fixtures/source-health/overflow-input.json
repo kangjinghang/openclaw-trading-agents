@@ -1,0 +1,219 @@
+{
+  "version": 1,
+  "updated_at": "2026-06-15T10:00:24.000Z",
+  "sources": {
+    "test/overflow": {
+      "history": [
+        {
+          "ts": "2026-06-15T10:00:00.000Z",
+          "ticker": "t0",
+          "run_id": "r0",
+          "success": true,
+          "duration_ms": 0,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:01.000Z",
+          "ticker": "t1",
+          "run_id": "r1",
+          "success": false,
+          "duration_ms": 1,
+          "error": "x"
+        },
+        {
+          "ts": "2026-06-15T10:00:02.000Z",
+          "ticker": "t2",
+          "run_id": "r2",
+          "success": true,
+          "duration_ms": 2,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:03.000Z",
+          "ticker": "t3",
+          "run_id": "r3",
+          "success": false,
+          "duration_ms": 3,
+          "error": "x"
+        },
+        {
+          "ts": "2026-06-15T10:00:04.000Z",
+          "ticker": "t4",
+          "run_id": "r4",
+          "success": true,
+          "duration_ms": 4,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:05.000Z",
+          "ticker": "t5",
+          "run_id": "r5",
+          "success": false,
+          "duration_ms": 5,
+          "error": "x"
+        },
+        {
+          "ts": "2026-06-15T10:00:06.000Z",
+          "ticker": "t6",
+          "run_id": "r6",
+          "success": true,
+          "duration_ms": 6,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:07.000Z",
+          "ticker": "t7",
+          "run_id": "r7",
+          "success": false,
+          "duration_ms": 7,
+          "error": "x"
+        },
+        {
+          "ts": "2026-06-15T10:00:08.000Z",
+          "ticker": "t8",
+          "run_id": "r8",
+          "success": true,
+          "duration_ms": 8,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:09.000Z",
+          "ticker": "t9",
+          "run_id": "r9",
+          "success": false,
+          "duration_ms": 9,
+          "error": "x"
+        },
+        {
+          "ts": "2026-06-15T10:00:10.000Z",
+          "ticker": "t10",
+          "run_id": "r10",
+          "success": true,
+          "duration_ms": 10,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:11.000Z",
+          "ticker": "t11",
+          "run_id": "r11",
+          "success": false,
+          "duration_ms": 11,
+          "error": "x"
+        },
+        {
+          "ts": "2026-06-15T10:00:12.000Z",
+          "ticker": "t12",
+          "run_id": "r12",
+          "success": true,
+          "duration_ms": 12,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:13.000Z",
+          "ticker": "t13",
+          "run_id": "r13",
+          "success": false,
+          "duration_ms": 13,
+          "error": "x"
+        },
+        {
+          "ts": "2026-06-15T10:00:14.000Z",
+          "ticker": "t14",
+          "run_id": "r14",
+          "success": true,
+          "duration_ms": 14,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:15.000Z",
+          "ticker": "t15",
+          "run_id": "r15",
+          "success": false,
+          "duration_ms": 15,
+          "error": "x"
+        },
+        {
+          "ts": "2026-06-15T10:00:16.000Z",
+          "ticker": "t16",
+          "run_id": "r16",
+          "success": true,
+          "duration_ms": 16,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:17.000Z",
+          "ticker": "t17",
+          "run_id": "r17",
+          "success": false,
+          "duration_ms": 17,
+          "error": "x"
+        },
+        {
+          "ts": "2026-06-15T10:00:18.000Z",
+          "ticker": "t18",
+          "run_id": "r18",
+          "success": true,
+          "duration_ms": 18,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:19.000Z",
+          "ticker": "t19",
+          "run_id": "r19",
+          "success": false,
+          "duration_ms": 19,
+          "error": "x"
+        },
+        {
+          "ts": "2026-06-15T10:00:20.000Z",
+          "ticker": "t20",
+          "run_id": "r20",
+          "success": true,
+          "duration_ms": 20,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:21.000Z",
+          "ticker": "t21",
+          "run_id": "r21",
+          "success": false,
+          "duration_ms": 21,
+          "error": "x"
+        },
+        {
+          "ts": "2026-06-15T10:00:22.000Z",
+          "ticker": "t22",
+          "run_id": "r22",
+          "success": true,
+          "duration_ms": 22,
+          "error": null
+        },
+        {
+          "ts": "2026-06-15T10:00:23.000Z",
+          "ticker": "t23",
+          "run_id": "r23",
+          "success": false,
+          "duration_ms": 23,
+          "error": "x"
+        },
+        {
+          "ts": "2026-06-15T10:00:24.000Z",
+          "ticker": "t24",
+          "run_id": "r24",
+          "success": true,
+          "duration_ms": 24,
+          "error": null
+        }
+      ],
+      "stats": {
+        "total_calls": 25,
+        "total_success": 13,
+        "success_rate": 0.52,
+        "last_success_ts": "2026-06-15T10:00:24.000Z",
+        "last_error_ts": "2026-06-15T10:00:23.000Z",
+        "last_error": "x",
+        "avg_duration_ms": 12
+      }
+    }
+  }
+}
