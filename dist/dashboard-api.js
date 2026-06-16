@@ -40,6 +40,7 @@ exports.readDetail = readDetail;
 exports.readTraces = readTraces;
 exports.readTracesByTickerDate = readTracesByTickerDate;
 exports.readDataSources = readDataSources;
+exports.readSourceHealth = readSourceHealth;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 /** Scan report directory and return all report summaries */
@@ -261,6 +262,26 @@ function safeReaddir(dir) {
     }
     catch {
         return [];
+    }
+}
+/**
+ * Read the cross-run source-health file at `<reportDir>/_source-health.json`.
+ * Returns null on missing/corrupt (caller renders a "暂无数据" placeholder).
+ * Surfaced via `/api/source-health` route so the dashboard "数据源健康" card
+ * can render per-source success rates across runs.
+ */
+function readSourceHealth(reportDir) {
+    const filePath = path.join(reportDir, "_source-health.json");
+    try {
+        const raw = fs.readFileSync(filePath, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object" && parsed.sources) {
+            return parsed;
+        }
+        return null;
+    }
+    catch {
+        return null;
     }
 }
 //# sourceMappingURL=dashboard-api.js.map

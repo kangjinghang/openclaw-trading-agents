@@ -805,6 +805,71 @@ async function loadAnalysts(report) {
 }
 
 // ── Full mode detail panel ──
+
+/** Render the cross-run source health card (data source health tracker).
+ *  Reads from /api/source-health → returns the global _source-health.json
+ *  state. Ticker-agnostic — surfaces per-source success rate trends. */
+function renderSourceHealthCard(state) {
+  if (!state || !state.sources || Object.keys(state.sources).length === 0) {
+    return `
+      <section class="card" style="margin-bottom:16px;">
+        <h3>📊 数据源健康（跨 run）</h3>
+        <p style="color:var(--text3)">暂无数据。运行 trading_quick/full 后再来看。
+          CLI: <code>npm run source-health</code></p>
+      </section>
+    `;
+  }
+
+  const rows = Object.entries(state.sources)
+    .sort(([an, a], [bn, b]) => {
+      const af = a.stats.success_rate < 1 ? 0 : 1;
+      const bf = b.stats.success_rate < 1 ? 0 : 1;
+      if (af !== bf) return af - bf;
+      return a.stats.success_rate - b.stats.success_rate;
+    })
+    .map(([name, entry]) => {
+      const s = entry.stats;
+      const failing = s.success_rate < 1;
+      const color = failing ? '#c0392b' : '#16a085';
+      const indicator = failing ? '! ' : '✓ ';
+      const rate = (s.success_rate * 100).toFixed(0);
+      const succ = `${s.total_success}/${s.total_calls}`;
+      const lastErr = (s.last_error || '-').slice(0, 25);
+      const lastTs = s.last_success_ts ?? s.last_error_ts;
+      const lastCall = lastTs
+        ? new Date(lastTs).toLocaleString('zh-CN', {hour12: false})
+        : '(never)';
+      return `
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:4px 8px;color:${color}">${indicator}${name}</td>
+          <td style="padding:4px 8px;font-family:monospace;text-align:right">${succ} (${rate}%)</td>
+          <td style="padding:4px 8px;color:var(--text3);max-width:200px;overflow:hidden;text-overflow:ellipsis">${lastErr}</td>
+          <td style="padding:4px 8px;color:var(--text3);font-size:0.85em">${lastCall}</td>
+        </tr>
+      `;
+    })
+    .join('');
+
+  return `
+    <section class="card" style="margin-bottom:16px;">
+      <h3>📊 数据源健康（跨 run，最近 20 次/source）
+        <span style="font-size:0.75em;color:var(--text3);font-weight:normal">— 更新: ${state.updated_at || '(never)'} | CLI: <code>npm run source-health</code></span>
+      </h3>
+      <table style="width:100%;border-collapse:collapse;font-size:0.9em;">
+        <thead>
+          <tr style="text-align:left;border-bottom:2px solid var(--border);color:var(--text2)">
+            <th style="padding:6px 8px">Source</th>
+            <th style="padding:6px 8px;text-align:right">Success</th>
+            <th style="padding:6px 8px">Last Error</th>
+            <th style="padding:6px 8px">Last Call</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </section>
+  `;
+}
+
 async function loadFullDetail(report) {
   const panel = document.getElementById('panel-detail');
   panel.innerHTML = `<div style="color:var(--text3)">${t('loading')}</div>`;
@@ -816,15 +881,19 @@ async function loadFullDetail(report) {
   const detailPath = `${date}_${mode}`;
 
   try {
-    const [research, trading, riskMgr, debateFiles, quality] = await Promise.all([
+    const [research, trading, riskMgr, debateFiles, quality, sourceHealth] = await Promise.all([
       fetchJson(`/api/detail/${ticker}/${detailPath}/03_research.json`),
       fetchJson(`/api/detail/${ticker}/${detailPath}/04_trading_plan.json`),
       fetchJson(`/api/detail/${ticker}/${detailPath}/05_risk/risk_manager.json`),
       loadDebateRounds(ticker, detailPath),
       fetchJson(`/api/detail/${ticker}/${detailPath}/00_quality.json`),
+      fetchJson('/api/source-health'),
     ]);
 
     let html = '';
+
+    // Source health card (cross-run, ticker-agnostic meta view)
+    html += renderSourceHealthCard(sourceHealth);
 
     // Review flags banner (silent-fallback warnings + cross-stage anomalies):
     // shown FIRST so a reviewer sees where the run degraded before anything else.

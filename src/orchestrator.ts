@@ -12,6 +12,7 @@ import { runResearchManager } from "./research-manager";
 import { runTrader } from "./trader";
 import { runRiskDebate, runRiskManager } from "./risk";
 import { validateAnalystReports, checkDebateSummaryClean, checkResearchManagerConsistency } from "./quality-gate";
+import { SourceHealthStore } from "./source-health-store";
 import { runQualityReview, formatQualityReview } from "./quality-review";
 import { crossStageChecks } from "./cross-stage-checks";
 import {
@@ -661,6 +662,39 @@ async function runAnalystPhase(
     if (!result.success) {
       health.add({ stage: "data_collection", severity: "warn", check: "script_failed",
         message: `数据源 ${role} 获取失败: ${(result.error || "").slice(0, 60)}`, context: { role } });
+    }
+  }
+
+  // Source health tracking: feed per-source call results into pipeline_health
+  // (per-run view, so failures show up in report.json) + SourceHealthStore
+  // (cross-run ring buffer at <reportDir>/_source-health.json for trend view).
+  // Calls come from Python http_helpers.record_call() → output_json() `_calls`
+  // → exec-python.ts → result.calls. Falls back to result.errors (failure-only
+  // view) for scripts not yet migrated to record_call.
+  const sourceHealth = new SourceHealthStore(config.report_dir);
+  const allCalls: Array<{ stage: string; success: boolean; error?: string | null; duration_ms?: number | null }> = [];
+  for (const { result } of dataResults) {
+    if (!result) continue;
+    const calls = result.calls ??
+      (result.errors ?? []).map(e => ({ stage: e.stage, success: false, error: e.error }));
+    for (const call of calls) {
+      allCalls.push(call);
+      if (!call.success) {
+        health.add({
+          stage: "data_collection",
+          severity: "warn",
+          check: "source_call_failed",
+          message: `数据源 ${call.stage} 失败: ${(call.error || "").slice(0, 60)}`,
+          context: { source: call.stage, error: call.error },
+        });
+      }
+    }
+  }
+  if (allCalls.length > 0) {
+    try {
+      sourceHealth.appendCalls(allCalls, ticker, runId);
+    } catch {
+      // Source-health failures must never block the pipeline.
     }
   }
 

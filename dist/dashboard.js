@@ -156,6 +156,15 @@ function startServer(reportDir, port) {
             handleJson(res, (0, dashboard_api_1.readDataSources)(absReportDir, ticker, dateMode));
             return;
         }
+        // GET /api/source-health — cross-run per-source call stats
+        if (pathname === "/api/source-health") {
+            handleJson(res, (0, dashboard_api_1.readSourceHealth)(absReportDir) ?? {
+                version: 1,
+                updated_at: "",
+                sources: {},
+            });
+            return;
+        }
         // Static files: serve dashboard/index.html and embedded assets
         if (pathname === "/" || pathname === "/index.html") {
             serveStatic(res, path.join(dashboardDir, "index.html"), "text/html");

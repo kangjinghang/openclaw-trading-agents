@@ -23,6 +23,7 @@
     "lint": "eslint src/",
     "analyze": "node dist/cli.js",
     "dashboard": "node dist/dashboard.js",
+    "source-health": "node dist/source-health-cli.js",
     "prepare": "husky || true"
   },
   "bin": {

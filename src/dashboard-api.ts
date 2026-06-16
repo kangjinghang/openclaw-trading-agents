@@ -260,3 +260,23 @@ function safeReaddir(dir: string): string[] {
     return [];
   }
 }
+
+/**
+ * Read the cross-run source-health file at `<reportDir>/_source-health.json`.
+ * Returns null on missing/corrupt (caller renders a "暂无数据" placeholder).
+ * Surfaced via `/api/source-health` route so the dashboard "数据源健康" card
+ * can render per-source success rates across runs.
+ */
+export function readSourceHealth(reportDir: string): any | null {
+  const filePath = path.join(reportDir, "_source-health.json");
+  try {
+    const raw = fs.readFileSync(filePath, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && parsed.sources) {
+      return parsed;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}

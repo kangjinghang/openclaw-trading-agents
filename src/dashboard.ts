@@ -9,7 +9,7 @@ import * as http from "http";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { listReports, readReport, readDetail, readTraces, readTracesByTickerDate, readDataSources } from "./dashboard-api";
+import { listReports, readReport, readDetail, readTraces, readTracesByTickerDate, readDataSources, readSourceHealth } from "./dashboard-api";
 
 const DEFAULT_PORT = 3210;
 
@@ -127,6 +127,19 @@ export function startServer(reportDir: string, port: number): http.Server {
     if (dataMatch) {
       const [, ticker, dateMode] = dataMatch;
       handleJson(res, readDataSources(absReportDir, ticker, dateMode));
+      return;
+    }
+
+    // GET /api/source-health — cross-run per-source call stats
+    if (pathname === "/api/source-health") {
+      handleJson(
+        res,
+        readSourceHealth(absReportDir) ?? {
+          version: 1,
+          updated_at: "",
+          sources: {},
+        },
+      );
       return;
     }
 

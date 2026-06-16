@@ -73,4 +73,11 @@ export declare function readTraces(reportDir: string, runId: string): any[];
 export declare function readTracesByTickerDate(reportDir: string, ticker: string, date: string): any[];
 /** Read raw data source outputs from the report detail directory */
 export declare function readDataSources(reportDir: string, ticker: string, dateMode: string): any[];
+/**
+ * Read the cross-run source-health file at `<reportDir>/_source-health.json`.
+ * Returns null on missing/corrupt (caller renders a "暂无数据" placeholder).
+ * Surfaced via `/api/source-health` route so the dashboard "数据源健康" card
+ * can render per-source success rates across runs.
+ */
+export declare function readSourceHealth(reportDir: string): any | null;
 //# sourceMappingURL=dashboard-api.d.ts.map
