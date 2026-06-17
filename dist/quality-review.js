@@ -136,14 +136,16 @@ async function runQualityReview(reports, quality, ticker, date, config, client, 
     let content;
     try {
         const result = await (0, llm_client_1.callLLM)(client, {
-            model: config.models.analyst,
+            // Quality review is a judgment/decision-tier call, not an analyst call —
+            // use `decision` so it follows the decision model (glm-5.2) rather than
+            // the faster analyst model (glm-5-turbo). Decouples it from analysts.
+            model: config.models.decision,
             systemPrompt: "You are a data-quality reviewer auditing analyst reports for credibility (not investment merit).",
             userMessage,
             temperature: 0.2,
             phase: "quality_review",
             role: "quality_review",
             traceLogger,
-            ...(config.models.analyst_thinking ? { thinking: { type: config.models.analyst_thinking } } : {}),
         });
         content = result.content;
     }

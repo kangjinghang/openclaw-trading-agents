@@ -46,7 +46,7 @@ const path = __importStar(require("path"));
 const os = __importStar(require("os"));
 const fs = __importStar(require("fs"));
 const DEFAULT_CONFIG = {
-    models: { analyst: "glm-4.7-flash", debater: "glm-4.7", decision: "glm-4.7", risk: "glm-4.7" },
+    models: { analyst: "glm-5-turbo", debater: "glm-5.2", decision: "glm-5.2", risk: "glm-5.2", decision_deep: "glm-5.2" },
     debate_rounds: 2,
     risk_debate_rounds: 1,
     max_risk_retries: 1,
