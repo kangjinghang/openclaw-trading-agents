@@ -1,16 +1,9 @@
-import type { DiffFile, RawSnapshotFile, CandidatesFile } from "./types";
+import type { DiffFile, CandidatesFile } from "./types";
 /**
- * Build the candidate list from a diff and today's raw snapshot.
+ * Build the candidate list from a diff.
  *
- * 按代表趋势的 percent 正负拆成三组：
- *   up   —— 上涨候选（percent > 0），找做多机会
- *   down —— 下跌候选（percent < 0），找卖点/规避
- *   neutral —— 无区间趋势（仅有 reason_list 异动点）
- *
- * 每组内按"进行中 > 持续长 > 幅度大"排序。
- *
- * @param diff 第2层 diff 结果
- * @param rawToday 今日 raw 快照（top_trend 取自此处的完整 range 列表）
+ * 只收有 range 的股(B1 或 B2),丢弃只有 A 类今日涨 reason 的股(信号弱)。
+ * 每个候选保留雪球完整字段(range 的 8 字段 + today_reasons 的 4 字段)。
  */
-export declare function buildCandidates(diff: DiffFile, rawToday: RawSnapshotFile): CandidatesFile;
+export declare function buildCandidates(diff: DiffFile): CandidatesFile;
 //# sourceMappingURL=candidates.d.ts.map

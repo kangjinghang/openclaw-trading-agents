@@ -55,12 +55,22 @@ export interface RawSnapshotFile {
   stocks: Record<string, RawStockEntry>;
 }
 
-/** 第2层：diff/{date}.json 里单股的变更 */
+/** 第2层：diff/{date}.json 里单股的变更。
+ *
+ * 三个字段对应三类入选条件：
+ *   - today_reason_points: A 类 — 今日 reason_list 原样（单点异动，不过滤 baseline）
+ *   - continued_ranges:    B1 — 延续型区间（begin 在 baseline、today.end 变大、ongoing）
+ *   - new_ranges:          B2 — 新成型区间（begin+end 不在 baseline、ongoing）
+ *
+ * 静止型（begin 相同但 end 不变）和非 ongoing 区间在 computeDiff 里直接丢弃，
+ * 因为股票池是"今日有效"的语义：昨天结束的区间今天不再入选。
+ */
 export interface DiffChange {
   ticker: string;
   name: string;
-  new_reason_points: RawReason[];
-  new_range_trends: RawRange[];
+  today_reason_points: RawReason[];
+  continued_ranges: RawRange[];
+  new_ranges: RawRange[];
 }
 
 /** 第2层：diff/{date}.json 结构 */
@@ -70,36 +80,28 @@ export interface DiffFile {
   changes: DiffChange[];
 }
 
-/** 第3层：候选清单里该股的代表趋势（从其 range_reason_list 选出最强一条）。
+/** 第3层：候选清单里的单股(每只 = 一个 diff range + 可选的今日涨 reason)。
  *
- * 注意：雪球的 type 是"分析窗口长度"（LONG=长周期/SHORT=短周期），
- * 不是涨跌方向。涨跌只看 percent 正负：正=上涨，负=下跌。
+ * 设计原则:保留雪球的完整字段,不丢信息。
+ *   - range:从 diff 的 continued_ranges[0] 或 new_ranges[0] 取,完整 8 字段
+ *   - today_reasons:如果该股今日还有涨 reason,完整字段;否则空数组
+ *
+ * 排序:days 大 > |percent| 大(都是今日 end=今天 + 上涨的 range,ongoing 同质)。
  */
-export interface TopTrend {
-  type: "SHORT" | "LONG";   // 时间窗口长度，非方向
-  percent: number;           // 正=上涨，负=下跌
-  days: number;              // 区间跨度天数
-  ongoing: boolean;          // end 靠近扫描日 = 进行中
-}
-
-/** 第3层：候选清单里的单股 */
 export interface CandidateEntry {
   ticker: string;
   name: string;
-  top_trend: TopTrend | null;
-  new_today: { reasons: number; ranges: number };
+  range: RawRange;                   // 完整 range 字段(begin/end/type/percent/summary/points/url/title)
+  range_kind: "continued" | "new";   // diff 里是 B1(continued) 还是 B2(new)
+  days: number;                       // range 跨度天数(begin → end)
+  today_reasons: RawReason[];         // 今日涨 reason(0/1/多条,完整字段)
 }
 
 /** 第3层：derived/{date}-candidates.json 结构。
  *
- * 按 percent 正负拆成两组：
- *   up   —— 上涨趋势候选（percent > 0），用于找做多机会
- *   down —— 下跌趋势候选（percent < 0），用于找卖点/规避
- * 无区间趋势（top_trend=null）的股票归入 neutral，不参与 up/down 排序。
+ * 只保留有 range 的股(B1 或 B2),丢弃只有 A 类 reason 的股(信号弱)。
  */
 export interface CandidatesFile {
   scan_date: string;
   up: CandidateEntry[];
-  down: CandidateEntry[];
-  neutral: CandidateEntry[];
 }

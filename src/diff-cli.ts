@@ -73,9 +73,10 @@ Options:
   if (diff.changes.length > 0) {
     console.log("\n  前 10 个变更:");
     for (const c of diff.changes.slice(0, 10)) {
-      const r = c.new_reason_points.length;
-      const g = c.new_range_trends.length;
-      console.log(`    ${c.ticker} ${c.name}: +${r}异动点, +${g}区间趋势`);
+      const r = c.today_reason_points.length;
+      const cont = c.continued_ranges.length;
+      const nw = c.new_ranges.length;
+      console.log(`    ${c.ticker} ${c.name}: ${r}异动点, ${cont}延续, ${nw}新区间`);
     }
     if (diff.changes.length > 10) console.log(`    ... 还有 ${diff.changes.length - 10} 个`);
   }

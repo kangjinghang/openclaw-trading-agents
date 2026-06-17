@@ -1,103 +1,112 @@
 import { describe, it, expect } from "vitest";
 import { buildCandidates } from "../../../src/watchlist/candidates";
-import type { DiffFile, RawSnapshotFile } from "../../../src/watchlist/types";
+import type { DiffFile } from "../../../src/watchlist/types";
 
 function makeDiff(changes: any[]): DiffFile {
   return { scan_date: "2026-06-17", baseline: "2026-06-16", changes };
 }
 
-/** 造一个 rawToday，只有指定 ticker 的 range_reason_list。
- * end_date=2026-06-17 → scanEndMs ≈ 1.78e12；end=9.99e12 视为进行中。 */
-function makeRaw(stocks: Record<string, { range_reason_list?: any[] }>): RawSnapshotFile {
-  return {
-    scan_date: "2026-06-17",
-    begin_ms: 0, end_ms: 1781193599000, begin_date: "2025-04-17", end_date: "2026-06-17",
-    window_months: 14, scanned: 0, succeeded: 0, failed: 0,
-    stocks,
-  } as any as RawSnapshotFile;
-}
-
-describe("buildCandidates (up/down split)", () => {
-  it("splits up and down by percent sign", () => {
+describe("buildCandidates (rich schema, only range stocks, neutral dropped)", () => {
+  it("derived 只收有 range 的股(B1 或 B2),无 range 的(A only)直接丢", () => {
     const diff = makeDiff([
-      { ticker: "UP1", name: "up-stock", new_reason_points: [], new_range_trends: [
-        { begin: 100, end: 200, type: "LONG", percent: 756, summary: "", points: "" },
-      ]},
-      { ticker: "DOWN1", name: "down-stock", new_reason_points: [], new_range_trends: [
-        { begin: 100, end: 200, type: "LONG", percent: -78, summary: "", points: "" },
-      ]},
+      // 有 range(B2 新成型)
+      { ticker: "X", name: "x", today_reason_points: [], continued_ranges: [],
+        new_ranges: [{ begin: 100, end: 200, type: "LONG", percent: 50, summary: "s", points: "p", url: "u", title: "t" }] },
+      // 无 range(只有 A 类)
+      { ticker: "N", name: "n",
+        today_reason_points: [{ timestamp: 1, description: "今日涨幅5%", reason: "r", url: "u" }],
+        continued_ranges: [], new_ranges: [] },
     ]);
-    const cands = buildCandidates(diff, makeRaw({
-      "UP1": { range_reason_list: [{ begin: 100, end: 200, type: "LONG", percent: 756, summary: "", points: "" }] },
-      "DOWN1": { range_reason_list: [{ begin: 100, end: 200, type: "LONG", percent: -78, summary: "", points: "" }] },
-    }));
-    expect(cands.up.map((c) => c.ticker)).toEqual(["UP1"]);
-    expect(cands.down.map((c) => c.ticker)).toEqual(["DOWN1"]);
+    const cands = buildCandidates(diff);
+    expect(cands.up.map((c) => c.ticker)).toEqual(["X"]);
+    expect(cands).not.toHaveProperty("neutral");
   });
 
-  it("sorts up group by ongoing > days > |percent|", () => {
-    // A: 进行中 +50% ; B: 已结束 30d +500% ; C: 已结束 5d +500%
-    // 预期: A(进行中) > B(30d) > C(5d) —— 注意 B、C 幅度相同，比天数
+  it("range 字段保留雪球全部 8 字段(begin/end/type/percent/summary/points/url/title)", () => {
     const diff = makeDiff([
-      { ticker: "A", name: "a", new_reason_points: [], new_range_trends: [{ begin: 1, end: 9999999999999, type: "LONG", percent: 50, summary: "", points: "" }] },
-      { ticker: "B", name: "b", new_reason_points: [], new_range_trends: [{ begin: 1, end: 1 + 30 * 86400000, type: "LONG", percent: 500, summary: "", points: "" }] },
-      { ticker: "C", name: "c", new_reason_points: [], new_range_trends: [{ begin: 1, end: 1 + 5 * 86400000, type: "SHORT", percent: 500, summary: "", points: "" }] },
+      { ticker: "X", name: "x", today_reason_points: [], continued_ranges: [],
+        new_ranges: [{ begin: 100, end: 200, type: "LONG", percent: 50,
+          summary: "区间总结", points: "驱动因素", url: "https://xq", title: "上涨原因分析" }] },
     ]);
-    const cands = buildCandidates(diff, makeRaw({
-      "A": { range_reason_list: [{ begin: 1, end: 9999999999999, type: "LONG", percent: 50, summary: "", points: "" }] },
-      "B": { range_reason_list: [{ begin: 1, end: 1 + 30 * 86400000, type: "LONG", percent: 500, summary: "", points: "" }] },
-      "C": { range_reason_list: [{ begin: 1, end: 1 + 5 * 86400000, type: "SHORT", percent: 500, summary: "", points: "" }] },
-    }));
-    expect(cands.up.map((c) => c.ticker)).toEqual(["A", "B", "C"]);
+    const cands = buildCandidates(diff);
+    expect(cands.up[0].range).toEqual({
+      begin: 100, end: 200, type: "LONG", percent: 50,
+      summary: "区间总结", points: "驱动因素", url: "https://xq", title: "上涨原因分析",
+    });
   });
 
-  it("picks top_trend as the strongest range (ongoing > days > |pct|)", () => {
-    // 进行中的小涨幅 vs 已结束的大涨幅 → top_trend 选进行中的
+  it("range_kind 标注 B1=continued / B2=new", () => {
     const diff = makeDiff([
-      { ticker: "X", name: "x", new_reason_points: [], new_range_trends: [] },
+      { ticker: "B1", name: "x", today_reason_points: [],
+        continued_ranges: [{ begin: 100, end: 200, type: "LONG", percent: 10, summary: "", points: "", url: "u", title: "t" }],
+        new_ranges: [] },
+      { ticker: "B2", name: "y", today_reason_points: [], continued_ranges: [],
+        new_ranges: [{ begin: 300, end: 400, type: "LONG", percent: 20, summary: "", points: "", url: "u", title: "t" }] },
     ]);
-    const cands = buildCandidates(diff, makeRaw({
-      "X": { range_reason_list: [
-        { begin: 1, end: 2, type: "LONG", percent: 500, summary: "ended-big", points: "" },
-        { begin: 1, end: 9999999999999, type: "SHORT", percent: 10, summary: "ongoing-small", points: "" },
-      ]},
-    }));
-    expect(cands.up[0].top_trend?.percent).toBe(10);
-    expect(cands.up[0].top_trend?.ongoing).toBe(true);
+    const cands = buildCandidates(diff);
+    const b1 = cands.up.find((c) => c.ticker === "B1")!;
+    const b2 = cands.up.find((c) => c.ticker === "B2")!;
+    expect(b1.range_kind).toBe("continued");
+    expect(b2.range_kind).toBe("new");
   });
 
-  it("counts new_today from diff changes", () => {
+  it("days 是 range 跨度天数", () => {
+    const DAY = 24 * 60 * 60 * 1000;
     const diff = makeDiff([
-      { ticker: "A", name: "a",
-        new_reason_points: [{ timestamp: 1 }, { timestamp: 2 }] as any,
-        new_range_trends: [{ begin: 1, end: 2 }] as any },
+      { ticker: "X", name: "x", today_reason_points: [], continued_ranges: [],
+        new_ranges: [{ begin: 1, end: 1 + 30 * DAY, type: "LONG", percent: 50, summary: "", points: "", url: "u", title: "t" }] },
     ]);
-    const cands = buildCandidates(diff, makeRaw({ "A": { range_reason_list: [{ begin: 1, end: 2, type: "LONG", percent: 10, summary: "", points: "" }] } }));
-    expect(cands.up[0].new_today).toEqual({ reasons: 2, ranges: 1 });
+    const cands = buildCandidates(diff);
+    expect(cands.up[0].days).toBe(30);
   });
 
-  it("routes stock to neutral when no ranges (only reason points)", () => {
+  it("today_reasons 保留完整字段(当该股今日还有涨 reason)", () => {
     const diff = makeDiff([
-      { ticker: "N", name: "n", new_reason_points: [{ timestamp: 1 }] as any, new_range_trends: [] },
+      { ticker: "X", name: "x",
+        today_reason_points: [{
+          timestamp: 1000, description: "今日涨幅10%", reason: "利好消息推动", url: "https://reason"
+        }],
+        continued_ranges: [],
+        new_ranges: [{ begin: 100, end: 200, type: "LONG", percent: 50, summary: "", points: "", url: "u", title: "t" }] },
     ]);
-    const cands = buildCandidates(diff, makeRaw({ "N": {} }));
-    expect(cands.neutral).toHaveLength(1);
-    expect(cands.neutral[0].top_trend).toBeNull();
-    expect(cands.up).toHaveLength(0);
-    expect(cands.down).toHaveLength(0);
+    const cands = buildCandidates(diff);
+    expect(cands.up[0].today_reasons).toEqual([
+      { timestamp: 1000, description: "今日涨幅10%", reason: "利好消息推动", url: "https://reason" },
+    ]);
   });
 
-  it("does NOT prioritize LONG over SHORT in selection (type is window length, not direction)", () => {
-    // 回归测试：修正前 typeRank 让 LONG>SHORT，埋没了 SHORT 大涨。
-    // 现在 SHORT +90% 的进行中趋势应被选为 top_trend，而非 LONG 的已结束小趋势。
-    const diff = makeDiff([{ ticker: "S", name: "s", new_reason_points: [], new_range_trends: [] }]);
-    const cands = buildCandidates(diff, makeRaw({
-      "S": { range_reason_list: [
-        { begin: 1, end: 9999999999999, type: "SHORT", percent: 90, summary: "ongoing-short-up", points: "" },
-        { begin: 1, end: 2, type: "LONG", percent: 5, summary: "ended-long-tiny", points: "" },
-      ]},
-    }));
-    expect(cands.up[0].top_trend?.type).toBe("SHORT");
-    expect(cands.up[0].top_trend?.percent).toBe(90);
+  it("today_reasons 为空数组(当该股今日没有涨 reason,只有 range)", () => {
+    const diff = makeDiff([
+      { ticker: "X", name: "x", today_reason_points: [], continued_ranges: [],
+        new_ranges: [{ begin: 100, end: 200, type: "LONG", percent: 50, summary: "", points: "", url: "u", title: "t" }] },
+    ]);
+    const cands = buildCandidates(diff);
+    expect(cands.up[0].today_reasons).toEqual([]);
+  });
+
+  it("sorts up by days 大 > |percent| 大", () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const diff = makeDiff([
+      // A: 30d +50%
+      { ticker: "A", name: "a", today_reason_points: [], continued_ranges: [],
+        new_ranges: [{ begin: 1, end: 1 + 30 * DAY, type: "LONG", percent: 50, summary: "", points: "", url: "u", title: "t" }] },
+      // B: 5d +500%
+      { ticker: "B", name: "b", today_reason_points: [], continued_ranges: [],
+        new_ranges: [{ begin: 1, end: 1 + 5 * DAY, type: "SHORT", percent: 500, summary: "", points: "", url: "u", title: "t" }] },
+    ]);
+    const cands = buildCandidates(diff);
+    expect(cands.up.map((c) => c.ticker)).toEqual(["A", "B"]);
+  });
+
+  it("schema 不再有 down / neutral / top_trend / new_today 字段", () => {
+    const diff = makeDiff([
+      { ticker: "X", name: "x", today_reason_points: [], continued_ranges: [],
+        new_ranges: [{ begin: 1, end: 2, type: "LONG", percent: 10, summary: "", points: "", url: "u", title: "t" }] },
+    ]);
+    const cands = buildCandidates(diff);
+    expect(cands).not.toHaveProperty("down");
+    expect(cands).not.toHaveProperty("neutral");
+    expect(cands.up[0]).not.toHaveProperty("top_trend");
+    expect(cands.up[0]).not.toHaveProperty("new_today");
   });
 });
