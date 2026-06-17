@@ -16,7 +16,8 @@
     "./skills/trading-hot-money",
     "./skills/trading-sentiment",
     "./skills/trading-lockup",
-    "./skills/trading-sector"
+    "./skills/trading-sector",
+    "./skills/watchlist"
   ],
   "configSchema": {
     "models": { "type": "object" },

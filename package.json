@@ -24,6 +24,11 @@
     "analyze": "node dist/cli.js",
     "dashboard": "node dist/dashboard.js",
     "source-health": "node dist/source-health-cli.js",
+    "scan-universe": "python skills/watchlist/scripts/scan_universe.py",
+    "snapshot": "python skills/watchlist/scripts/snapshot.py",
+    "diff": "node dist/diff-cli.js",
+    "candidates": "node dist/candidates-cli.js",
+    "scan-all": "node dist/scan-all-cli.js",
     "prepare": "husky || true"
   },
   "bin": {
