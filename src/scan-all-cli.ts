@@ -54,8 +54,8 @@ function main() {
 
   runPython("scan_universe.py", [], watchlistDir);
   runPython("snapshot.py", ["--date", date, "--concurrency", concurrency], watchlistDir);
-  runNode("diff-cli.js", ["--date", date], watchlistDir);
-  runNode("candidates-cli.js", ["--date", date], watchlistDir);
+  runNode("diff-cli.js", [], watchlistDir);          // 默认最新快照
+  runNode("candidates-cli.js", [], watchlistDir);    // 默认最新 diff
 
   console.log(`\n\u2713 全流程完成: ${date}`);
   console.log(`  候选清单: ${path.join(watchlistDir, "derived", `${date}-candidates.json`)}`);
