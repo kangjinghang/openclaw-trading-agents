@@ -44,6 +44,25 @@ def parse_xueqiu_response(raw: dict) -> dict:
     }
 
 
+def compute_data_date(stocks_out: dict):
+    """从扫描结果算「雪球最新交易日」= max(所有 reason.timestamp ∪ range.end) 转日期。
+    全市场扫完后调用，用于命名文件 + 幂等判定 + raw 元信息。
+    跳过 scan_error 的失败股。返回 None 表示没抓到任何异动数据（异常，不应写文件）。"""
+    max_ms = 0
+    for entry in stocks_out.values():
+        if entry.get("scan_error"):
+            continue
+        for r in entry.get("reason_list") or []:
+            if r.get("timestamp", 0) > max_ms:
+                max_ms = r["timestamp"]
+        for rg in entry.get("range_reason_list") or []:
+            if rg.get("end", 0) > max_ms:
+                max_ms = rg["end"]
+    if max_ms == 0:
+        return None
+    return datetime.fromtimestamp(max_ms / 1000, BEIJING_TZ).strftime("%Y-%m-%d")
+
+
 def fetch_one(symbol: str, begin_ms: int, end_ms: int, timeout: int = 15):
     start = time.monotonic()
     try:
@@ -84,7 +103,7 @@ def main():
     args = parser.parse_args()
 
     watchlist_dir = args.watchlist_dir or os.path.expanduser("~/.openclaw/watchlist")
-    today = args.date or datetime.now(BEIJING_TZ).strftime("%Y-%m-%d")
+    scan_target = args.date or datetime.now(BEIJING_TZ).strftime("%Y-%m-%d")  # 仅查询窗口上限
     concurrency = max(1, min(5, args.concurrency))
 
     universe_path = os.path.join(watchlist_dir, "universe.json")
@@ -98,8 +117,9 @@ def main():
         stocks_list = stocks_list[:args.limit]
 
     total = len(stocks_list)
-    begin_ms, end_ms, begin_date, end_date = compute_window(today)
-    print(f"[snapshot] 扫描 {total} 股 | 窗口 {begin_date}~{end_date} | 并发 {concurrency}", file=sys.stderr)
+    # 查询窗口（传雪球）：基于 scan_target
+    q_begin_ms, q_end_ms, _, _ = compute_window(scan_target)
+    print(f"[snapshot] 扫描 {total} 股 | 查询日 {scan_target} | 并发 {concurrency}", file=sys.stderr)
 
     stocks_out = {}
     succeeded = 0
@@ -109,7 +129,7 @@ def main():
 
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures = {
-            pool.submit(fetch_one_with_retry, s["symbol"], begin_ms, end_ms): s
+            pool.submit(fetch_one_with_retry, s["symbol"], q_begin_ms, q_end_ms): s
             for s in stocks_list
         }
         for future in as_completed(futures):
@@ -130,8 +150,25 @@ def main():
                 print(f"[snapshot] {completed}/{total} (成功 {succeeded}, 失败 {failed}) "
                       f"| {elapsed:.0f}s 已用, ~{eta:.0f}s 剩余", file=sys.stderr)
 
+    # data_date：从数据现算（命名文件 + 幂等 + raw 元信息的权威）
+    data_date = compute_data_date(stocks_out)
+    if data_date is None:
+        print("error: 未抓到任何异动数据（雪球可能异常或全部失败），不写文件", file=sys.stderr)
+        sys.exit(1)
+
+    raw_dir = os.path.join(watchlist_dir, "raw")
+    os.makedirs(raw_dir, exist_ok=True)
+    out_path = os.path.join(raw_dir, f"{data_date}.json")
+
+    # 幂等：data_date 快照已存在 → 跳过
+    if os.path.exists(out_path):
+        print(f"[snapshot] {data_date} 已处理，跳过（幂等）", file=sys.stderr)
+        return
+
+    # 存储窗口元信息：基于 data_date（自洽）
+    begin_ms, end_ms, begin_date, end_date = compute_window(data_date)
     payload = {
-        "scan_date": today,
+        "scan_date": data_date,
         "begin_ms": begin_ms,
         "end_ms": end_ms,
         "begin_date": begin_date,
@@ -143,14 +180,11 @@ def main():
         "stocks": stocks_out,
     }
 
-    raw_dir = os.path.join(watchlist_dir, "raw")
-    os.makedirs(raw_dir, exist_ok=True)
-    out_path = os.path.join(raw_dir, f"{today}.json")
     tmp = out_path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False)
     os.replace(tmp, out_path)
-    print(f"[snapshot] 写入 {out_path} (成功 {succeeded}/{total})", file=sys.stderr)
+    print(f"[snapshot] 写入 {out_path} (数据日 {data_date}, 成功 {succeeded}/{total})", file=sys.stderr)
 
 
 if __name__ == "__main__":
