@@ -145,7 +145,9 @@
 
 ### Size 预估
 
-raw 单日 ~5-8 MB（5533 股，多数空、活跃股带历史），30 天 ~150-240 MB，可接受。
+> ⚠️ 实测修正（2026-06-18）：raw 单日实际约 **32 MB**（非预估 5-8 MB）——活跃股 range_reason_list 历史区间多（最多 22 个，含 summary/points/url 字段）。30 天 ~1 GB，一年 ~8 GB。膨胀问题与保留策略方向见 [`2026-06-18-trading-day-handling-design.md` §12.1](./2026-06-18-trading-day-handling-design.md)。
+
+~~原预估：raw 单日 ~5-8 MB（5533 股，多数空、活跃股带历史），30 天 ~150-240 MB，可接受。~~
 
 ## 4. 参数
 
@@ -297,3 +299,7 @@ for change in diff.changes:
 - raw / diff / candidates 各层不受影响——universe 只是 ticker 清单的来源，换源只改第 0 层
 
 后续若需全量：东财为主源 + akshare 兜底（带限流重试）。列为 TODO，不阻塞第一期。
+
+### 实现偏离：第 2 层 diff 锚点改为 data_date 现算（2026-06-18）
+
+本设计 §5 第 2 层原写"按 timestamp 集合求差"，6f76578 改为"最新一条 + 今日上涨"，又于 2026-06-18 把 diff 锚点 `todayStartMs` 从读 `end_date` 字段改为从数据现算 `data_date`（max of reason.timestamp ∪ range.end）。原因：雪球数据纯交易日驱动、盘后才有当日数据，按自然日当锚点会在节假日/盘中跑时丢异动。详见 [`2026-06-18-trading-day-handling-design.md`](./2026-06-18-trading-day-handling-design.md)。

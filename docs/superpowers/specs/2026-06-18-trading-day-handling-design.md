@@ -196,3 +196,37 @@ baseline 找「上一个已存在的快照」——因为 raw 文件名已经是
 | 06-17 快照最新 `range.end` | 2026-06-17（463 个） | 该快照盘后抓、含当日；验证盘后语义 |
 | range.end 最新日期序列 | 06-17(三) 06-16(二) 06-15(一) 06-12(五) 06-11(四)，周末跳过 | 文件名=交易日，baseline 自动跳过节假日 |
 | 唯特偶 SZ301319 抽查 | baseline LONG end=06-08 → today end=06-17，同 begin，pct 456→518 | B1 延续型判定正确，候选质量可信 |
+
+## 11. 实施记录（2026-06-18）
+
+6 个任务 TDD 完成，commit 链：`2713e32` Task1 → `e93a702` Task2 → `1a61257` Task3 → `99f7c79` Task4 → `5ac5757` Task5 → Task6 迁移（产物在 git 外）。测试：TS 470 + Python 92 全过。final subagent review 判定 READY。
+
+### 实施踩的坑
+
+1. **data_date 现算破坏原有测试语义**：`computeDiff` 改现算后，2 个原测试（"B1 dropped: end 不是今天"、"B2 dropped: end < today"）的 today 数据里 `TODAY_MS` 不再是最大值，`todayStartMs` 变成被测股自己的 range.end，导致被测股误判入选。修复：测试加 DUMMY 股（`percent:-1` 不被选中 + `end:TODAY_MS` 锚定 `todayStartMs`），保留原测试意图。
+
+2. **CLI 顶层 `main()` 阻止单元测试 import**：`diff-cli.ts` / `candidates-cli.ts` 在模块顶层调 `main()`，import 做单测时触发 main → `process.exit`。修复：加 `if (require.main === module) main()` CommonJS 守卫（直接运行跑 main，被 import 不跑）。
+
+3. **Size 预估严重偏低**：§3 预估 raw 5-8 MB/天，实测 **32 MB/天**（4-6 倍）。原因见 §12.1。
+
+4. **限额导致部分任务 controller 直接做**：Task1 有完整 subagent 两道 review；Task2 spec-review subagent 撞 5h API 限额失败、改 controller 读码 review；Task3-6 controller 直接实现，后补 final subagent review 把关（确认达同等质量）。
+
+## 12. 已知问题与未来工作
+
+### 12.1 raw 膨胀（已知，用户确认暂不处理）
+
+**现状**：raw 每个交易日 +1 个文件，约 **32 MB/个**，累积。一年约 250 交易日 × 32M ≈ **8 GB**。当前 64M（2 天）。
+
+**原因**：每个 raw 是全市场 5207 股的完整 14 个月异动历史（雪球原样），约 2901 股带历史区间、活跃股最多 22 个 range（含 `summary/points/url/title` 字段）。**相邻快照大量重叠冗余**——同一只股 06-16 之前的历史在 06-16 和 06-17 两个文件里各存一遍，真正"新的"只有当天那点异动（diff 才几百 K）。
+
+**方向（未来再做）**：
+- **保留策略**：raw 只留最近 N 天（N=7~14，够 baseline + 短期重算），旧的删除或归档。8GB → 几百 M。
+- **gzip 压缩**：raw 是 JSON 文本，压缩率高，32M → 约 3-5M。与保留策略叠加。
+- **不推荐增量存储**：只存"相对上次的 diff"最省空间，但破坏"完整快照"原则、重算 diff 要拼接，复杂度不值得。
+
+**注意**：膨胀的是 raw（事实层），不是 diff/derived（产物层，几百 K/天）。日常用的是 candidates，raw 只在重算 diff 时读。当前 64M 离 8GB 远，暂不处理。
+
+### 12.2 其他
+
+- **Task1 测试 DUMMY 股字段**（可选清理）：DUMMY 股的 range 缺 `summary/points` 字段（code review 指出，not blocker，不影响功能）。
+- **第二期**：LLM 行业归类、板块共振聚合、全自动 cron 调度。
