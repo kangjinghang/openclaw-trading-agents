@@ -96,4 +96,17 @@ export interface CandidatesFile {
     scan_date: string;
     up: CandidateEntry[];
 }
+/** 第3层：单日异动榜的单股（今日上涨 reason，不看区间）。
+ *  pct 从 description 提取（"涨幅X%"或"涨停"≈10），提取不出为 null。 */
+export interface DailyCandidateEntry {
+    ticker: string;
+    name: string;
+    pct: number | null;
+    today_reasons: RawReason[];
+}
+/** 第3层：derived/{date}-daily-candidates.json 结构。按 pct 降序（null 排后）。 */
+export interface DailyCandidatesFile {
+    scan_date: string;
+    up: DailyCandidateEntry[];
+}
 //# sourceMappingURL=types.d.ts.map

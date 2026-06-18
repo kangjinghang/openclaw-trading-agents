@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildCandidates } from "../../../src/watchlist/candidates";
+import { buildCandidates, buildDailyCandidates } from "../../../src/watchlist/candidates";
 import type { DiffFile } from "../../../src/watchlist/types";
 
 function makeDiff(changes: any[]): DiffFile {
@@ -108,5 +108,71 @@ describe("buildCandidates (rich schema, only range stocks, neutral dropped)", ()
     expect(cands).not.toHaveProperty("neutral");
     expect(cands.up[0]).not.toHaveProperty("top_trend");
     expect(cands.up[0]).not.toHaveProperty("new_today");
+  });
+});
+
+describe("buildDailyCandidates (单日异动榜，今日上涨)", () => {
+  it("只收 today_reason_points 非空的股（无今日涨 reason 的丢弃）", () => {
+    const diff = makeDiff([
+      { ticker: "UP", name: "u", today_reason_points: [{ timestamp: 1, description: "今日涨幅5%", reason: "r", url: "u" }], continued_ranges: [], new_ranges: [] },
+      { ticker: "NONE", name: "n", today_reason_points: [], continued_ranges: [{ begin: 1, end: 2, type: "LONG", percent: 50, summary: "", points: "", url: "u", title: "t" }], new_ranges: [] },
+    ]);
+    const daily = buildDailyCandidates(diff);
+    expect(daily.up.map((c) => c.ticker)).toEqual(["UP"]);
+  });
+
+  it("pct 从 description 提取'涨幅X%'", () => {
+    const diff = makeDiff([
+      { ticker: "X", name: "x", today_reason_points: [{ timestamp: 1, description: "今日涨幅10.5%", reason: "r", url: "u" }], continued_ranges: [], new_ranges: [] },
+    ]);
+    expect(buildDailyCandidates(diff).up[0].pct).toBe(10.5);
+  });
+
+  it("涨停算 10（description 含'涨停'但无数值）", () => {
+    const diff = makeDiff([
+      { ticker: "X", name: "x", today_reason_points: [{ timestamp: 1, description: "放量涨停封板", reason: "r", url: "u" }], continued_ranges: [], new_ranges: [] },
+    ]);
+    expect(buildDailyCandidates(diff).up[0].pct).toBe(10);
+  });
+
+  it("pct 提取不出为 null", () => {
+    const diff = makeDiff([
+      { ticker: "X", name: "x", today_reason_points: [{ timestamp: 1, description: "无涨幅数字的描述", reason: "r", url: "u" }], continued_ranges: [], new_ranges: [] },
+    ]);
+    expect(buildDailyCandidates(diff).up[0].pct).toBeNull();
+  });
+
+  it("多条 reason 取最大 pct", () => {
+    const diff = makeDiff([
+      { ticker: "X", name: "x", today_reason_points: [
+        { timestamp: 1, description: "涨幅3%", reason: "r", url: "u" },
+        { timestamp: 2, description: "涨幅8%", reason: "r", url: "u" },
+      ], continued_ranges: [], new_ranges: [] },
+    ]);
+    expect(buildDailyCandidates(diff).up[0].pct).toBe(8);
+  });
+
+  it("排序：pct 降序，null 排后", () => {
+    const diff = makeDiff([
+      { ticker: "LOW", name: "l", today_reason_points: [{ timestamp: 1, description: "涨幅3%", reason: "r", url: "u" }], continued_ranges: [], new_ranges: [] },
+      { ticker: "HIGH", name: "h", today_reason_points: [{ timestamp: 1, description: "涨幅9%", reason: "r", url: "u" }], continued_ranges: [], new_ranges: [] },
+      { ticker: "NULL", name: "n", today_reason_points: [{ timestamp: 1, description: "无数值", reason: "r", url: "u" }], continued_ranges: [], new_ranges: [] },
+    ]);
+    expect(buildDailyCandidates(diff).up.map((c) => c.ticker)).toEqual(["HIGH", "LOW", "NULL"]);
+  });
+
+  it("today_reasons 完整保留（可能多条）", () => {
+    const reason = { timestamp: 1000, description: "今日涨幅10%", reason: "利好", url: "https://r" };
+    const diff = makeDiff([
+      { ticker: "X", name: "x", today_reason_points: [reason], continued_ranges: [], new_ranges: [] },
+    ]);
+    expect(buildDailyCandidates(diff).up[0].today_reasons).toEqual([reason]);
+  });
+
+  it("scan_date 跟随 diff", () => {
+    const diff = makeDiff([
+      { ticker: "X", name: "x", today_reason_points: [{ timestamp: 1, description: "涨幅5%", reason: "r", url: "u" }], continued_ranges: [], new_ranges: [] },
+    ]);
+    expect(buildDailyCandidates(diff).scan_date).toBe("2026-06-17");
   });
 });

@@ -84,9 +84,12 @@ Options:
     const candidates = (0, candidates_1.buildCandidates)(diff);
     const outFile = path.join(watchlistDir, "derived", `${date}-candidates.json`);
     (0, atomic_json_1.writeAtomicJson)(outFile, candidates);
+    const daily = (0, candidates_1.buildDailyCandidates)(diff);
+    const dailyOutFile = path.join(watchlistDir, "derived", `${date}-daily-candidates.json`);
+    (0, atomic_json_1.writeAtomicJson)(dailyOutFile, daily);
     console.log(`候选清单生成: ${date}`);
-    console.log(`  上涨候选(up): ${candidates.up.length}`);
-    console.log(`  输出: ${outFile}`);
+    console.log(`  区间异动榜(up): ${candidates.up.length} → ${outFile}`);
+    console.log(`  单日异动榜(up): ${daily.up.length} → ${dailyOutFile}`);
     const formatTrend = (c) => {
         const pct = c.range.percent > 0 ? `+${c.range.percent}` : `${c.range.percent}`;
         const kind = c.range_kind === "continued" ? "延续" : "新出";

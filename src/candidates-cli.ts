@@ -1,9 +1,9 @@
 import * as os from "os";
 import * as path from "path";
 import * as fs from "fs";
-import { buildCandidates } from "./watchlist/candidates";
+import { buildCandidates, buildDailyCandidates } from "./watchlist/candidates";
 import { writeAtomicJson } from "./watchlist/atomic-json";
-import type { DiffFile, CandidatesFile, CandidateEntry } from "./watchlist/types";
+import type { DiffFile, CandidatesFile, CandidateEntry, DailyCandidatesFile } from "./watchlist/types";
 
 const DEFAULT_WATCHLIST_DIR = path.join(os.homedir(), ".openclaw", "watchlist");
 
@@ -57,9 +57,13 @@ Options:
   const outFile = path.join(watchlistDir, "derived", `${date}-candidates.json`);
   writeAtomicJson(outFile, candidates);
 
+  const daily: DailyCandidatesFile = buildDailyCandidates(diff);
+  const dailyOutFile = path.join(watchlistDir, "derived", `${date}-daily-candidates.json`);
+  writeAtomicJson(dailyOutFile, daily);
+
   console.log(`候选清单生成: ${date}`);
-  console.log(`  上涨候选(up): ${candidates.up.length}`);
-  console.log(`  输出: ${outFile}`);
+  console.log(`  区间异动榜(up): ${candidates.up.length} → ${outFile}`);
+  console.log(`  单日异动榜(up): ${daily.up.length} → ${dailyOutFile}`);
 
   const formatTrend = (c: CandidateEntry): string => {
     const pct = c.range.percent > 0 ? `+${c.range.percent}` : `${c.range.percent}`;
