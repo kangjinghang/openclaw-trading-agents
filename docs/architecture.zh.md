@@ -79,6 +79,7 @@ OpenClaw Trading Agents 是一个 [OpenClaw](https://github.com/openclaw/opencla
 | `trading-hot-money` | 北向资金/主力资金/龙虎榜 | 东方财富 | akshare |
 | `trading-lockup` | 解禁/内部人交易 | 东方财富 / mootdx F10 | akshare |
 | `trading-sector` | 行业排名/概念板块 | 东方财富 / 百度 | akshare |
+| `watchlist` | 股票池异动归因（雪球，独立子系统） | 雪球 abnormal/reasons.json | akshare（universe 清单） |
 
 ### Prompt 层（`skills/trading-analysis/prompts/`）
 
@@ -158,6 +159,46 @@ report_dir/
 ```
 
 LLM 调用溯源存储在 `~/.openclaw/traces/<ticker>_<date>/`，每次调用一个 JSON 文件，记录完整输入输出。
+
+## 股票池维护子系统（watchlist）
+
+除单股分析（`trading_quick`/`trading_full`）外，还有一个独立的**股票池自动维护**子系统：每日扫描全市场雪球异动，产出候选股供后续分析。
+
+### 分层数据管道
+
+```
+第0层 universe.json                       全市场 ticker 清单（akshare，每日刷新）
+   ↓
+第1层 raw/{data_date}.json                雪球异动全扫快照（不可变事实，~32MB/天）
+   ↓
+第2层 diff/{data_date}.json               今日 vs baseline 的新增异动（可重跑）
+   ↓
+第3层 derived/{data_date}-candidates.json 排序后的候选清单（可重跑）
+```
+
+**核心原则**：raw 不可变（历史定格，雪球数据滚动，旧数据抓不回）；diff/derived 是解读，可随时从 raw 重跑。
+
+### data_date 驱动（交易日处理）
+
+雪球数据纯交易日驱动、盘后才有当日数据。管道按**数据实际最新交易日**（`data_date = max(reason.timestamp ∪ range.end)`，现算不持久化）驱动，而非自然日：
+
+- 文件名 = `data_date`
+- diff 锚点 = `data_date`（从数据现算，不读文件名）
+- 幂等：`data_date` 快照已存在则跳过 → 节假日 / 盘中 / 重复跑自动正确
+
+详见 [`superpowers/specs/2026-06-18-trading-day-handling-design.md`](superpowers/specs/2026-06-18-trading-day-handling-design.md)。
+
+### 组件
+
+| 文件 | 职责 |
+|------|------|
+| `skills/watchlist/scripts/scan_universe.py` | 第0层：akshare 全市场清单 |
+| `skills/watchlist/scripts/snapshot.py` | 第1层：雪球异动全扫 + `data_date` 命名 + 幂等 |
+| `src/watchlist/diff.ts` | 第2层：`computeDiff`（`data_date` 现算锚点） |
+| `src/watchlist/candidates.ts` | 第3层：候选排序 |
+| `src/diff-cli.ts` / `candidates-cli.ts` / `scan-all-cli.ts` | 单层 / 串跑 CLI |
+
+> 已知问题：raw 膨胀（32MB/天 ≈ 8GB/年），保留策略（留 N 天 + gzip）待未来。详见交易日处理 spec §12.1。
 
 ## 配置
 

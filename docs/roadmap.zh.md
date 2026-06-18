@@ -44,6 +44,21 @@
 
 ---
 
+## 股票池自动维护（已实现）
+
+独立于单股分析的子系统，每日扫描雪球异动维护候选股池：
+
+| 阶段 | 内容 | 状态 |
+|------|------|------|
+| 第一期 | 分层管道（universe/raw/diff/derived）+ 雪球异动全扫 + diff + 候选排序 | ✅ 已完成 |
+| 交易日处理 | data_date 驱动（解决节假日/盘中跑错数据）+ 幂等 + raw 不可变 | ✅ 已完成（2026-06-18） |
+| 保留策略 | raw 膨胀（32M/天≈8GB/年）→ 留 N 天 + gzip | ⏳ 未来（暂不处理，当前 64M） |
+| 第二期 | LLM 行业归类、板块共振聚合、全自动 cron 调度 | ⏳ 待规划 |
+
+设计：[`superpowers/specs/2026-06-17-watchlist-stock-pool-design.md`](superpowers/specs/2026-06-17-watchlist-stock-pool-design.md) + [`superpowers/specs/2026-06-18-trading-day-handling-design.md`](superpowers/specs/2026-06-18-trading-day-handling-design.md)
+
+---
+
 ## Phase 5：待规划
 
 | # | 方向 | 说明 |
