@@ -33,6 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.findLatestDiff = findLatestDiff;
 const os = __importStar(require("os"));
 const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
@@ -44,21 +45,35 @@ function readJson(fp) {
         return null;
     return JSON.parse(fs.readFileSync(fp, "utf-8"));
 }
+/** diff 目录里日期最大的文件（= 最新 data_date 的 diff）。不存在返回 null。 */
+function findLatestDiff(dir) {
+    const diffDir = path.join(dir, "diff");
+    if (!fs.existsSync(diffDir))
+        return null;
+    const dates = fs.readdirSync(diffDir)
+        .map((f) => f.replace(/\.json$/, ""))
+        .sort();
+    return dates.length > 0 ? dates[dates.length - 1] : null;
+}
 function main() {
     const args = process.argv.slice(2);
     const help = args.includes("--help") || args.includes("-h");
     const watchlistDir = process.env.WATCHLIST_DIR ?? DEFAULT_WATCHLIST_DIR;
     const dateIdx = args.indexOf("--date");
-    const date = dateIdx >= 0 && args[dateIdx + 1] ? args[dateIdx + 1] : new Date().toISOString().split("T")[0];
+    const date = dateIdx >= 0 && args[dateIdx + 1] ? args[dateIdx + 1] : findLatestDiff(watchlistDir);
     if (help) {
         console.log(`Usage: npm run candidates [-- --date <YYYY-MM-DD>]
 
 Options:
-  --date <D>    扫描日（默认今天）
+  --date <D>    扫描日（默认最新 diff）
   --help        显示帮助
-  WATCHLIST_DIR 存储路径环境变量（默认 ${DEFAULT_WATCHLIST_DIR}）
+  WATCHLIST_DIR 存储路径环境变量（默认 ${DEFAULT_WATCHLIST_DIR})
 `);
         process.exit(0);
+    }
+    if (!date) {
+        console.error(`error: 没有任何 diff，请先运行 npm run diff`);
+        process.exit(1);
     }
     const diff = readJson(path.join(watchlistDir, "diff", `${date}.json`));
     if (!diff) {
@@ -83,5 +98,6 @@ Options:
         console.log(`    ${c.ticker} ${c.name}: ${formatTrend(c)}`);
     }
 }
-main();
+if (require.main === module)
+    main();
 //# sourceMappingURL=candidates-cli.js.map
