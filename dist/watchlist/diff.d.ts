@@ -1,8 +1,11 @@
 import type { RawSnapshotFile, DiffFile } from "./types";
-/** 从 raw 快照的数据现算「雪球最新交易日」的毫秒时间戳（某天 00:00 北京时间）。
- *  = max(所有 reason.timestamp ∪ 所有 range.end)，跳过 scan_error 的失败股。
- *  取自数据而非文件名/元信息：节假日或盘中抓的快照，数据最新日可能 < 文件名日期，
- *  锚点必须跟随实际数据，diff 才不会漏掉真实异动。全空数据返回 0。 */
+/** 从 raw 快照的数据现算「雪球最新交易日」的毫秒时间戳（归一化到当天 00:00 北京时间）。
+ *  = max(所有 reason.timestamp ∪ 所有 range.end)，跳过 scan_error 的失败股，
+ *    再向下取整到当天 00:00:00。
+ *
+ *  语义：这是"雪球数据视角的最新交易日"，不是日历今天——盘前抓的快照、或雪球当天
+ *  还没更新时，这个值会早于 scan_date。diff 用它判断"今天仍在延续的趋势"是否 end 到位。
+ *  全空数据返回 0。 */
 export declare function computeDataDateMs(raw: RawSnapshotFile): number;
 /**
  * Compute diff between today's snapshot and a baseline snapshot.

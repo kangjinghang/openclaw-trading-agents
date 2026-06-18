@@ -105,6 +105,19 @@ Options:
     const outDir = path.join(watchlistDir, "diff");
     const outFile = path.join(outDir, `${date}.json`);
     (0, atomic_json_1.writeAtomicJson)(outFile, diff);
+    // 滞后检测：锚点（雪球数据视角的最新交易日）若显著早于 scan_date，说明雪球当天
+    // 还没更新数据（盘前跑了 / 节假日 / 接口延迟），diff 选出的"今天仍在延续的趋势"
+    // 实际是几天前的。给个 warning，提示用户盘后重跑。
+    const dataDateMs = (0, diff_1.computeDataDateMs)(today);
+    if (dataDateMs > 0) {
+        const scanMs = Date.parse(date + "T00:00:00+08:00");
+        const lagDays = Math.round((scanMs - dataDateMs) / (24 * 60 * 60 * 1000));
+        if (lagDays >= 3) {
+            const dataDate = new Date(dataDateMs).toLocaleDateString("sv-SE", { timeZone: "Asia/Shanghai" });
+            console.error(`  ⚠ 雪球数据最新日为 ${dataDate}，比 scan_date ${date} 早 ${lagDays} 天`);
+            console.error(`    可能是盘前运行或接口延迟；建议收盘后（约 20:00）重跑 snapshot + diff`);
+        }
+    }
     console.log(`diff 完成: ${date} vs ${baseline?.scan_date ?? "(首次扫描)"}`);
     console.log(`  变更股票数: ${diff.changes.length}`);
     console.log(`  输出: ${outFile}`);

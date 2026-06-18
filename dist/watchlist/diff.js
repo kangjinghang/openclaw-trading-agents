@@ -9,10 +9,30 @@ function latestRange(ranges) {
         return null;
     return ranges.reduce((a, b) => (b.end > a.end ? b : a));
 }
-/** 从 raw 快照的数据现算「雪球最新交易日」的毫秒时间戳（某天 00:00 北京时间）。
- *  = max(所有 reason.timestamp ∪ 所有 range.end)，跳过 scan_error 的失败股。
- *  取自数据而非文件名/元信息：节假日或盘中抓的快照，数据最新日可能 < 文件名日期，
- *  锚点必须跟随实际数据，diff 才不会漏掉真实异动。全空数据返回 0。 */
+/** 一天的毫秒数。 */
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** 把任意毫秒时间戳向下取整到「当天 00:00:00 北京时间」。
+ *
+ * 防御性归一化：雪球的 range.end / reason.timestamp 实测都是"某天 00:00:00 北京"精度，
+ * 本函数确保万一某天返回非 00:00 精度时锚点仍是 00:00，与 range.end 的 === 比较成立。
+ * 对正常 00:00 数据是 no-op。
+ *
+ * 注意：raw 顶层的 end_ms（snapshot 写的查询上界 23:59:59）不参与 computeDataDateMs
+ * ——后者只读 stocks 里的 reason.timestamp / range.end。
+ *
+ * 北京时间 UTC+8：一个北京日期的 00:00 = UTC 前一天 16:00。
+ * 用 `ms + 8h` 后对齐到"北京日的边界"再取整，最后减回 8h。 */
+function toBeijingMidnight(ms) {
+    const OFFSET = 8 * 60 * 60 * 1000;
+    return Math.floor((ms + OFFSET) / DAY_MS) * DAY_MS - OFFSET;
+}
+/** 从 raw 快照的数据现算「雪球最新交易日」的毫秒时间戳（归一化到当天 00:00 北京时间）。
+ *  = max(所有 reason.timestamp ∪ 所有 range.end)，跳过 scan_error 的失败股，
+ *    再向下取整到当天 00:00:00。
+ *
+ *  语义：这是"雪球数据视角的最新交易日"，不是日历今天——盘前抓的快照、或雪球当天
+ *  还没更新时，这个值会早于 scan_date。diff 用它判断"今天仍在延续的趋势"是否 end 到位。
+ *  全空数据返回 0。 */
 function computeDataDateMs(raw) {
     let maxTs = 0;
     for (const entry of Object.values(raw.stocks)) {
@@ -27,7 +47,8 @@ function computeDataDateMs(raw) {
                 maxTs = rg.end;
         }
     }
-    return maxTs;
+    // 无数据(maxTs=0)直接返回 0，不归一化（归一化 0 会得到负数时区偏移，无意义）
+    return maxTs === 0 ? 0 : toBeijingMidnight(maxTs);
 }
 /**
  * Compute diff between today's snapshot and a baseline snapshot.

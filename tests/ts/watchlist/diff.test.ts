@@ -278,11 +278,12 @@ describe("computeDiff", () => {
 
   it("computeDataDateMs: 取所有 reason.timestamp ∪ range.end 的最大值", () => {
     const snap = makeSnapshot(TODAY, {
-      "A": { name: "x", reason_list: [{ timestamp: 1000 }], range_reason_list: [{ end: 2000 }] },
-      "B": { name: "y", reason_list: [{ timestamp: 5000 }], range_reason_list: [] },
+      "A": { name: "x", reason_list: [{ timestamp: dayMs("2026-06-10") }], range_reason_list: [{ end: dayMs("2026-06-12") }] },
+      "B": { name: "y", reason_list: [{ timestamp: dayMs("2026-06-15") }], range_reason_list: [] },
       "C": { name: "z", scan_error: "timeout" },  // 失败股跳过
     });
-    expect(computeDataDateMs(snap)).toBe(5000);
+    // 最大值 = 06-15，归一化到当天 00:00 北京时间 = dayMs("2026-06-15")
+    expect(computeDataDateMs(snap)).toBe(dayMs("2026-06-15"));
   });
 
   it("computeDataDateMs: 全空数据返回 0", () => {
@@ -291,5 +292,35 @@ describe("computeDiff", () => {
       "B": { name: "y", scan_error: "timeout" },
     });
     expect(computeDataDateMs(snap)).toBe(0);
+  });
+
+  it("computeDataDateMs: 精度归一化 — reason.timestamp 带 23:59:59 也归一到当天 00:00", () => {
+    // 雪球 range.end 恒为当天 00:00，但 snapshot.py 写的 end_ms 是当天 23:59:59。
+    // 若数据里混入非 00:00 精度的时间戳，锚点必须归一到 00:00，否则与 range.end === 比较失败。
+    const endOfDay = Date.parse("2026-06-15T23:59:59+08:00"); // 当天最晚一刻
+    const snap = makeSnapshot(TODAY, {
+      "A": { name: "x", reason_list: [{ timestamp: endOfDay }] },
+    });
+    expect(computeDataDateMs(snap)).toBe(dayMs("2026-06-15")); // 归一到 06-15 00:00
+  });
+
+  it("归一化 no-op：正常 00:00 数据下 computeDataDateMs 不改变值，B2 正常入选", () => {
+    // 归一化对雪球正常的 00:00 精度数据是 no-op（toBeijingMidnight(00:00)===00:00），
+    // 不影响 computeDiff 的 B2 判定。注：raw.end_ms（此处 23:59:59）不参与
+    // computeDataDateMs（只读 stocks 内 reason/range），这里只是构造真实快照结构。
+    const baseline = makeSnapshot("2026-06-17", {});
+    const today: RawSnapshotFile = {
+      scan_date: TODAY, begin_ms: 0,
+      end_ms: Date.parse(TODAY + "T23:59:59+08:00"),  // 23:59:59（snapshot 实际写入的）
+      begin_date: TODAY, end_date: TODAY,
+      window_months: 14, scanned: 1, succeeded: 1, failed: 0,
+      stocks: {
+        "SH688146": { name: "x", range_reason_list: [
+          { begin: 200, end: TODAY_MS, type: "LONG", percent: 50, summary: "", points: "" }, // end=00:00
+        ] },
+      },
+    };
+    const diff = computeDiff(today, baseline);
+    expect(diff.changes).toHaveLength(1); // 归一化后锚点匹配，B2 入选
   });
 });
