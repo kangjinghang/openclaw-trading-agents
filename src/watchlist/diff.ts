@@ -7,6 +7,24 @@ function latestRange(ranges: RawRange[] | undefined): RawRange | null {
   return ranges.reduce((a, b) => (b.end > a.end ? b : a));
 }
 
+/** 从 raw 快照的数据现算「雪球最新交易日」的毫秒时间戳（某天 00:00 北京时间）。
+ *  = max(所有 reason.timestamp ∪ 所有 range.end)，跳过 scan_error 的失败股。
+ *  取自数据而非文件名/元信息：节假日或盘中抓的快照，数据最新日可能 < 文件名日期，
+ *  锚点必须跟随实际数据，diff 才不会漏掉真实异动。全空数据返回 0。 */
+export function computeDataDateMs(raw: RawSnapshotFile): number {
+  let maxTs = 0;
+  for (const entry of Object.values(raw.stocks)) {
+    if (entry.scan_error) continue;
+    for (const r of entry.reason_list ?? []) {
+      if (r.timestamp > maxTs) maxTs = r.timestamp;
+    }
+    for (const rg of entry.range_reason_list ?? []) {
+      if (rg.end > maxTs) maxTs = rg.end;
+    }
+  }
+  return maxTs;
+}
+
 /**
  * Compute diff between today's snapshot and a baseline snapshot.
  *
@@ -27,7 +45,7 @@ function latestRange(ranges: RawRange[] | undefined): RawRange | null {
 export function computeDiff(today: RawSnapshotFile, baseline: RawSnapshotFile | null): DiffFile {
   const changes: DiffChange[] = [];
   // 今天 00:00:00 北京时间的毫秒时间戳(雪球 range.end 的精度)
-  const todayStartMs = Date.parse(today.end_date + "T00:00:00+08:00");
+  const todayStartMs = computeDataDateMs(today);
 
   for (const [ticker, todayEntry] of Object.entries(today.stocks)) {
     if (todayEntry.scan_error) continue;

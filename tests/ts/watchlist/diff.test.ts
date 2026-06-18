@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeDiff } from "../../../src/watchlist/diff";
+import { computeDiff, computeDataDateMs } from "../../../src/watchlist/diff";
 import type { RawSnapshotFile } from "../../../src/watchlist/types";
 
 function makeSnapshot(date: string, stocks: Record<string, any>): RawSnapshotFile {
@@ -119,6 +119,9 @@ describe("computeDiff", () => {
       "SH688146": { name: "x", range_reason_list: [
         { begin: 100, end: YESTERDAY_MS, type: "LONG", percent: 50, summary: "", points: "" },
       ] },
+      // 添加一个 dummy 股确保 computeDataDateMs 返回 TODAY_MS（而非 YESTERDAY_MS）
+      // percent < 0 确保 dummy 自己不会被选中
+      "DUMMY": { name: "dummy", range_reason_list: [{ begin: 999, end: TODAY_MS, type: "LONG", percent: -1 }] },
     });
     const diff = computeDiff(today, baseline);
     // end 从 PAST_MS → YESTERDAY_MS 变大了,但不是今天 → 不选
@@ -163,6 +166,9 @@ describe("computeDiff", () => {
       "SH688146": { name: "x", range_reason_list: [
         { begin: 100, end: PAST_MS, type: "LONG", percent: 50, summary: "", points: "" },
       ] },
+      // 添加一个 dummy 股确保 computeDataDateMs 返回 TODAY_MS（而非 PAST_MS）
+      // percent < 0 确保 dummy 自己不会被选中
+      "DUMMY": { name: "dummy", range_reason_list: [{ begin: 999, end: TODAY_MS, type: "LONG", percent: -1 }] },
     });
     const diff = computeDiff(today, baseline);
     expect(diff.changes).toHaveLength(0);
@@ -252,5 +258,38 @@ describe("computeDiff", () => {
     expect(diff.changes[0].today_reason_points).toHaveLength(1);
     expect(diff.changes[0].continued_ranges).toEqual([]);
     expect(diff.changes[0].new_ranges).toEqual([]);
+  });
+
+  it("todayStartMs 取自数据而非 end_date：数据日期 < end_date 时锚点跟随数据", () => {
+    // 模拟节假日/盘中：文件名 end_date=06-18，但雪球数据最新只到 06-17
+    // 旧逻辑(读 end_date)会因数据没 06-18 而 changes=[]（错）；新逻辑锚点=06-17 → B2 入选
+    const baseline = makeSnapshot("2026-06-16", {});
+    const today = makeSnapshot(TODAY, {  // TODAY="2026-06-18"，但数据里没有 06-18
+      "SH688146": { name: "x", range_reason_list: [
+        { begin: 200, end: YESTERDAY_MS, type: "LONG", percent: 50, summary: "", points: "" },
+      ] },
+    });
+    const diff = computeDiff(today, baseline);
+    expect(diff.changes).toHaveLength(1);
+    expect(diff.changes[0].new_ranges).toEqual([
+      { begin: 200, end: YESTERDAY_MS, type: "LONG", percent: 50, summary: "", points: "" },
+    ]);
+  });
+
+  it("computeDataDateMs: 取所有 reason.timestamp ∪ range.end 的最大值", () => {
+    const snap = makeSnapshot(TODAY, {
+      "A": { name: "x", reason_list: [{ timestamp: 1000 }], range_reason_list: [{ end: 2000 }] },
+      "B": { name: "y", reason_list: [{ timestamp: 5000 }], range_reason_list: [] },
+      "C": { name: "z", scan_error: "timeout" },  // 失败股跳过
+    });
+    expect(computeDataDateMs(snap)).toBe(5000);
+  });
+
+  it("computeDataDateMs: 全空数据返回 0", () => {
+    const snap = makeSnapshot(TODAY, {
+      "A": { name: "x" },
+      "B": { name: "y", scan_error: "timeout" },
+    });
+    expect(computeDataDateMs(snap)).toBe(0);
   });
 });
