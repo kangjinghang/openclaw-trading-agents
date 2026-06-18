@@ -23,13 +23,23 @@ function findLatestBaseline(today: string, dir: string): string | null {
   return dates.length > 0 ? dates[dates.length - 1] : null;
 }
 
+/** raw 目录里日期最大的快照（= 最新 data_date）。目录不存在或空返回 null。 */
+export function findLatestSnapshot(dir: string): string | null {
+  const rawDir = path.join(dir, "raw");
+  if (!fs.existsSync(rawDir)) return null;
+  const dates = fs.readdirSync(rawDir)
+    .map((f) => f.replace(/\.json$/, ""))
+    .sort();
+  return dates.length > 0 ? dates[dates.length - 1] : null;
+}
+
 function main(): void {
   const args = process.argv.slice(2);
   const help = args.includes("--help") || args.includes("-h");
   const watchlistDir = process.env.WATCHLIST_DIR ?? DEFAULT_WATCHLIST_DIR;
 
   const dateIdx = args.indexOf("--date");
-  const date = dateIdx >= 0 && args[dateIdx + 1] ? args[dateIdx + 1] : new Date().toISOString().split("T")[0];
+  const date = dateIdx >= 0 && args[dateIdx + 1] ? args[dateIdx + 1] : findLatestSnapshot(watchlistDir);
 
   const baselineIdx = args.indexOf("--baseline");
   const explicitBaseline = baselineIdx >= 0 ? args[baselineIdx + 1] : undefined;
@@ -38,12 +48,17 @@ function main(): void {
     console.log(`Usage: npm run diff [-- --date <YYYY-MM-DD>] [-- --baseline <YYYY-MM-DD>]
 
 Options:
-  --date <D>        扫描日（默认今天）
+  --date <D>        扫描日（默认最新快照）
   --baseline <D>    基线快照日（默认最近可用）
   --help            显示帮助
-  WATCHLIST_DIR     存储路径环境变量（默认 ${DEFAULT_WATCHLIST_DIR}）
+  WATCHLIST_DIR     存储路径环境变量（默认 ${DEFAULT_WATCHLIST_DIR})
 `);
     process.exit(0);
+  }
+
+  if (!date) {
+    console.error(`error: 没有任何快照，请先运行 npm run snapshot`);
+    process.exit(1);
   }
 
   const today = readRaw(date, watchlistDir);
@@ -82,4 +97,4 @@ Options:
   }
 }
 
-main();
+if (require.main === module) main();
