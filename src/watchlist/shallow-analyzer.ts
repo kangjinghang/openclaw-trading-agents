@@ -1,6 +1,12 @@
 import type { AnalystReport, RiskFlag, RiskReport, StockReport } from "./rebalance-types";
 import type { CandidateMeta } from "./candidate-selector";
 
+export type ShallowLlmCaller = (input: {
+  role: "analyst" | "risk";
+  data: StockData;
+  analyst?: AnalystReport;
+}) => Promise<string>;
+
 export interface StockData {
   ticker: string;
   name: string;
@@ -174,4 +180,29 @@ export function buildStockReport(
     locked: meta.locked,
     ranker_score: meta.ranker_score,
   };
+}
+
+/** 对所有候选/持仓股并行跑 analyst + risk 双 call。
+ *  单股失败（LLM 异常或数据缺失）跳过，rebalancer 看不到该股。 */
+export async function analyzeAll(
+  metas: CandidateMeta[],
+  dataByTicker: Map<string, StockData>,
+  caller: ShallowLlmCaller,
+): Promise<StockReport[]> {
+  const results = await Promise.all(metas.map(async meta => {
+    const data = dataByTicker.get(meta.ticker);
+    if (!data) return null;
+    try {
+      const analystContent = await caller({ role: "analyst", data });
+      const analyst = parseAnalystReport(analystContent);
+      if (!analyst) return null;
+      const riskContent = await caller({ role: "risk", data, analyst });
+      const risk = parseRiskReport(riskContent);
+      if (!risk) return null;
+      return buildStockReport(meta, data.sector, analyst, risk);
+    } catch {
+      return null;
+    }
+  }));
+  return results.filter((r): r is StockReport => r !== null);
 }

@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { formatAnalystPrompt, parseAnalystReport, formatRiskPrompt, parseRiskReport, buildStockReport } from "../../../src/watchlist/shallow-analyzer";
+import { formatAnalystPrompt, parseAnalystReport, formatRiskPrompt, parseRiskReport, buildStockReport, analyzeAll, type ShallowLlmCaller } from "../../../src/watchlist/shallow-analyzer";
 import type { AnalystReport } from "../../../src/watchlist/rebalance-types";
 import type { CandidateMeta } from "../../../src/watchlist/candidate-selector";
+import type { StockData } from "../../../src/watchlist/shallow-analyzer";
 
 describe("formatAnalystPrompt", () => {
   it("渲染包含 ticker/sector + 数据摘要", () => {
@@ -122,5 +123,57 @@ describe("buildStockReport", () => {
       ranker_score: 9.2,
       overall_risk: "medium",
     });
+  });
+});
+
+describe("analyzeAll", () => {
+  it("对每只股跑 2 calls（analyst + risk），返回 StockReport 数组", async () => {
+    const metas: CandidateMeta[] = [
+      { ticker: "SZ300319", name: "麦捷科技", is_held: false, current_weight: 0, days_held: 0, locked: false, ranker_score: 9.2 },
+      { ticker: "SH600183", name: "生益科技", is_held: false, current_weight: 0, days_held: 0, locked: false, ranker_score: 9.0 },
+    ];
+    const dataByTicker = new Map<string, StockData>([
+      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "电子", kline: { pct_5d: 1, pct_20d: 2, support: 1, resistance: 2 }, news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 1, pb: 1, rev_q1: 1, np_q1: 1 } }],
+      ["SH600183", { ticker: "SH600183", name: "生益科技", sector: "PCB", kline: { pct_5d: 1, pct_20d: 2, support: 1, resistance: 2 }, news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 1, pb: 1, rev_q1: 1, np_q1: 1 } }],
+    ]);
+    const mockCaller: ShallowLlmCaller = async ({ role }) => {
+      if (role === "analyst") {
+        return JSON.stringify({ thesis: "x", fitness_score: 8, data_freshness: "2026-06-21", key_signals: [], data_gaps: [] });
+      } else {
+        return JSON.stringify({ risk_flags: [], overall_risk: "low", deal_breaker: false });
+      }
+    };
+    const reports = await analyzeAll(metas, dataByTicker, mockCaller);
+    expect(reports).toHaveLength(2);
+    expect(reports[0]).toMatchObject({ ticker: "SZ300319", fitness_score: 8, overall_risk: "low" });
+  });
+
+  it("单股 LLM 失败 → 该股跳过", async () => {
+    const metas: CandidateMeta[] = [
+      { ticker: "OK", name: "ok", is_held: false, current_weight: 0, days_held: 0, locked: false, ranker_score: 8.0 },
+      { ticker: "FAIL", name: "fail", is_held: false, current_weight: 0, days_held: 0, locked: false, ranker_score: 7.0 },
+    ];
+    const dataByTicker = new Map<string, StockData>();
+    for (const m of metas) {
+      dataByTicker.set(m.ticker, { ticker: m.ticker, name: m.name, sector: "x", kline: { pct_5d: 1, pct_20d: 1, support: 1, resistance: 2 }, news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 1, pb: 1, rev_q1: 1, np_q1: 1 } });
+    }
+    const mockCaller: ShallowLlmCaller = async ({ role, data }) => {
+      if (data.ticker === "FAIL") throw new Error("network");
+      return role === "analyst"
+        ? JSON.stringify({ thesis: "x", fitness_score: 7, data_freshness: "2026-06-21", key_signals: [], data_gaps: [] })
+        : JSON.stringify({ risk_flags: [], overall_risk: "low", deal_breaker: false });
+    };
+    const reports = await analyzeAll(metas, dataByTicker, mockCaller);
+    expect(reports.map(r => r.ticker)).toEqual(["OK"]);
+  });
+
+  it("dataByTicker 里缺该股 → 跳过", async () => {
+    const metas: CandidateMeta[] = [
+      { ticker: "NODATA", name: "nodata", is_held: false, current_weight: 0, days_held: 0, locked: false, ranker_score: 6.0 },
+    ];
+    const dataByTicker = new Map<string, StockData>();  // 空
+    const mockCaller: ShallowLlmCaller = async () => "x";
+    const reports = await analyzeAll(metas, dataByTicker, mockCaller);
+    expect(reports).toHaveLength(0);
   });
 });
