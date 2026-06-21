@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatRebalancerPrompt, parseRebalancePlan } from "../../../src/watchlist/rebalancer";
+import { formatRebalancerPrompt, parseRebalancePlan, rebalancePipeline } from "../../../src/watchlist/rebalancer";
 import type { StockReport, Holdings, LastRebalance, RebalanceConstraints } from "../../../src/watchlist/rebalance-types";
 
 const C: RebalanceConstraints = { single_name: 0.15, single_sector: 0.30, daily_turnover: 0.30, cash_reserve: 0.10 };
@@ -144,5 +144,86 @@ describe("runRebalanceWithRevise", () => {
     const caller: RebalanceLlmCaller = async () => { throw new Error("network"); };
     const r = await runRebalanceWithRevise(caller, "fake-prompt", ctx, DEFAULT_REBALANCE_CONFIG);
     expect(r.status).toBe("llm_failed");
+  });
+});
+
+import type { ShallowLlmCaller, StockData } from "../../../src/watchlist/shallow-analyzer";
+import type { ScanSummary } from "../../../src/watchlist/types";
+import type { RebalanceLlmCaller } from "../../../src/watchlist/rebalancer";
+
+describe("rebalancePipeline (integration)", () => {
+  it("完整 pipeline：候选 + 持仓 → rebalance → validate → execution_plan", async () => {
+    const scan: ScanSummary = {
+      scan_date: "2026-06-21", total_candidates: 178,
+      groups: { LONG: { total: 35, ranked: 7, excluded: 5, fallback: false }, SHORT: { total: 44, pre_filter: 138, post_common_filter: 110, ranked: 8, excluded: 5, fallback: false } },
+      top_picks: [
+        { ticker: "SZ300319", name: "麦捷科技", score: 9.5, group: "LONG", percent: 134, days: 55, range_kind: "new", reason: "r" },
+      ],
+    };
+    const holdings: Holdings = {
+      updated_at: "x", cash_pct: 0.80,
+      positions: [{ ticker: "SH600519", name: "贵州茅台", weight: 0.15, entry_price: 1700, entry_date: "2026-05-20", shares: 100, sector: "白酒" }],
+    };
+    const lastRebalance: LastRebalance = { date: "2026-06-14", actions: [] };
+
+    const dataByTicker = new Map<string, StockData>([
+      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "电子", kline: { pct_5d: 5, pct_20d: 20, support: 25, resistance: 30 }, news: ["n1"], hot_money: { net_5d: 1e8 }, fundamentals: { pe: 50, pb: 5, rev_q1: 1e9, np_q1: 1e8 } }],
+      ["SH600519", { ticker: "SH600519", name: "贵州茅台", sector: "白酒", kline: { pct_5d: -1, pct_20d: 2, support: 1700, resistance: 1800 }, news: [], hot_money: { net_5d: -5e7 }, fundamentals: { pe: 30, pb: 10, rev_q1: 4e9, np_q1: 2e9 } }],
+    ]);
+
+    const shallowCaller: ShallowLlmCaller = async ({ role }) => {
+      if (role === "analyst") return JSON.stringify({ thesis: "thesis x", fitness_score: 8, data_freshness: "2026-06-21", key_signals: ["sig"], data_gaps: [] });
+      return JSON.stringify({ risk_flags: [], overall_risk: "low", deal_breaker: false });
+    };
+    const rebalanceCaller: RebalanceLlmCaller = async () => JSON.stringify({
+      evaluations: [
+        { ticker: "SZ300319", judgment: "BUY", brief: "ok" },
+        { ticker: "SH600519", judgment: "HOLD", brief: "hold" },
+      ],
+      actions: [
+        { action: "BUY", ticker: "SZ300319", name: "麦捷科技", current_weight: 0, target_weight: 0.10, delta: 0.10, reason: "TLVR 电感放量", priority: 3 },
+        { action: "HOLD", ticker: "SH600519", name: "贵州茅台", current_weight: 0.15, target_weight: 0.15, delta: 0, reason: "hold", priority: 5 },
+      ],
+      portfolio_after: { positions: [{ ticker: "SZ300319", weight: 0.10 }, { ticker: "SH600519", weight: 0.15 }], cash_pct: 0.75 },
+      summary: "buy 麦捷科技",
+    });
+
+    const result = await rebalancePipeline({
+      scan, holdings, lastRebalance, currentDate: "2026-06-21",
+      shallowCaller, rebalanceCaller, dataByTicker,
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.reports).toHaveLength(2);
+    expect(result.rebalancer_output.actions).toHaveLength(2);
+    expect(result.execution_plan.execution_sequence).toHaveLength(1);  // HOLD 过滤
+    expect(result.execution_plan.execution_sequence[0].action).toBe("BUY");
+    expect(result.constraint_check.passed).toBe(true);
+  });
+
+  it("shallow-analyzer 数据缺失 → 候选股跳过，rebalancer 看不到", async () => {
+    const scan: ScanSummary = {
+      scan_date: "2026-06-21", total_candidates: 1,
+      groups: { LONG: { total: 1, ranked: 1, excluded: 0, fallback: false }, SHORT: { total: 0, pre_filter: 0, post_common_filter: 0, ranked: 0, excluded: 0, fallback: false } },
+      top_picks: [
+        { ticker: "SZ300319", name: "麦捷科技", score: 9.5, group: "LONG", percent: 134, days: 55, range_kind: "new", reason: "r" },
+      ],
+    };
+    const holdings: Holdings = { updated_at: "x", cash_pct: 1.0, positions: [] };
+
+    const shallowCaller: ShallowLlmCaller = async () => JSON.stringify({ thesis: "x", fitness_score: 8, data_freshness: "2026-06-21", key_signals: [], data_gaps: [] });
+    const rebalanceCaller: RebalanceLlmCaller = async () => JSON.stringify({
+      evaluations: [], actions: [],
+      portfolio_after: { positions: [], cash_pct: 1.0 },
+      summary: "no candidates",
+    });
+
+    const result = await rebalancePipeline({
+      scan, holdings, lastRebalance: null, currentDate: "2026-06-21",
+      shallowCaller, rebalanceCaller,
+      dataByTicker: new Map(),  // 空 → 候选股跳过
+    });
+
+    expect(result.reports).toHaveLength(0);
   });
 });

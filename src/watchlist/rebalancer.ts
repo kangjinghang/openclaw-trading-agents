@@ -1,10 +1,14 @@
 import type {
   Action, ActionType, Evaluation, Holdings, LastRebalance,
   PortfolioAfter, RebalanceConstraints, RebalancePlan, StockReport,
-  ConstraintViolation,
+  ConstraintViolation, RebalanceConfig,
 } from "./rebalance-types";
+import { DEFAULT_REBALANCE_CONFIG } from "./rebalance-types";
 import { validateRebalance, composeReviseFeedback, type ValidationContext } from "./constraint-validator";
-import type { RebalanceConfig } from "./rebalance-types";
+import { selectCandidates } from "./candidate-selector";
+import { analyzeAll, type ShallowLlmCaller, type StockData } from "./shallow-analyzer";
+import { buildExecutionPlan } from "./execution-planner";
+import type { ScanSummary } from "./types";
 
 const REBALANCER_PROMPT_TEMPLATE = `# 角色
 你是 A 股投资组合管理者，管理一个 5-10 只持仓的中等换手组合。
@@ -253,5 +257,95 @@ export async function runRebalanceWithRevise(
     reviseCount,
     status: "constraint_violation",
     finalViolations: lastViolations,
+  };
+}
+
+export interface RebalancePipelineInput {
+  scan: ScanSummary;
+  holdings: Holdings;
+  lastRebalance: LastRebalance | null;
+  currentDate: string;
+  shallowCaller: ShallowLlmCaller;
+  rebalanceCaller: RebalanceLlmCaller;
+  dataByTicker?: Map<string, StockData>;
+  config?: Partial<RebalanceConfig>;
+}
+
+export interface RebalancePipelineResult {
+  reports: StockReport[];
+  rebalancer_output: RebalancePlan;
+  constraint_check: { passed: boolean; violations: string[]; revise_count: number };
+  execution_plan: ReturnType<typeof buildExecutionPlan>;
+  status: "ok" | "constraint_violation" | "llm_failed";
+}
+
+/** 完整 pipeline：候选选择 → shallow-analyzer → rebalancer + revise → execution plan。 */
+export async function rebalancePipeline(input: RebalancePipelineInput): Promise<RebalancePipelineResult> {
+  const config: RebalanceConfig = { ...DEFAULT_REBALANCE_CONFIG, ...input.config };
+
+  // 1. 候选选择
+  const metas = selectCandidates(input.scan, input.holdings, {
+    topN: config.top_n,
+    currentDate: input.currentDate,
+    antiChurnDays: config.anti_churn_days,
+  });
+
+  // 2. shallow-analyzer（dataByTicker 由 CLI 注入；测试可直接传）
+  const dataByTicker = input.dataByTicker ?? new Map<string, StockData>();
+  const reports = await analyzeAll(metas, dataByTicker, input.shallowCaller);
+
+  // 3. 构造 validation context
+  const sectors = new Map<string, string>();
+  for (const r of reports) sectors.set(r.ticker, r.sector);
+  for (const p of input.holdings.positions) {
+    if (!sectors.has(p.ticker)) sectors.set(p.ticker, p.sector);
+  }
+  const held = new Map<string, { days_held: number; locked: boolean }>();
+  for (const m of metas) {
+    if (m.is_held) held.set(m.ticker, { days_held: m.days_held, locked: m.locked });
+  }
+  const recentSold = new Set<string>();
+  if (input.lastRebalance) {
+    const daysSince = Math.floor((new Date(input.currentDate + "T00:00:00+08:00").getTime() -
+      new Date(input.lastRebalance.date + "T00:00:00+08:00").getTime()) / (24 * 60 * 60 * 1000));
+    if (daysSince < config.anti_churn_days) {
+      for (const ac of input.lastRebalance.actions) {
+        if (ac.action === "SELL") recentSold.add(ac.ticker);
+      }
+    }
+  }
+  const ctx: ValidationContext = {
+    sectors, held,
+    tickersInPool: new Set(reports.map(r => r.ticker)),
+    recentSoldTickers: recentSold,
+  };
+
+  // 4. rebalancer + revise
+  const prompt = formatRebalancerPrompt(reports, input.holdings, input.lastRebalance, config.constraints, config.anti_churn_days);
+  const rebalanceResult = await runRebalanceWithRevise(input.rebalanceCaller, prompt, ctx, config);
+
+  if (!rebalanceResult.plan) {
+    return {
+      reports,
+      rebalancer_output: { evaluations: [], actions: [], portfolio_after: { positions: [], cash_pct: 0 }, summary: "(LLM failed)" },
+      constraint_check: { passed: false, violations: [], revise_count: rebalanceResult.reviseCount },
+      execution_plan: { execution_sequence: [], final_state: { positions: [], cash_pct: 0 }, warnings: ["LLM failed"] },
+      status: rebalanceResult.status,
+    };
+  }
+
+  // 5. execution plan
+  const execution_plan = buildExecutionPlan(rebalanceResult.plan, input.holdings.cash_pct);
+
+  return {
+    reports,
+    rebalancer_output: rebalanceResult.plan,
+    constraint_check: {
+      passed: rebalanceResult.status === "ok",
+      violations: rebalanceResult.finalViolations.map(v => `[${v.rule}] ${v.detail}`),
+      revise_count: rebalanceResult.reviseCount,
+    },
+    execution_plan,
+    status: rebalanceResult.status,
   };
 }
