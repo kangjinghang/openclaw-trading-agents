@@ -29,6 +29,7 @@
     "diff": "node dist/diff-cli.js",
     "candidates": "node dist/candidates-cli.js",
     "rank": "node dist/rank-cli.js",
+    "rebalance": "node dist/rebalance-cli.js",
     "scan-all": "node dist/scan-all-cli.js",
     "prepare": "husky || true"
   },

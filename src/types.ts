@@ -150,7 +150,7 @@ export interface LLMCallTrace {
   trace_id: string;
   run_id?: string;
   call_index: number;
-  phase: "analyst" | "debate" | "research" | "trader" | "risk_debate" | "risk" | "portfolio" | "quality_review" | "rank";
+  phase: "analyst" | "debate" | "research" | "trader" | "risk_debate" | "risk" | "portfolio" | "quality_review" | "rank" | "rebalance";
   role: string;
   request: {
     model: string;
