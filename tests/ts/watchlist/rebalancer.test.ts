@@ -74,3 +74,75 @@ describe("parseRebalancePlan", () => {
     expect(parseRebalancePlan("not json", new Set())).toBeNull();
   });
 });
+
+import { runRebalanceWithRevise, type RebalanceLlmCaller } from "../../../src/watchlist/rebalancer";
+import { DEFAULT_REBALANCE_CONFIG } from "../../../src/watchlist/rebalance-types";
+
+describe("runRebalanceWithRevise", () => {
+  // Helper: 构造合法 plan（sum=1, 单仓≤15%, etc.）
+  const validTickers = new Set(["A", "B"]);
+  const ctx = {
+    sectors: new Map([["A", "x"], ["B", "y"]]),
+    held: new Map() as Map<string, { days_held: number; locked: boolean }>,
+    tickersInPool: validTickers,
+    recentSoldTickers: new Set<string>(),
+  };
+
+  it("首次输出通过校验 → revise_count=0", async () => {
+    const caller: RebalanceLlmCaller = async () => JSON.stringify({
+      evaluations: [],
+      actions: [
+        { action: "HOLD", ticker: "A", name: "a", current_weight: 0.15, target_weight: 0.15, delta: 0, reason: "r", priority: 5 },
+        { action: "HOLD", ticker: "B", name: "b", current_weight: 0.15, target_weight: 0.15, delta: 0, reason: "r", priority: 5 },
+      ],
+      portfolio_after: { positions: [{ ticker: "A", weight: 0.15 }, { ticker: "B", weight: 0.15 }], cash_pct: 0.70 },
+      summary: "low activity",
+    });
+    const r = await runRebalanceWithRevise(caller, "fake-prompt", ctx, DEFAULT_REBALANCE_CONFIG);
+    expect(r.reviseCount).toBe(0);
+    expect(r.plan).not.toBeNull();
+  });
+
+  it("首次违反单仓 → revise 1 次后通过", async () => {
+    let callIdx = 0;
+    const caller: RebalanceLlmCaller = async () => {
+      callIdx++;
+      if (callIdx === 1) {
+        return JSON.stringify({
+          evaluations: [],
+          actions: [{ action: "BUY", ticker: "A", name: "a", current_weight: 0, target_weight: 0.20, delta: 0.20, reason: "r", priority: 3 }],
+          portfolio_after: { positions: [{ ticker: "A", weight: 0.20 }], cash_pct: 0.80 },
+          summary: "x",
+        });
+      }
+      return JSON.stringify({
+        evaluations: [],
+        actions: [{ action: "BUY", ticker: "A", name: "a", current_weight: 0, target_weight: 0.15, delta: 0.15, reason: "r", priority: 3 }],
+        portfolio_after: { positions: [{ ticker: "A", weight: 0.15 }], cash_pct: 0.85 },
+        summary: "x",
+      });
+    };
+    const r = await runRebalanceWithRevise(caller, "fake-prompt", ctx, DEFAULT_REBALANCE_CONFIG);
+    expect(r.reviseCount).toBe(1);
+    expect(r.plan!.actions[0].target_weight).toBe(0.15);
+  });
+
+  it("revise 用尽 → status=constraint_violation + last_attempt 保留", async () => {
+    const caller: RebalanceLlmCaller = async () => JSON.stringify({
+      evaluations: [],
+      actions: [{ action: "BUY", ticker: "A", name: "a", current_weight: 0, target_weight: 0.20, delta: 0.20, reason: "r", priority: 3 }],
+      portfolio_after: { positions: [{ ticker: "A", weight: 0.20 }], cash_pct: 0.80 },
+      summary: "x",
+    });
+    const r = await runRebalanceWithRevise(caller, "fake-prompt", ctx, DEFAULT_REBALANCE_CONFIG);
+    expect(r.reviseCount).toBe(DEFAULT_REBALANCE_CONFIG.max_revise_retries);
+    expect(r.status).toBe("constraint_violation");
+    expect(r.plan).not.toBeNull();
+  });
+
+  it("LLM 抛错 → status=llm_failed", async () => {
+    const caller: RebalanceLlmCaller = async () => { throw new Error("network"); };
+    const r = await runRebalanceWithRevise(caller, "fake-prompt", ctx, DEFAULT_REBALANCE_CONFIG);
+    expect(r.status).toBe("llm_failed");
+  });
+});

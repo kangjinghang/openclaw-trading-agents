@@ -1,7 +1,10 @@
 import type {
   Action, ActionType, Evaluation, Holdings, LastRebalance,
   PortfolioAfter, RebalanceConstraints, RebalancePlan, StockReport,
+  ConstraintViolation,
 } from "./rebalance-types";
+import { validateRebalance, composeReviseFeedback, type ValidationContext } from "./constraint-validator";
+import type { RebalanceConfig } from "./rebalance-types";
 
 const REBALANCER_PROMPT_TEMPLATE = `# 角色
 你是 A 股投资组合管理者，管理一个 5-10 只持仓的中等换手组合。
@@ -191,4 +194,64 @@ function extractJson(content: string): unknown | null {
   }
   if (endIdx === -1) return null;
   try { return JSON.parse(content.slice(start, endIdx + 1)); } catch { return null; }
+}
+
+export type RebalanceLlmCaller = (input: {
+  systemPrompt: string;
+  userMessage: string;
+}) => Promise<string>;
+
+export interface RebalanceResult {
+  plan: RebalancePlan | null;
+  reviseCount: number;
+  status: "ok" | "constraint_violation" | "llm_failed";
+  finalViolations: ConstraintViolation[];
+}
+
+/** 跑 rebalancer + revise loop。最多 max_revise_retries 次。 */
+export async function runRebalanceWithRevise(
+  caller: RebalanceLlmCaller,
+  basePrompt: string,
+  ctx: ValidationContext,
+  config: RebalanceConfig,
+): Promise<RebalanceResult> {
+  let userMessage = basePrompt;
+  let lastPlan: RebalancePlan | null = null;
+  let lastViolations: ConstraintViolation[] = [];
+  let reviseCount = 0;
+
+  for (let attempt = 0; attempt <= config.max_revise_retries; attempt++) {
+    let content: string;
+    try {
+      content = await caller({ systemPrompt: "", userMessage });
+    } catch {
+      return { plan: lastPlan, reviseCount, status: "llm_failed", finalViolations: lastViolations };
+    }
+
+    lastPlan = parseRebalancePlan(content, ctx.tickersInPool);
+    if (!lastPlan) {
+      // JSON 解析失败，再试一次（算 revise）
+      userMessage = basePrompt + "\n\n上一次输出不是合法 JSON，请严格按格式输出。";
+      reviseCount++;
+      continue;
+    }
+
+    const result = validateRebalance(lastPlan, ctx, config.constraints);
+    if (result.passed) {
+      return { plan: lastPlan, reviseCount, status: "ok", finalViolations: [] };
+    }
+    lastViolations = result.violations;
+    if (attempt >= config.max_revise_retries) break;
+
+    const feedback = composeReviseFeedback(result.violations);
+    userMessage = basePrompt + "\n\n" + feedback;
+    reviseCount++;
+  }
+
+  return {
+    plan: lastPlan,
+    reviseCount,
+    status: "constraint_violation",
+    finalViolations: lastViolations,
+  };
 }
