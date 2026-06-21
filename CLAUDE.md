@@ -17,6 +17,17 @@ npm test               # Run all tests (vitest run)
 npm run test:watch     # Run tests in watch mode
 ```
 
+Watchlist pipeline (股票池):
+```bash
+npm run scan-universe  # Layer 0: refresh universe (~5207 A-share stocks)
+npm run snapshot       # Layer 1: scan xueqiu abnormal data per stock (~3 min)
+npm run diff           # Layer 2: today vs baseline diff
+npm run candidates     # Layer 3: rank candidates by range trend
+npm run rank           # Layer 4: LLM 精排 (LONG+SHORT 双组, top-15)
+npm run scan-all       # Layers 0→3 串跑（不含 rank）
+npm run rebalance      # Layer 5: ranker top-N + holdings → 调仓方案
+```
+
 Run a single test file:
 ```bash
 npx vitest run tests/ts/integration.test.ts
