@@ -39,9 +39,13 @@
 | `range.days` | 持续天数 | 86 天 |
 | `range.type` | 区间长短 | LONG（>10 交易日）/ SHORT（≤10 交易日） |
 | `range_kind` | 趋势类型 | continued（延续型）/ new（新成型） |
-| `range.summary` | 异动摘要（为什么涨） | 芯片封测需求旺盛，订单饱满... |
-| `range.points` | 关键事件节点 | 5/20 订单公告+15% → 6/10 中报预增+12% |
-| `today_reasons` | 今日异动原因 | 涨幅12.5%，资金推动 |
+| `range.summary` | 异动摘要（一句话，30-50 字） | AI光模块升级驱动高端锡膏需求爆发... |
+| `range.points` | 异动驱动要点（个股/行业/市场三段分点） | 个股驱动：T7锡膏通过认证；行业驱动：AI算力带动光模块；市场驱动：资金涌入科技龙头 |
+| `range_events` | 区间内单日异动事件链（从 reason_list 过滤 `[range.begin, range.end]`，涨跌都留） | LONG 平均 4.2 个/股；SHORT 平均 0.7 个/股 |
+
+> **range_events 用途**：让 LLM 看到趋势的实际演化轨迹（哪天启动、哪天加速、哪天回调、是否出现减持/跌停风险事件）。`range.points` 是雪球的**静态宏观归因**，`range_events` 是**动态事件链**，两者互补。
+>
+> 注意：`DiffChange.today_reason_points` 保留（在 diff.json 层），喂 `daily-candidates.json`（用户写复盘热点用）。`CandidateEntry`（candidates.json 层）只暴露 `range_events`，不暴露 `today_reasons` —— 股票池只看区间异动。
 
 ### 1.4 SHORT 组数据分析
 
@@ -71,9 +75,9 @@ SHORT 组 138 支中，大量是弱信号：
 ```
 candidates.json (178支)
     │
-    ├── 按 range.type 拆分
+    ├── 共同预过滤：排除 ST/退、科创板 SH688（用户无权限）
     │
-    ├──→ LONG 组 (40支)
+    ├──→ LONG 组 (40 → 35 支)
     │       │
     │       ▼ 格式B输入 + LONG Prompt
     │   LLM 调用 (第 1 次)
@@ -81,12 +85,12 @@ candidates.json (178支)
     │       ▼
     │   scan-long.json (top-7)
     │
-    └──→ SHORT 组 (138支)
+    └──→ SHORT 组 (138 → 110 支)
             │
-            ▼ 确定性预过滤
-        排除 new + 无今日异动 (80支)
+            ▼ SHORT 专有预过滤
+        排除 new + 无今日异动（衰竭信号）
             │
-            ▼ 剩余 58 支
+            ▼ 剩余 ~44 支
         格式B输入 + SHORT Prompt
             │
             ▼
@@ -99,7 +103,7 @@ candidates.json (178支)
         scan.json (合并 top-15)
             │
             ▼
-        batch 批量分析
+      下游 batch-runner（不在本期，见 §13）
 ```
 
 ### 3.2 为什么分类排名而非统一排名
@@ -108,53 +112,61 @@ candidates.json (178支)
 |------|---------------------|------------------------------|
 | LLM 注意力 | 被 178 支稀释，SHORT 数量是 LONG 的 3.5 倍，可能 SHORT 淹没 LONG | 每组独立评估，注意力集中 |
 | Prompt 设计 | 条件逻辑（"如果是 LONG 看 X，如果是 SHORT 看 Y"），不稳定 | 单一任务，每组专属 prompt，清晰无歧义 |
-| 业务逻辑 | 混合两种投资策略，强行比较无意义 | 策略对齐，每组代表独立投资逻辑 |
-| 输出可操作性 | 混合列表，用户需二次分配 | 按策略分组，可直接配置仓位 |
-| 跨类型比较 | 能做但无业务意义（LONG 的 8.5 分 ≠ SHORT 的 8.5 分） | 不做跨类型比较（也不需要） |
 
-**结论**：分类排名在所有维度上优于统一排名。
+**结论**：分类排名是**排名阶段**的机制选择（避免注意力稀释 + 专属 prompt）。产物层面两组结果合并成 `top_picks` 单一列表，下游 `trading_quick` 按 ticker 逐个分析，与分组无关。
 
-### 3.3 为什么 LONG 组不过滤
+### 3.3 为什么 LONG 组不跑 SHORT 的衰竭过滤
 
-LONG 组只有 40 支，数据量适中，LLM 能有效处理。且 LONG 股票都是已确立的趋势（22-86 天），信号质量本身就较高，无需预过滤。
+LONG 组只过共同过滤（ST/退 + 科创板），剩下 35 支全量送 LLM。不跑 SHORT 专有的 "new + 无今日异动" 过滤，因为 LONG 股票都是已确立的趋势（22-86 天），信号质量本身就较高，无需再筛。
 
 ### 3.4 为什么 SHORT 组需要预过滤
 
 SHORT 组 138 支中：
 - 58% 是 new + 无今日异动（趋势已衰竭）
 - 这些股票用确定性规则就能排除，无需浪费 LLM 注意力
-- 预过滤后 58 支，LLM 能更集中地评估有效信号
+- 共同过滤（ST/科创板）后 110 支，再经 SHORT 专有过滤剩 ~44 支，LLM 能更集中地评估有效信号
 
 ## 4. 预过滤规则
 
-**适用范围**：仅 SHORT 组（LONG 组不过滤，40 支全量送 LLM）
+分两层：**共同过滤**（LONG + SHORT 都跑）+ **SHORT 专有过滤**。
+
+### 4.1 共同过滤（LONG + SHORT）
 
 ```typescript
-function filterShortCandidates(shorts: CandidateEntry[]): CandidateEntry[] {
-  return shorts.filter(s => {
-    // 排除 ST 股与退市整理股
-    if (s.name.includes("ST") || s.name.includes("退")) return false;
-    
-    // 保留 continued（趋势已确立，信号较强）
-    if (s.range_kind === "continued") return true;
-    // 保留 new + 有今日异动（新启动且仍在活跃）
-    if (s.today_reasons.length > 0) return true;
-    // 排除 new + 无今日异动（趋势已衰竭，无持续信号）
-    return false;
-  });
+function filterCommon(c: CandidateEntry, todayStartMs: number): boolean {
+  // 排除 ST/退市（正则避免误伤名字含 ST 字样的正常股）
+  if (/(^|[*\s])ST|^退|退$/.test(c.name)) return false;
+  // 排除科创板 SH688（用户无交易权限）
+  if (c.ticker.startsWith("SH688")) return false;
+  return true;
 }
 ```
 
-**过滤效果**：138 支 → 58 支（排除 80 支）
+实测效果（2026-06-17 数据）：
+- LONG: 40 → 35（排 5 支 SH688）
+- SHORT: 138 → 110（排 28 支 SH688）
 
-**过滤前后分布对比**：
+### 4.2 SHORT 专有过滤
 
-| 指标 | 过滤前 | 过滤后 |
-|------|--------|--------|
-| SHORT 数量 | 138 | 58 |
-| 构成 | new=98, cont=40 | cont=40, new+今日=18 |
-| 今日有异动 | 30 (22%) | 30 (52%) |
-| 涨幅中位数 | ~30% | ~35% |
+```typescript
+function filterShortExtra(c: CandidateEntry, todayStartMs: number): boolean {
+  // 保留 continued（趋势已确立）
+  if (c.range_kind === "continued") return true;
+  // 保留 new + 今日有异动（range_events 含今日事件）
+  if (c.range_events.some(r => r.timestamp === todayStartMs)) return true;
+  // 排除 new + 无今日异动（衰竭信号）
+  return false;
+}
+```
+
+实测效果：110 → 44 支（cont=31 + new+今日=13）。
+
+### 4.3 组合效果
+
+| 组 | 共同过滤前 | 共同过滤后 | SHORT 专有后 | 送 LLM |
+|---|---|---|---|---|
+| LONG | 40 | 35 | — | 35 |
+| SHORT | 138 | 110 | 44 | 44 |
 
 **排除依据**：new + 无今日异动 = 10 天前启动一波，之后无动静，趋势已衰竭。这类股票投资价值低，用确定性规则排除即可。
 
@@ -164,7 +176,7 @@ function filterShortCandidates(shorts: CandidateEntry[]): CandidateEntry[] {
 
 | 格式 | 信息完整度 | LLM 理解度 | 注意力集中 | 实现复杂度 |
 |------|-----------|-----------|-----------|-----------|
-| A 紧凑单行 | 中（summary 截断） | 中 | 好 | 低 |
+| A 紧凑单行 | 中（points 截断） | 中 | 好 | 低 |
 | **B 详细块状** | **高（无损）** | **高** | **中** | **低** |
 | C 结构化 JSON | 高 | 中高 | 中 | 低 |
 | D 表格格式 | 中（截断） | 中 | 好 | 中 |
@@ -177,69 +189,63 @@ function filterShortCandidates(shorts: CandidateEntry[]): CandidateEntry[] {
 
 ### 5.2 格式 B 标准模板
 
-每支股票的标准格式：
+每支股票的标准格式（基于实测雪球数据形状：summary 一句话 30-50 字；points 三段宏观分析 100-150 字，段间 `\n\n` 分隔，固定"个股驱动 / 行业驱动 / 市场驱动"三段）：
 
 ```
 ### {序号}. {ticker} {name}
 - 区间: +{percent}% ({days}天, {continued=延续型|new=新成型})
-- 摘要: {range.summary（完整）}
-- 关键节点: {range.points（完整，用 → 连接）}
-- 今日: {today_reasons 汇总，无则标注"无"}
+- 摘要: {range.summary 完整一句话}
+- 驱动要点: {range.points 完整保留三段，原样输出，不拼接不截断}
+- 今日: {range_events 过滤 timestamp===今天 后为空标"无"；非空则逐条列 description 字段，例如"神马股份2026-06-17收盘价6.91元，涨幅6.31%"}
 ```
 
 ### 5.3 LONG 组输入示例
 
 ```
-### 1. SZ002555 宝鼎科技
-- 区间: +371.9% (86天, 新成型)
-- 摘要: 军工特种钢订单超预期，公司业绩拐点确认，下游航空航天需求持续增长，产能利用率提升至90%
-- 关键节点: 5/20 订单公告+15% → 6/10 中报预增+12% → 6/15 产能扩张公告+8%
-- 今日: 涨停 (涨停，资金推动)
+### 1. SZ301319 唯特偶
+- 区间: +518.65% (86天, 延续型)
+- 摘要: AI光模块升级驱动高端锡膏需求爆发，公司技术领先占据国产替代核心地位。
+- 驱动要点: 个股驱动：公司T7级超细粉锡膏通过光模块客户认证，国产替代加速推动业绩弹性。
 
-### 2. SH600378 昊华科技
-- 区间: +114.9% (86天, 新成型)
-- 摘要: 氟化工涨价周期，制冷剂配额收紧，下游空调制冷剂需求旺盛
-- 关键节点: 4/15 涨价公告+10% → 5/20 业绩预增+15%
-- 今日: 涨幅8.2% (行业涨价预期)
+  行业驱动：AI算力建设带动光模块迭代，高端锡膏用量及单价呈指数级增长。
 
-### 3. SH603078 XD江化微
-- 区间: +122.9% (86天, 延续型)
-- 摘要: 半导体光刻胶国产替代加速，公司产品通过多家晶圆厂验证
-- 关键节点: 3/20 产品验证通过+12% → 5/15 订单放量+18%
+  市场驱动：科技成长风格主导市场，资金集中涌入高景气赛道龙头标的。
 - 今日: (无)
+
+### 2. SZ002072 凯瑞德
+- 区间: +31.52% (27天, 延续型)
+- 摘要: 市场资金博弈控制权变更预期推动股价短期大幅上涨
+- 驱动要点: 个股驱动：控股股东股份被司法拍卖导致控制权稳定性下降，引发市场对潜在控制权变更的博弈预期。
+
+  市场驱动：市场资金对微盘股重组概念的短期炒作热情升温。
+
+  行业驱动：煤炭贸易行业基本面持续低迷，公司主营业务盈利能力未见改善。
+- 今日: 凯瑞德2026-06-17收盘价9.18元，涨幅8.90% (控制权博弈预期)
 ```
 
 ### 5.4 SHORT 组输入示例（预过滤后）
 
 ```
-### 1. SH688286 敏芯股份
-- 区间: +32.3% (13天, 延续型)
-- 摘要: MEMS传感器国产替代，下游应用拓展至汽车电子和工业控制
-- 关键节点: 6/5 订单公告+10% → 6/12 产能扩张+8%
-- 今日: (无)
+### 1. SH600810 神马股份
+- 区间: +20.38% (13天, 延续型)
+- 摘要: AI算力需求爆发带动对位芳纶产品需求激增，推动公司业绩预期提升。
+- 驱动要点: 个股驱动：参股子公司神马芳纶对位芳纶产品受益AI算力需求，产能扩张加速。
 
-### 2. SH600810 神马股份
-- 区间: +20.4% (13天, 延续型)
-- 摘要: 尼龙66切片涨价，下游汽车和电子需求增长
-- 关键节点: 6/8 涨价公告+12% → 6/15 中报预增+8%
-- 今日: 涨幅5.2% (涨价持续)
+  行业驱动：AI算力基建推动芳纶材料需求增长，行业面临供不应求局面。
 
-### 3. SZ300401 花园生物
-- 区间: +58.6% (9天, 延续型)
-- 摘要: 维生素D3涨价，公司产能全球领先，下游饲料需求旺盛
-- 关键节点: 6/10 涨价公告+15% → 6/15 订单超预期+10%
-- 今日: 涨幅6.8% (涨价超预期)
+  市场驱动：PA66价格上涨10.21%，提升化工行业整体景气度。
+- 今日: 神马股份2026-06-17收盘价6.91元，涨幅6.31%
+
+### 2. SH688598 金博股份
+- 区间: +55.79% (9天, 新成型)
+- 摘要: 氮化铝粉体示范线投产预期推动估值重构，叠加技术图形突破与市场情绪共振。
+- 驱动要点: 个股驱动：氮化铝500吨示范线建成投产，技术指标达国际水平，打开第二增长曲线。
+
+  市场驱动：牛市氛围下资金追逐低位题材股，技术面突破引发跟风盘涌入。
+
+  行业驱动：日本德山粉体断供预期下，国产替代逻辑强化，氮化铝成AI散热关键材料。
+- 今日: 金博股份2026-06-17收盘价49.79元，涨幅20.00% (涨停)
 ```
-
-### 5.5 Token 量估算
-
-| 组别 | 支数 | 每支约 | 总计 |
-|------|------|--------|------|
-| LONG | 40 | 300 字符 | 12K 字符 ≈ 4K tokens |
-| SHORT（预过滤后） | 58 | 300 字符 | 17K 字符 ≈ 5K tokens |
-| **总计** | **98** | — | **29K 字符 ≈ 9K tokens** |
-
-两次 LLM 调用总输入约 9K tokens，远在能力范围内。
 
 ## 6. Prompt 设计
 
@@ -256,30 +262,43 @@ function filterShortCandidates(shorts: CandidateEntry[]): CandidateEntry[] {
 # 评估维度
 
 ## 1. 趋势健康度（权重最高）
-- **天数**：30-60 天最佳（趋势确立但未过久）；>60 天需警惕见顶；<20 天趋势可能不稳
-- **涨幅**：30-100% 有空间；100-200% 需要更强驱动支撑；>200% 见顶风险大
+- **天数**：40-70 天最佳（趋势确立但未过久）；>70 天需警惕见顶；<30 天趋势可能不稳
+- **涨幅**：50-150% 有空间；150-300% 需要更强驱动支撑；>300% 见顶风险大
 - **类型**：延续型 > 新成型，延续说明趋势已确立且被市场认可
 
 ## 2. 驱动逻辑（决定趋势能否持续）
 - **强驱动**：政策落地、业绩兑现、行业拐点、供需格局变化
 - **弱驱动**：资金推动、市场情绪、概念炒作
-- **板块共振**：若候选列表中有多只股票属于相同行业或概念板块（可通过摘要或关键节点识别如“光模块”、“PCB”、“覆铜板”等），应予以适当加分，因为共振代表资金合力更强。
-- 判断依据：摘要中的具体内容（订单、涨价、政策文件 > 模糊描述）
+- **板块共振**：若候选列表中有多只股票属于相同行业或概念板块（可通过摘要或驱动要点识别如"光模块"、"PCB"、"覆铜板"等），应予以适当加分，因为共振代表资金合力更强。
+- 判断依据：摘要的具体性 + 驱动要点"个股驱动"段的实质内容（具体产品/订单/客户/产能/涨价 > 模糊概念如"国产替代"、"AI算力"堆砌）。注意雪球 `points` 是"个股驱动 / 行业驱动 / 市场驱动"三段分点驱动原因，不是日期事件链。
 
 ## 3. 见顶风险（必须排除）
-- 涨幅 >300% 且天数 >60：大概率见顶
+- 涨幅 >300% 且天数 >70：大概率见顶
 - 摘要中出现"见顶"、"回调"、"获利了结"等字眼
 - 今日无异动 + 涨幅已大 + 天数长：趋势可能衰竭
 
-## 4. 催化剂
-- 今日有涨停：强信号，趋势仍在加速
-- 今日有明确涨幅（>5%）：中等信号
-- 今日无异动：弱信号，但趋势本身可能很强
+## 4. 催化剂（可选加分项，最多 +0.5；不扣分）
+- 今日有涨停：+0.5
+- 今日涨幅 >5%：+0.3
+- 今日无：0（**中性，不扣分**）
+
+**关键**：LONG 延续型常态是间歇异动，今日空不代表趋势弱。趋势本身的健康度
+（维度 1-3）和事件链整体演化（维度 5）才是主要评分依据。
+
+## 5. 区间事件链演化（关键维度，看趋势是加速 / 见顶 / 衰竭）
+- 事件密度递增 + 涨幅递增：加速阶段，分数向上
+- 整个区间事件密度递减（如月初每周 2 条、月末每周 0 条）：衰竭，扣分
+- 事件链末端连续跌停/跌幅放大 + 出现"机构抛售"/"股东减持"/"高管辞职"等风险事件：见顶信号，大幅扣分
+- 事件链跨多周持续（如 5 个以上事件，分布均匀）：趋势确立，加分
+
+注：本维度看**整个区间**的事件密度演化，不是看"今天是否有事件"
+（那是维度 4 催化剂的事，今日无事件不扣分）。
 
 # 排除标准
 - 涨幅 >400%（几乎确定见顶）
-- 摘要完全为空
 - 天数 >70 且涨幅 >250% 且 今日无异动
+
+# 强制分布约束 + reason 写作规则（详见 §7.3、§7.4，两个 prompt 共用）
 
 # 输出格式（严格 JSON）
 {
@@ -331,8 +350,8 @@ function filterShortCandidates(shorts: CandidateEntry[]): CandidateEntry[] {
 ## 3. 驱动逻辑（决定持续性）
 - **强驱动**：行业涨价、订单超预期、政策催化、业绩预增
 - **弱驱动**：纯资金推动、市场情绪、无实质内容
-- **板块共振**：若候选列表中有多只股票属于相同行业或概念板块（可通过摘要或关键节点识别如“光模块”、“PCB”、“覆铜板”等），应予以适当加分，因为共振代表资金合力更强。
-- 判断依据：摘要中的具体内容
+- **板块共振**：若候选列表中有多只股票属于相同行业或概念板块（可通过摘要或驱动要点识别如"光模块"、"PCB"、"覆铜板"等），应予以适当加分，因为共振代表资金合力更强。
+- 判断依据：摘要的具体性 + 驱动要点"个股驱动"段的实质内容（具体产品/订单/客户/产能/涨价 > 模糊概念堆砌）。注意雪球 `points` 是三段分点驱动原因，不是日期事件链。
 
 ## 4. 风险识别
 - 涨幅 >80% 但天数 <7：可能是情绪炒作，风险高
@@ -340,10 +359,8 @@ function filterShortCandidates(shorts: CandidateEntry[]): CandidateEntry[] {
 - 新成型 且 今日无异动：可能是首次异动后的衰竭
 
 # 排除标准
-- 涨幅 >150%（短期暴涨，见顶风险极高）
-- 天数 <3（信号太弱）
-- 摘要完全为空
-- 今日无异动 且 涨幅 <15% 且 天数 <5（信号太弱）
+- 涨幅 >80%（实测 SHORT max=83%，边缘见顶风险）
+- 摘要只说"资金推动"/"游资介入"无实质内容（持续性存疑）
 
 # 输出格式（严格 JSON）
 {
@@ -373,23 +390,49 @@ function filterShortCandidates(shorts: CandidateEntry[]): CandidateEntry[] {
 
 ### 7.1 LONG 组评分标准
 
+> 实测分布：days min=22 / median=57 / max=86；percent min=24.7 / median=95.2 / max=518.6（>100% 的 19/40 = 48%）。校准基于此分布。
+
 | 分数 | 特征 |
 |------|------|
-| 9-10 | 30-60天 + 30-100% + 政策/业绩驱动 + 延续型 + 今日有催化 |
-| 7-8 | 趋势明确 + 驱动清晰 + 风险可控 |
-| 5-6 | 天数过长或涨幅过高，或驱动模糊 |
-| 3-4 | 见顶风险大、驱动弱、趋势可能衰竭 |
-| 1-2 | 明确见顶、摘要为空、无投资价值 |
+| 9-10 | 40-70天 + 50-150% + 政策/业绩驱动 + 延续型（**今日催化为加分项 +0.3~0.5，非必需**） |
+| 7-8 | 趋势明确（含 100-200% 涨幅段）+ 驱动清晰 + 风险可控 |
+| 5-6 | 涨幅 >200% 追涨风险，或天数 >70 趋势老化，或驱动模糊 |
+| 3-4 | 见顶风险大（>300% + 长天数）、驱动弱、趋势衰竭 |
+| 1-2 | 明确见顶、无投资价值 |
 
 ### 7.2 SHORT 组评分标准
 
+> 实测分布：days min=5 / median=9 / max=13；percent min=7.8 / median=26.8 / max=83.4（>50% 仅 13/138，>80% 仅 1 支）。校准基于此分布。
+
 | 分数 | 特征 |
 |------|------|
-| 9-10 | >20%涨幅 + 7-10天 + 今日涨停/大涨 + 强驱动 + 延续型 |
-| 7-8 | 信号明确 + 驱动清晰 + 持续性好 |
-| 5-6 | 信号中等或驱动模糊 |
+| 9-10 | 涨幅 >30% + 7-13天 + 今日涨停/大涨 + 强驱动 + 延续型 |
+| 7-8 | 信号明确（20-50% 涨幅段）+ 驱动清晰 + 持续性好 |
+| 5-6 | 信号中等（10-20% 涨幅）或驱动模糊 |
 | 3-4 | 信号弱、纯情绪驱动、可能一日游 |
-| 1-2 | 信号太弱、涨幅过大、摘要为空 |
+| 1-2 | 信号太弱、无投资价值 |
+
+### 7.3 强制分布约束（防止 LLM "老好人" 打分压缩）
+
+LLM 默认倾向给所有股打高分（实测首轮跑出 score 8.3-10.0，跨度仅 1.7 分），导致排序失效。Prompt 里在输出格式前注入硬约束：
+
+- top-1 必须 ≥ 9.3
+- 最后一名必须 ≤ 7.5
+- 任意相邻两支分差 ≥ 0.2
+- 禁止两支同分
+- 跨度（max - min）必须 ≥ 2.0
+
+实测首轮（2026-06-17）打分压缩：LONG 中位 8.7、SHORT 中位 9.1、SHORT 还给了 10.0 满分——下游拿到 15 支并列第一，失去了"top_picks 优先级"的本意。强制分布让 LLM 敢于给低分。
+
+### 7.4 reason 写作规则（防止模糊词污染）
+
+LLM 训练语料里 A 股自媒体常用"板块共振"、"资金追捧"这类空话，输出时自然带出来（实测首轮 reason 含模糊词比例：LONG 5/7、SHORT 5/8）。Prompt 里在输出格式前注入"白名单 + 黑名单"约束：
+
+- **白名单（必须含至少 1 个）**：产品/技术名（T7 锡膏、TLVR 电感...）、客户/合作方（英伟达、SK 海力士...）、量化数据（涨价 X%、订单排至 X 年...）、业务节点（送样验证、扩产...）。且必须从输入的摘要/驱动要点/事件链里抽取，不能编造。
+- **黑名单（禁用）**：共振 / 协同效应（除非点名两个具体板块如何联动）、资金追捧/涌入/抢筹、情绪高涨/市场情绪、活跃/热点/概念走强、爆发力强/强势确立（除非给量化数据支撑）。
+
+反例（违规）："板块共振强烈，资金追捧，爆发力强。"
+正例（合规）："TLVR 电感获英伟达认证，一季度订单排至 27 年。"
 
 ## 8. 输出格式
 
@@ -399,7 +442,16 @@ function filterShortCandidates(shorts: CandidateEntry[]): CandidateEntry[] {
 {
   "scan_date": "2026-06-17",
   "group": "LONG",
-  "total": 40,
+  "fallback": false,
+  "total": 35,
+  "distribution": {
+    "percent": { "min": 24.7, "p25": 63.5, "median": 92.0, "p75": 133.0, "max": 518.6 },
+    "days":    { "min": 22,   "p25": 31.5, "median": 50,   "p75": 77,   "max": 86 }
+  },
+  "breakdown": {
+    "range_kind":     { "continued": 21, "new": 14 },
+    "today_catalyst": { "limit_up": 4, "pct_over_5": 1, "pct_under_5": 0, "none": 30 }
+  },
   "ranked_count": 7,
   "excluded_count": 12,
   "ranked": [
@@ -407,6 +459,9 @@ function filterShortCandidates(shorts: CandidateEntry[]): CandidateEntry[] {
       "ticker": "SZ002555",
       "name": "宝鼎科技",
       "score": 9.0,
+      "percent": 371.9,
+      "days": 86,
+      "range_kind": "new",
       "reason": "军工订单驱动，86天趋势确立，今日涨停确认强势"
     }
   ],
@@ -426,8 +481,18 @@ function filterShortCandidates(shorts: CandidateEntry[]): CandidateEntry[] {
 {
   "scan_date": "2026-06-17",
   "group": "SHORT",
+  "fallback": false,
   "total_pre_filter": 138,
-  "total_post_filter": 58,
+  "total_post_common_filter": 110,
+  "total": 44,
+  "distribution": {
+    "percent": { "min": 10.2, "p25": 24.0, "median": 32.0, "p75": 42.3, "max": 60.3 },
+    "days":    { "min": 5,    "p25": 7.75, "median": 9,    "p75": 9,    "max": 13 }
+  },
+  "breakdown": {
+    "range_kind":     { "continued": 31, "new": 13 },
+    "today_catalyst": { "limit_up": 12, "pct_over_5": 9, "pct_under_5": 1, "none": 22 }
+  },
   "ranked_count": 8,
   "excluded_count": 25,
   "ranked": [
@@ -435,6 +500,9 @@ function filterShortCandidates(shorts: CandidateEntry[]): CandidateEntry[] {
       "ticker": "SH600810",
       "name": "神马股份",
       "score": 8.8,
+      "percent": 20.4,
+      "days": 13,
+      "range_kind": "continued",
       "reason": "尼龙66涨价驱动，13天延续上涨，今日涨幅确认活跃"
     }
   ],
@@ -448,7 +516,15 @@ function filterShortCandidates(shorts: CandidateEntry[]): CandidateEntry[] {
 }
 ```
 
+> `distribution` + `breakdown` 字段是**决策时的市场快照**，用途是事后复盘：等几天市场走出来后，对照决策时的分布/计数判断 prompt 阈值（如 LONG 50-150-300% 涨幅分档、SHORT 7-10 天为佳、今日涨停强信号等）是否需要调整。pool 为空时这两个字段都省略。
+>
+> - `distribution.percent/days` —— 数值分布（min/p25/median/p75/max）
+> - `breakdown.range_kind` —— continued/new 各多少（评估"延续型 > 新成型"权重）
+> - `breakdown.today_catalyst` —— 今日催化强度计数：`limit_up`（涨停，按板识别：创业板/科创板 SZ300/SZ301/SH688 阈值 19.5%；主板 9.5%；description 含"涨停"直接判）/ `pct_over_5`（今日涨 >5% 但未涨停）/ `pct_under_5`（今日涨 ≤5%）/ `none`（今日无事件）
+
 ### 8.3 scan.json（合并汇总）
+
+> 字段来源：LLM 只返回 `ticker/name/score/reason`，代码从输入 `candidates.json` 按 ticker 反查补 `percent/days/range_kind`。前端看板无需回查原始文件。
 
 ```json
 {
@@ -459,8 +535,8 @@ function filterShortCandidates(shorts: CandidateEntry[]): CandidateEntry[] {
     "SHORT": { "total": 138, "post_filter": 58, "ranked": 8, "excluded": 25 }
   },
   "top_picks": [
-    { "ticker": "SH603186", "name": "华正新材", "group": "SHORT", "score": 9.2 },
-    { "ticker": "SZ002555", "name": "宝鼎科技", "group": "LONG", "score": 9.0 }
+    { "ticker": "SH603186", "name": "华正新材", "group": "SHORT", "score": 9.2, "percent": 83.4, "days": 13, "range_kind": "new" },
+    { "ticker": "SZ002555", "name": "宝鼎科技", "group": "LONG", "score": 9.0, "percent": 371.9, "days": 86, "range_kind": "new" }
   ]
 }
 ```
@@ -469,15 +545,15 @@ function filterShortCandidates(shorts: CandidateEntry[]): CandidateEntry[] {
 
 | 场景 | 处理 |
 |------|------|
-| LLM 调用失败 | 回退到规则打分（按规则公式计算），该组标注 `fallback: true`。其 `reason` 标明 `[规则打分(LLM降级): [天数/涨幅]排序]`。 |
-| 规则打分公式 | **LONG组**：按 `days` 降序，`Math.abs(percent)` 降序。首名赋予 `8.0`，后续每名递减 `0.1`，最低 `5.0`。<br>**SHORT组**：按 `Math.abs(percent)` 降序，`days` 降序。首名赋予 `8.0`，后续每名递减 `0.1`，最低 `5.0`。 |
-| LLM 幻觉防御 | **代码过滤**：校验返回 JSON 中的 ticker 是否存在于原 candidates 文件中，不存在则丢弃，防范幻觉代码。<br>**列表补全**：若 LLM 过滤后有效 `ranked` 数量不足指定的 `topN`，自动用规则打分高分股顺次补齐。 |
-| LLM 输出格式异常 | 重试一次，仍失败则直接回退到规则打分。 |
-| 某组候选数 ≤ topN | 取全部，不报错。 |
-| summary 为空 | 标注 "[摘要缺失]"，LLM 根据其他字段判断。 |
-| points 为空 | 标注 "[无关键节点]"。 |
+| LLM 调用失败 | 回退到规则打分，该组标注 `fallback: true`。其 `reason` 标明 `[规则降级: 按 days/percent 排序]`。 |
+| 规则打分公式 | **LONG 组**：按 `days` 降序，`Math.abs(percent)` 降序。首名赋予 `6.0`，后续每名递减 `0.2`，最低 `4.0`（明显低于 LLM 满分区，一眼可识别为降级）。<br>**SHORT 组**：按 `Math.abs(percent)` 降序，`days` 降序。首名赋予 `6.0`，后续每名递减 `0.2`，最低 `4.0`。 |
+| LLM 幻觉防御 | **代码过滤**：校验返回 JSON 中的 ticker 是否存在于原 candidates 文件中，不存在则丢弃。 |
+| LLM 重试 | 复用 `callLLM` 内部的 `LLM_MAX_RETRIES`（带超时+退避）。ranker 层不再加额外重试，避免双层重试放大延迟。 |
+| 候选不足 topN（无论输入侧还是 LLM 输出侧） | **尊重实际数量，不强行补齐**。LLM 判断只有 N 只值得投就输出 N 只。 |
+| summary 为空 | 实测 178 支全部有 summary，此情况当前不触发；如未来出现，标注 "[摘要缺失]"。 |
+| points 为空 | 实测 178 支全部有 points；如出现空值，标注 "[无驱动要点]"。 |
 | 今日 reasons 为空 | 标注 "无"，不作为扣分项，但不加分。 |
-| 费用与 Token 累计 | 将 `ranker.ts` 调用产生的 Tokens 和 Cost USD 自动累加并合并计入每日最终的 `run_summary.json` / dashboard 总账中，保持账目完全一致。 |
+| Token 累计 | ranker 是跨股产物，不属于任何 `run_id`。新建 `~/.openclaw/watchlist/run_summary.json` 记录每次 ranker 调用的 tokens（不记 cost，用户不关心成本），与单股 `run_summary.json` 分账。 |
 
 ## 10. 配置参数
 
@@ -488,40 +564,54 @@ function filterShortCandidates(shorts: CandidateEntry[]): CandidateEntry[] {
 | `--short-top` | 8 | SHORT 组精选数量 |
 | `--date` | 最新日期 | 扫描日期 |
 
-## 11. 实现文件清单
+## 11. 实现文件清单与测试策略
+
+### 11.1 文件清单
 
 | 文件 | 职责 |
 |------|------|
-| `src/watchlist/ranker.ts` | LLM 精排核心逻辑（预过滤 + 分类排名 + 合并） |
+| `src/watchlist/ranker.ts` | LLM 精排核心逻辑（预过滤 + 分类排名 + 合并 + 降级） |
 | `src/watchlist/types.ts` | 新增 ScanResult / RankedEntry / ScanGroup 类型 |
-| `src/cli.ts` | 新增 rank 命令 |
-| `package.json` | 新增 rank 脚本 |
+| `src/rank-cli.ts` | rank 命令 CLI 入口（沿用 `src/*-cli.ts` 模式） |
+| `tests/ts/watchlist/ranker.test.ts` | 单元测试 |
+| `package.json` | 新增 `rank` 脚本 |
+
+Prompt 模板（LONG/SHORT）暂以内联字符串放在 `ranker.ts`；若后续需要迭代再抽取到 `skills/watchlist/prompts/`。
+
+### 11.2 测试策略
+
+沿用本项目 watchlist 模块既有测试模式（假数据 + 不触网），至少覆盖：
+
+- **预过滤规则**：构造各种 `range_kind × range_events(今日)` 组合，验证共同过滤（ST/科创板 SH688 排除）+ SHORT 专有过滤（continued 保留 / new+今日保留 / new+无今日丢弃）
+- **LLM 返回 ticker 幻觉防御**：mock LLM 返回不存在的 ticker，验证被丢弃
+- **JSON 解析失败 → fallback**：mock LLM 返回非 JSON / 缺字段，验证触发规则降级
+- **字段补齐**：mock LLM 只返回 ticker/name/score/reason，验证代码从 candidates 反查补 `percent/days/range_kind`
+- **候选不足 topN**：输入或 LLM 输出少于 topN，验证不补齐、不报错
+- **空组**：LONG 或 SHORT 组完全为空（如新管道首日只有 1 个 range），验证不崩
+- **降级评分公式**：构造已知排序输入，验证分数从 6.0 起递减 0.2 不破下限
 
 ## 12. 与现有模块的关系
 
 ```
 candidates.json (第3层产物)
     │
-    ▼ 本模块（新增）
-ranker.ts → scan.json
+    ▼ 本期范围
+ranker.ts → scan.json (top_picks)
     │
-    ▼ 本模块（新增）
-batch-runner.ts → 批量分析报告
-    │
-    ▼ 复用现有
-orchestrator.ts → runQuickAnalysis() / runFullAnalysis()
+    ▼ 不在本期范围（见 §13 P0）
+batch-runner.ts → orchestrator.ts → runQuickAnalysis() / runFullAnalysis()
 ```
 
 - **输入**：直接读取 `candidates.json`（第 3 层产物）
-- **输出**：`scan.json`（精排结果）供 batch-runner 使用
-- **复用**：batch-runner 内部调用现有的 `runQuickAnalysis()` / `runFullAnalysis()`
+- **输出**：`scan.json`（精排结果，含 `top_picks` 单一列表）
 - **不动**：现有分析管道完全不改，本模块是纯增量
+- **不在本期范围**：`batch-runner`（把 `top_picks` 逐个喂给 `trading_quick`）是独立模块。当前 ranker 只产出 `scan.json`，下游串行/并行分析是后续工作（见 §13）。
 
 ## 13. 后续扩展方向
 
 | 方向 | 描述 | 优先级 |
 |------|------|--------|
-| 并行 batch | 跨 ticker 并行执行分析（共享 RateLimitCoordinator） | P1 |
+| batch-runner + 并行 | 把 `top_picks` 逐个喂给 `trading_quick`，跨 ticker 并行（共享 `RateLimitCoordinator`）。**ranker 输出 top-15 串行跑需 30-45 分钟，这是真正的用户体感瓶颈，比 ranker 本身更紧迫。** | P0 |
 | 板块共振 | 聚合多只股的摘要，识别行业级驱动 | P2 |
 | 历史对比 | 跟踪候选股的历史分析结果，避免重复分析 | P2 |
 | 自动调度 | cron 定时触发 scan + batch，无人值守 | P3 |

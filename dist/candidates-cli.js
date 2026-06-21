@@ -93,8 +93,11 @@ Options:
     const formatTrend = (c) => {
         const pct = c.range.percent > 0 ? `+${c.range.percent}` : `${c.range.percent}`;
         const kind = c.range_kind === "continued" ? "延续" : "新出";
-        const reasons = c.today_reasons.length > 0 ? ` +今日${c.today_reasons.length}条涨 reason` : "";
-        return `${pct}% (${c.days}d, ${kind}${reasons})`;
+        // 区间事件链中 timestamp === range.end（= 今日）的就是今日异动
+        const todayCount = c.range_events.filter(r => r.timestamp === c.range.end).length;
+        const today = todayCount > 0 ? ` +今日${todayCount}条` : "";
+        const chain = c.range_events.length > 0 ? ` 区间事件${c.range_events.length}条` : "";
+        return `${pct}% (${c.days}d, ${kind}${today}${chain})`;
     };
     console.log(`\n  上涨候选（前 10，按 持续长 > 幅度大）:`);
     for (const c of candidates.up.slice(0, 10)) {

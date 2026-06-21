@@ -60,28 +60,32 @@ describe("buildCandidates (rich schema, only range stocks, neutral dropped)", ()
     expect(cands.up[0].days).toBe(30);
   });
 
-  it("today_reasons 保留完整字段(当该股今日还有涨 reason)", () => {
+  it("range_events 从 diff.range_events 透传，保留完整字段", () => {
     const diff = makeDiff([
       { ticker: "X", name: "x",
-        today_reason_points: [{
-          timestamp: 1000, description: "今日涨幅10%", reason: "利好消息推动", url: "https://reason"
-        }],
+        today_reason_points: [],
         continued_ranges: [],
-        new_ranges: [{ begin: 100, end: 200, type: "LONG", percent: 50, summary: "", points: "", url: "u", title: "t" }] },
+        new_ranges: [{ begin: 100, end: 200, type: "LONG", percent: 50, summary: "", points: "", url: "u", title: "t" }],
+        range_events: [
+          { timestamp: 100, description: "区间启动日 +5%", reason: "订单落地", url: "https://r1" },
+          { timestamp: 200, description: "区间末日 +10%", reason: "业绩兑现", url: "https://r2" },
+        ] },
     ]);
     const cands = buildCandidates(diff);
-    expect(cands.up[0].today_reasons).toEqual([
-      { timestamp: 1000, description: "今日涨幅10%", reason: "利好消息推动", url: "https://reason" },
+    expect(cands.up[0].range_events).toEqual([
+      { timestamp: 100, description: "区间启动日 +5%", reason: "订单落地", url: "https://r1" },
+      { timestamp: 200, description: "区间末日 +10%", reason: "业绩兑现", url: "https://r2" },
     ]);
   });
 
-  it("today_reasons 为空数组(当该股今日没有涨 reason,只有 range)", () => {
+  it("range_events 为空数组（diff.range_events 为空）", () => {
     const diff = makeDiff([
       { ticker: "X", name: "x", today_reason_points: [], continued_ranges: [],
-        new_ranges: [{ begin: 100, end: 200, type: "LONG", percent: 50, summary: "", points: "", url: "u", title: "t" }] },
+        new_ranges: [{ begin: 100, end: 200, type: "LONG", percent: 50, summary: "", points: "", url: "u", title: "t" }],
+        range_events: [] },
     ]);
     const cands = buildCandidates(diff);
-    expect(cands.up[0].today_reasons).toEqual([]);
+    expect(cands.up[0].range_events).toEqual([]);
   });
 
   it("sorts up by days 大 > |percent| 大", () => {

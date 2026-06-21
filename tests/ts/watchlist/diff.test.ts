@@ -323,4 +323,43 @@ describe("computeDiff", () => {
     const diff = computeDiff(today, baseline);
     expect(diff.changes).toHaveLength(1); // 归一化后锚点匹配，B2 入选
   });
+
+  it("range_events: B 类股的 reason_list 按 [range.begin, range.end] 过滤后填入", () => {
+    // 区间 begin=200, end=TODAY_MS；reason_list 里 4 条，2 条在区间内、1 条早于区间、1 条等于 begin
+    const baseline = makeSnapshot("2026-06-17", {});
+    const today = makeSnapshot(TODAY, {
+      "SH688146": {
+        name: "x",
+        reason_list: [
+          { timestamp: 100, description: "早于区间", reason: "old" },
+          { timestamp: 200, description: "区间起点事件", reason: "start" },
+          { timestamp: YESTERDAY_MS, description: "区间中段事件", reason: "middle" },
+          { timestamp: TODAY_MS, description: "区间末日事件", reason: "end" },
+        ],
+        range_reason_list: [
+          { begin: 200, end: TODAY_MS, type: "LONG", percent: 50, summary: "", points: "" },
+        ],
+      },
+    });
+    const diff = computeDiff(today, baseline);
+    expect(diff.changes).toHaveLength(1);
+    // 过滤后保留 [200, YESTERDAY_MS, TODAY_MS] 三条（含边界）
+    expect(diff.changes[0].range_events).toHaveLength(3);
+    expect(diff.changes[0].range_events.map(r => r.description)).toEqual([
+      "区间起点事件", "区间中段事件", "区间末日事件",
+    ]);
+  });
+
+  it("range_events: A-only 股（无 range）的 range_events 为空", () => {
+    const baseline = makeSnapshot("2026-06-17", {});
+    const today = makeSnapshot(TODAY, {
+      "SH000001": {
+        name: "x",
+        reason_list: [{ timestamp: TODAY_MS, description: "今日涨幅5%", reason: "today up" }],
+      },
+    });
+    const diff = computeDiff(today, baseline);
+    expect(diff.changes).toHaveLength(1);
+    expect(diff.changes[0].range_events).toEqual([]);
+  });
 });

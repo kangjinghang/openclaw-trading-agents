@@ -97,6 +97,13 @@ function computeDiff(today, baseline) {
             }
             // else: sameBegin && baselineEndIsAlsoToday → 完全不变 → 不选
         }
+        // 区间事件链:若该股入选了 B 类 range,从 reason_list 抽出该 range 区间内的所有事件
+        // (涨跌都保留 —— 跌停/减持等风险事件也是 LLM 判断趋势见顶的关键信号)
+        let rangeEvents = [];
+        if (continuedRanges.length > 0 || newRanges.length > 0) {
+            const r = continuedRanges[0] ?? newRanges[0];
+            rangeEvents = (todayEntry.reason_list ?? []).filter((ev) => ev.timestamp >= r.begin && ev.timestamp <= r.end);
+        }
         if (todayReasons.length > 0 || continuedRanges.length > 0 || newRanges.length > 0) {
             changes.push({
                 ticker,
@@ -104,6 +111,7 @@ function computeDiff(today, baseline) {
                 today_reason_points: todayReasons,
                 continued_ranges: continuedRanges,
                 new_ranges: newRanges,
+                range_events: rangeEvents,
             });
         }
     }
