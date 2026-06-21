@@ -134,3 +134,16 @@ export function validateRebalance(
 
   return { passed: violations.length === 0, violations };
 }
+
+/** 把 violations 拼成 LLM revise 用的 feedback 字符串。空 violations 返回空。 */
+export function composeReviseFeedback(violations: ConstraintViolation[]): string {
+  if (violations.length === 0) return "";
+  const lines = violations.map((v, i) => `${i + 1}. [${v.rule}] ${v.detail}`);
+  return [
+    "你的上一次方案违反了以下约束，请修正：",
+    "",
+    ...lines,
+    "",
+    "请重新输出 REBALANCE_PLAN，确保满足所有硬约束。",
+  ].join("\n");
+}

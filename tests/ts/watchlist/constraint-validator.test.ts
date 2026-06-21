@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validateRebalance } from "../../../src/watchlist/constraint-validator";
+import { validateRebalance, composeReviseFeedback } from "../../../src/watchlist/constraint-validator";
 import type { RebalancePlan, RebalanceConstraints } from "../../../src/watchlist/rebalance-types";
 
 const C: RebalanceConstraints = { single_name: 0.15, single_sector: 0.30, daily_turnover: 0.30, cash_reserve: 0.10 };
@@ -161,5 +161,24 @@ describe("validateRebalance 规则 10: sector 非空", () => {
     plan.portfolio_after.cash_pct = 0.90;
     const r = validateRebalance(plan, { sectors: new Map(), held: new Map(), tickersInPool: new Set(["A"]) }, C);
     expect(r.violations.some(v => v.rule.includes("sector 非空") && v.detail.includes("A"))).toBe(true);
+  });
+});
+
+describe("composeReviseFeedback", () => {
+  it("把 violations 拼成 LLM 友好的 feedback 字符串", () => {
+    const violations = [
+      { rule: "2. 单仓上限", detail: "SZ300319 weight 0.18 超 0.15" },
+      { rule: "4. 日换手上限", detail: "sum(|delta|) 0.35 超 0.30" },
+    ];
+    const feedback = composeReviseFeedback(violations);
+    expect(feedback).toContain("违反了以下约束");
+    expect(feedback).toContain("1. [2. 单仓上限]");
+    expect(feedback).toContain("SZ300319 weight 0.18");
+    expect(feedback).toContain("2. [4. 日换手上限]");
+    expect(feedback).toContain("请重新输出");
+  });
+
+  it("空 violations 返回空字符串", () => {
+    expect(composeReviseFeedback([])).toBe("");
   });
 });
