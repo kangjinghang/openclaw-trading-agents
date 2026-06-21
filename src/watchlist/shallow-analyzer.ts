@@ -1,4 +1,5 @@
-import type { AnalystReport } from "./rebalance-types";
+import type { AnalystReport, RiskFlag, RiskReport, StockReport } from "./rebalance-types";
+import type { CandidateMeta } from "./candidate-selector";
 
 export interface StockData {
   ticker: string;
@@ -93,4 +94,84 @@ function extractJson(content: string): unknown | null {
   }
   if (endIdx === -1) return null;
   try { return JSON.parse(content.slice(start, endIdx + 1)); } catch { return null; }
+}
+
+const RISK_PROMPT_TEMPLATE = `# 角色
+你是 A 股风险分析师，识别单只股票的关键风险。
+
+# 任务
+基于以下数据 + analyst 给的 thesis，输出风险清单。不要做 Buy/Sell 判断。
+
+# 股票
+{ticker} {name}（行业：{sector}）
+
+# 数据
+## K 线 + 资金 + 基本面
+（同 analyst-role 输入）
+
+# Analyst thesis
+{analyst_thesis}
+
+# 输出格式（严格 JSON）
+{
+  "risk_flags": [
+    { "flag": "...", "severity": "低|中|高", "detail": "..." }
+  ],
+  "overall_risk": "low|medium|high",
+  "deal_breaker": false
+}
+
+deal_breaker=true 仅限：财务造假、退市风险、重大违规、产品/客户重大断裂等灾难性情况。`;
+
+export function formatRiskPrompt(d: StockData, analyst: AnalystReport): string {
+  return RISK_PROMPT_TEMPLATE
+    .replace("{ticker}", d.ticker)
+    .replace("{name}", d.name)
+    .replace("{sector}", d.sector)
+    .replace("{analyst_thesis}", `${analyst.thesis}（fitness ${analyst.fitness_score}）`);
+}
+
+export function parseRiskReport(content: string): RiskReport | null {
+  const obj = extractJson(content);
+  if (!obj || typeof obj !== "object") return null;
+  const o = obj as Record<string, unknown>;
+  const flags = Array.isArray(o.risk_flags) ? (o.risk_flags as unknown[])
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
+    .map(x => ({
+      flag: typeof x.flag === "string" ? x.flag : "",
+      severity: (["低", "中", "高"].includes(x.severity as string) ? x.severity : "低") as "低" | "中" | "高",
+      detail: typeof x.detail === "string" ? x.detail : "",
+    })) : [];
+  const risk = ["low", "medium", "high"].includes(o.overall_risk as string) ? o.overall_risk as "low" | "medium" | "high" : "low";
+  return {
+    risk_flags: flags,
+    overall_risk: risk,
+    deal_breaker: o.deal_breaker === true,
+  };
+}
+
+/** 合并 candidate meta + analyst report + risk report → 完整 StockReport。 */
+export function buildStockReport(
+  meta: CandidateMeta,
+  sector: string,
+  analyst: AnalystReport,
+  risk: RiskReport,
+): StockReport {
+  return {
+    ticker: meta.ticker,
+    name: meta.name,
+    sector,
+    thesis: analyst.thesis,
+    fitness_score: analyst.fitness_score,
+    key_signals: analyst.key_signals,
+    data_gaps: analyst.data_gaps,
+    risk_flags: risk.risk_flags,
+    overall_risk: risk.overall_risk,
+    deal_breaker: risk.deal_breaker,
+    is_held: meta.is_held,
+    current_weight: meta.current_weight,
+    days_held: meta.days_held,
+    locked: meta.locked,
+    ranker_score: meta.ranker_score,
+  };
 }
