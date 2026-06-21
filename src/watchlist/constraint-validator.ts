@@ -71,5 +71,66 @@ export function validateRebalance(
     });
   }
 
+  // 规则 6: anti-churn 卖锁 — locked 持仓禁止 SELL/REDUCE
+  for (const a of plan.actions) {
+    if (a.action === "SELL" || a.action === "REDUCE") {
+      const h = ctx.held.get(a.ticker);
+      if (h?.locked) {
+        violations.push({
+          rule: "6. anti-churn 卖锁",
+          detail: `${a.ticker} 持仓 ${h.days_held} 天 < anti_churn_days，locked，禁止 ${a.action}`,
+        });
+      }
+    }
+  }
+
+  // 规则 7: anti-churn 买锁 — 最近 SELL 过的 ticker 禁止 BUY
+  if (ctx.recentSoldTickers) {
+    for (const a of plan.actions) {
+      if (a.action === "BUY" && ctx.recentSoldTickers.has(a.ticker)) {
+        violations.push({
+          rule: "7. anti-churn 买锁",
+          detail: `${a.ticker} 7 天内刚 SELL 过，禁止立即 BUY`,
+        });
+      }
+    }
+  }
+
+  // 规则 8: action 一致性
+  for (const a of plan.actions) {
+    const inconsistent: string[] = [];
+    if (a.action === "BUY" && a.current_weight > 0.0001) inconsistent.push("BUY 但 current>0");
+    if (a.action === "SELL" && a.target_weight > 0.0001) inconsistent.push("SELL 但 target>0");
+    if (a.action === "ADD" && a.current_weight < 0.0001) inconsistent.push("ADD 但 current=0");
+    if (a.action === "ADD" && a.target_weight <= a.current_weight) inconsistent.push("ADD 但 target≤current");
+    if (a.action === "REDUCE" && a.current_weight < 0.0001) inconsistent.push("REDUCE 但 current=0");
+    if (a.action === "REDUCE" && a.target_weight <= 0) inconsistent.push("REDUCE 但 target≤0");
+    if (a.action === "REDUCE" && a.target_weight >= a.current_weight) inconsistent.push("REDUCE 但 target≥current");
+    if (a.action === "HOLD" && Math.abs(a.target_weight - a.current_weight) > 0.0001) inconsistent.push("HOLD 但 target≠current");
+    if (inconsistent.length > 0) {
+      violations.push({ rule: "8. action 一致性", detail: `${a.ticker} ${a.action}: ${inconsistent.join("; ")}` });
+    }
+  }
+
+  // 规则 9: ticker 在候选/持仓池
+  for (const a of plan.actions) {
+    if (!ctx.tickersInPool.has(a.ticker)) {
+      violations.push({
+        rule: "9. ticker 在候选池",
+        detail: `${a.ticker} 不在评估范围（幻觉 ticker）`,
+      });
+    }
+  }
+
+  // 规则 10: sector 非空
+  for (const a of plan.actions) {
+    if (a.target_weight > 0.0001 && !ctx.sectors.get(a.ticker)) {
+      violations.push({
+        rule: "10. sector 非空",
+        detail: `${a.ticker} target>0 但 sector 缺失`,
+      });
+    }
+  }
+
   return { passed: violations.length === 0, violations };
 }
