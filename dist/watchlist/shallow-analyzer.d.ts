@@ -34,7 +34,10 @@ export declare function formatRiskPrompt(d: StockData, analyst: AnalystReport): 
 export declare function parseRiskReport(content: string): RiskReport | null;
 /** 合并 candidate meta + analyst report + risk report → 完整 StockReport。 */
 export declare function buildStockReport(meta: CandidateMeta, sector: string, analyst: AnalystReport, risk: RiskReport): StockReport;
-/** 对所有候选/持仓股并行跑 analyst + risk 双 call。
- *  单股失败（LLM 异常或数据缺失）跳过，rebalancer 看不到该股。 */
-export declare function analyzeAll(metas: CandidateMeta[], dataByTicker: Map<string, StockData>, caller: ShallowLlmCaller): Promise<StockReport[]>;
+/** 对所有候选/持仓股跑 analyst + risk 双 call（单股内串行，跨股并发限制）。
+ *  单股失败（LLM 异常或数据缺失）跳过，rebalancer 看不到该股。
+ *
+ *  concurrency 默认 3 —— zhipu glm-5.1 free tier 在并发 ≥5 时触发 429。
+ *  跨股 worker pool + 单股内 analyst→risk 串行 = 任意时刻最多 concurrency 个 LLM call。 */
+export declare function analyzeAll(metas: CandidateMeta[], dataByTicker: Map<string, StockData>, caller: ShallowLlmCaller, concurrency?: number): Promise<StockReport[]>;
 //# sourceMappingURL=shallow-analyzer.d.ts.map

@@ -47,6 +47,7 @@ const holdings_loader_1 = require("./watchlist/holdings-loader");
 const rebalancer_1 = require("./watchlist/rebalancer");
 const shallow_analyzer_1 = require("./watchlist/shallow-analyzer");
 const atomic_json_1 = require("./watchlist/atomic-json");
+const data_fetcher_1 = require("./watchlist/data-fetcher");
 const DEFAULT_WATCHLIST_DIR = path.join(os.homedir(), ".openclaw", "watchlist");
 function argValue(args, key) {
     const idx = args.indexOf(key);
@@ -60,12 +61,6 @@ function findLatestScan(watchlistDir) {
         .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d) && fs.existsSync(path.join(scanRoot, d, "scan.json")))
         .sort();
     return dates.length > 0 ? dates[dates.length - 1] : null;
-}
-/** TODO (Task 16): 真实数据 fetch — 调用 kline.py/news.py/hot_money.py/fundamentals.py
- *  当前 stub：返回空 map，shallow-analyzer 将跳过所有股。 */
-async function fetchDataForStocks(_tickers) {
-    console.warn(`[warn] 数据 fetch 未实现（Task 16），${_tickers.length} 只股将跳过 shallow-analyzer`);
-    return new Map();
 }
 async function main() {
     const args = process.argv.slice(2);
@@ -148,13 +143,22 @@ Options:
     console.log(`\nrebalancer 开始: ${date}`);
     console.log(`  模型: ${model}`);
     console.log(`  持仓: ${holdings.positions.length} 支 / cash ${(holdings.cash_pct * 100).toFixed(1)}%`);
-    // 拉 data（TODO Task 16: 真实实现，目前 stub）
+    // 拉 data（4 Python scripts 并行）
     const topN = parseInt(argValue(args, "--top-n") ?? "10", 10);
-    const allTickers = new Set([
-        ...scan.top_picks.slice(0, topN).map(p => p.ticker),
-        ...holdings.positions.map(p => p.ticker),
-    ]);
-    const dataByTicker = await fetchDataForStocks(Array.from(allTickers));
+    const metasForFetch = [
+        ...scan.top_picks.slice(0, topN).map(p => ({
+            ticker: p.ticker, name: p.name,
+            sector: holdings.positions.find(pos => pos.ticker === p.ticker)?.sector ?? "未分类",
+            ranker_thesis: p.reason,
+        })),
+        ...holdings.positions.map(p => ({ ticker: p.ticker, name: p.name, sector: p.sector })),
+    ];
+    // 去重
+    const seen = new Set();
+    const dedupMetas = metasForFetch.filter(m => seen.has(m.ticker) ? false : (seen.add(m.ticker), true));
+    console.log(`  拉数据: ${dedupMetas.length} 只股 × 4 scripts（并行 5）`);
+    const dataByTicker = await (0, data_fetcher_1.fetchAllStockData)(dedupMetas, 5);
+    console.log(`  数据就绪: ${dataByTicker.size}/${dedupMetas.length} 只`);
     // 跑 pipeline
     const result = await (0, rebalancer_1.rebalancePipeline)({
         scan, holdings, lastRebalance, currentDate: date,

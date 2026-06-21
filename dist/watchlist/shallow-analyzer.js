@@ -187,28 +187,46 @@ function buildStockReport(meta, sector, analyst, risk) {
         ranker_score: meta.ranker_score,
     };
 }
-/** 对所有候选/持仓股并行跑 analyst + risk 双 call。
- *  单股失败（LLM 异常或数据缺失）跳过，rebalancer 看不到该股。 */
-async function analyzeAll(metas, dataByTicker, caller) {
-    const results = await Promise.all(metas.map(async (meta) => {
-        const data = dataByTicker.get(meta.ticker);
-        if (!data)
-            return null;
-        try {
-            const analystContent = await caller({ role: "analyst", data });
-            const analyst = parseAnalystReport(analystContent);
-            if (!analyst)
-                return null;
-            const riskContent = await caller({ role: "risk", data, analyst });
-            const risk = parseRiskReport(riskContent);
-            if (!risk)
-                return null;
-            return buildStockReport(meta, data.sector, analyst, risk);
-        }
-        catch {
-            return null;
-        }
-    }));
+/** 对所有候选/持仓股跑 analyst + risk 双 call（单股内串行，跨股并发限制）。
+ *  单股失败（LLM 异常或数据缺失）跳过，rebalancer 看不到该股。
+ *
+ *  concurrency 默认 3 —— zhipu glm-5.1 free tier 在并发 ≥5 时触发 429。
+ *  跨股 worker pool + 单股内 analyst→risk 串行 = 任意时刻最多 concurrency 个 LLM call。 */
+async function analyzeAll(metas, dataByTicker, caller, concurrency = 3) {
+    const queue = [...metas];
+    const results = [];
+    const workers = [];
+    for (let w = 0; w < concurrency; w++) {
+        workers.push((async () => {
+            while (queue.length > 0) {
+                const meta = queue.shift();
+                const data = dataByTicker.get(meta.ticker);
+                if (!data) {
+                    results.push(null);
+                    continue;
+                }
+                try {
+                    const analystContent = await caller({ role: "analyst", data });
+                    const analyst = parseAnalystReport(analystContent);
+                    if (!analyst) {
+                        results.push(null);
+                        continue;
+                    }
+                    const riskContent = await caller({ role: "risk", data, analyst });
+                    const risk = parseRiskReport(riskContent);
+                    if (!risk) {
+                        results.push(null);
+                        continue;
+                    }
+                    results.push(buildStockReport(meta, data.sector, analyst, risk));
+                }
+                catch {
+                    results.push(null);
+                }
+            }
+        })());
+    }
+    await Promise.all(workers);
     return results.filter((r) => r !== null);
 }
 //# sourceMappingURL=shallow-analyzer.js.map
