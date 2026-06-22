@@ -167,8 +167,8 @@ describe("rebalancePipeline (integration)", () => {
     const lastRebalance: LastRebalance = { date: "2026-06-14", actions: [] };
 
     const dataByTicker = new Map<string, StockData>([
-      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "电子", kline: { pct_5d: 5, pct_20d: 20, support: 25, resistance: 30, volatility_20d: 0.015 }, news: [{ title: "n1" }], hot_money: { net_5d: 1e8 }, fundamentals: { pe: 50, pb: 5, rev_q1: 1e9, np_q1: 1e8 } }],
-      ["SH600519", { ticker: "SH600519", name: "贵州茅台", sector: "白酒", kline: { pct_5d: -1, pct_20d: 2, support: 1700, resistance: 1800, volatility_20d: 0.012 }, news: [], hot_money: { net_5d: -5e7 }, fundamentals: { pe: 30, pb: 10, rev_q1: 4e9, np_q1: 2e9 } }],
+      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "电子", kline: { pct_5d: 5, pct_20d: 20, support: 25, resistance: 30, volatility_20d: 0.015 }, news: [{ title: "n1" }], hot_money: { main_net_today: 1e8, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 50, pb: 5, rev_q1: 1e9, np_q1: 1e8 } }],
+      ["SH600519", { ticker: "SH600519", name: "贵州茅台", sector: "白酒", kline: { pct_5d: -1, pct_20d: 2, support: 1700, resistance: 1800, volatility_20d: 0.012 }, news: [], hot_money: { main_net_today: -5e7, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 30, pb: 10, rev_q1: 4e9, np_q1: 2e9 } }],
     ]);
 
     const shallowCaller: ShallowLlmCaller = async ({ role }) => {
@@ -230,7 +230,7 @@ describe("rebalancePipeline (integration)", () => {
     };
 
     const dataByTicker = new Map<string, StockData>([
-      ["SH600519", { ticker: "SH600519", name: "贵州茅台", sector: "白酒", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01 }, news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0 } }],
+      ["SH600519", { ticker: "SH600519", name: "贵州茅台", sector: "白酒", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01 }, news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0 } }],
     ]);
 
     // shallow-analyzer 标 deal_breaker
@@ -269,7 +269,7 @@ describe("rebalancePipeline (integration)", () => {
     const holdings: Holdings = { updated_at: "x", cash_pct: 0.10, positions: [] };
 
     const dataByTicker = new Map<string, StockData>([
-      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "电子", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01 }, news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0 } }],
+      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "电子", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01 }, news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0 } }],
     ]);
 
     const shallowCaller: ShallowLlmCaller = async ({ role }) => {
@@ -336,8 +336,8 @@ describe("rebalancePipeline (integration)", () => {
 
     // fundamentals 给不同 industry（电子 vs 白酒）
     const dataByTicker = new Map<string, StockData>([
-      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "未分类", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01 }, news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "电子" } }],
-      ["SH600519", { ticker: "SH600519", name: "贵州茅台", sector: "未分类", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01 }, news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "白酒" } }],
+      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "未分类", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01 }, news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "电子" } }],
+      ["SH600519", { ticker: "SH600519", name: "贵州茅台", sector: "未分类", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01 }, news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "白酒" } }],
     ]);
 
     const shallowCaller: ShallowLlmCaller = async ({ role }) => {
@@ -383,7 +383,7 @@ describe("rebalancePipeline (integration)", () => {
 
     // fundamentals.industry 为空（模拟拉取失败）
     const dataByTicker = new Map<string, StockData>([
-      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "未分类", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01 }, news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "" } }],
+      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "未分类", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01 }, news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "" } }],
     ]);
 
     const shallowCaller: ShallowLlmCaller = async ({ role }) => {
@@ -422,7 +422,7 @@ describe("rebalancePipeline (integration)", () => {
     };
 
     const dataByTicker = new Map<string, StockData>([
-      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "电子", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01 }, news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "元件" } }],
+      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "电子", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01 }, news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "元件" } }],
     ]);
 
     const shallowCaller: ShallowLlmCaller = async ({ role }) => {

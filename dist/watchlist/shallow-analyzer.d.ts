@@ -23,6 +23,31 @@ export interface NewsLayerStats {
     history_7d_count: number;
     total_categorized: number;
 }
+/** 资金面摘要（来自 hot_money.py 的 5 个子源，parseHotMoney 预压缩为浅层字段 + 文本片段）。
+ *
+ *  ⚠️ 字段命名诚实：main_net_today 是「当日」主力净流入，不是 5 日累计——
+ *  hot_money.py 的 _fetch_fund_flow 只解析最后一根日 K（klt=1, klines[-1]），
+ *  没有 5 日聚合逻辑。老实现字段叫 net_5d 但实际取不到值（顶层无此字段，恒 0），
+ *  此处修正为 main_net_today 与脚本语义对齐，避免误导 LLM 把当日数字当成 5 日趋势。
+ *
+ *  - 标量字段（main_net_today / *_net_today / northbound_*）：缺失或拉取失败 → 0/空串
+ *  - 文本片段（dragon_tiger_recent / sector_inflow_top / sector_outflow_top / hot_stocks_top）：
+ *    缺数据 → undefined，renderHotMoneySummary 据此省略对应分句
+ *  - sector_in_industry_tag：标的行业是否落在当日板块流入/流出榜，"主线"|"弱势"|"未上榜"|""
+ *  - dragon_tiger_reason：最近一次上榜原因（日涨幅偏离/换手达标等），判断游资炒作 vs 业绩驱动 */
+export interface HotMoneyData {
+    main_net_today: number;
+    super_net_today: number;
+    large_net_today: number;
+    northbound_yi: number;
+    northbound_signal: string;
+    dragon_tiger_recent?: string;
+    dragon_tiger_reason?: string;
+    sector_inflow_top?: string;
+    sector_outflow_top?: string;
+    sector_in_industry_tag: string;
+    hot_stocks_top?: string;
+}
 export interface StockData {
     ticker: string;
     name: string;
@@ -38,9 +63,7 @@ export interface StockData {
     /** 个股新闻（最多 5 条，含标题/正文摘要/时间）。
      *  旧实现是 string[]（只有标题），现升级为 NewsItem[] 让 LLM 判断时效性 + 标题党。 */
     news: NewsItem[];
-    hot_money: {
-        net_5d: number;
-    };
+    hot_money: HotMoneyData;
     fundamentals: {
         pe: number;
         pb: number;
@@ -56,6 +79,7 @@ export interface StockData {
      *  shallow 用它判断热门/冷门 + 有无突发，是一行文本的成本换密度信号。 */
     news_layer_stats?: NewsLayerStats;
 }
+export declare function renderHotMoneySummary(h: HotMoneyData): string;
 export declare function formatAnalystPrompt(d: StockData): string;
 /** 解析 analyst-role 输出。非 JSON / 缺字段返回 null（或填默认值）。 */
 export declare function parseAnalystReport(content: string): AnalystReport | null;

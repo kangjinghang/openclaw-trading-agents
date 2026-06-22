@@ -33,6 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.EMPTY_HOT_MONEY = void 0;
 exports.computeVolumeRatio = computeVolumeRatio;
 exports.parseKline = parseKline;
 exports.parseNews = parseNews;
@@ -173,8 +174,104 @@ function parseNewsLayerStats(raw) {
     }
     return stats;
 }
-function parseHotMoney(raw) {
-    return { net_5d: typeof raw?.net_5d === "number" ? raw.net_5d : 0 };
+/** 全空 HotMoneyData 兜底（拉取失败/字段全缺时用）。 */
+exports.EMPTY_HOT_MONEY = {
+    main_net_today: 0,
+    super_net_today: 0,
+    large_net_today: 0,
+    northbound_yi: 0,
+    northbound_signal: "",
+    sector_in_industry_tag: "",
+};
+/** 从 hot_money.py 输出解析资金面摘要（5 个子源预压缩为浅层字段 + 文本片段）。
+ *
+ *  ⚠️ 修复历史 bug：老实现 `return { net_5d: raw?.net_5d }`，但 hot_money.py 顶层
+ *  无 net_5d 字段（真实结构是 fund_flow.main_net / northbound / ...），导致恒返回 0。
+ *  且 fund_flow.main_net 是「当日」主力净流入（_fetch_fund_flow 只取 klines[-1]），
+ *  非 5 日累计——此处诚实命名为 main_net_today，避免误导下游。
+ *
+ *  raw 结构（exec-python.ts 已把 raw.data 提到顶层）：
+ *  { ticker, date, northbound:{total,signal,...}, fund_flow:{main_net,large_net,super_net},
+ *    sector_fund_flow:{inflow_top:[{name,main_net_yi,...}], outflow_top:[...], total_boards},
+ *    hot_stocks:[{code,name,reason,change_pct}], dragon_tiger:[{date,net_buy,turnover,...}] }
+ *
+ *  industry 参数用于判断标的行业是否落在当日板块流入/流出榜（板块轮动信号），
+ *  来自已 parse 的 fundamentals.industry，可为空（拉取失败时）。
+ *  全程容忍字段缺失，不抛异常。 */
+function parseHotMoney(raw, industry) {
+    if (!raw || typeof raw !== "object")
+        return { ...exports.EMPTY_HOT_MONEY };
+    const num = (v) => typeof v === "number" && !isNaN(v) ? v : 0;
+    const ff = raw.fund_flow || {};
+    const nb = raw.northbound;
+    // 龙虎榜：取最近 2 条（脚本已按日期倒序），压成 "MM-DD 净买±X亿 换手Y%"
+    // 另取最近一条的 reason（上榜原因：日涨幅偏离/换手达标等）——判断游资炒作 vs 业绩驱动
+    let dragonTigerRecent;
+    let dragonTigerReason;
+    const dt = Array.isArray(raw.dragon_tiger) ? raw.dragon_tiger : [];
+    if (dt.length > 0) {
+        const lines = dt.slice(0, 2).map((r) => {
+            const d = typeof r?.date === "string" ? r.date.slice(5) : "?"; // MM-DD
+            const net = num(r?.net_buy);
+            const sign = net > 0 ? "+" : "";
+            const turn = num(r?.turnover);
+            return `${d} 净买${sign}${net.toFixed(1)}亿 换手${turn.toFixed(1)}%`;
+        });
+        dragonTigerRecent = `${dt.length}次(最近${lines.join("；")})`;
+        const reason0 = typeof dt[0]?.reason === "string" ? dt[0].reason.trim() : "";
+        if (reason0)
+            dragonTigerReason = reason0.slice(0, 20);
+    }
+    // 板块轮动：inflow_top/outflow_top 取前 3 行业名，并判标的行业归属
+    let sectorInflowTop;
+    let sectorOutflowTop;
+    let sectorTag = "";
+    const sff = raw.sector_fund_flow;
+    if (sff && typeof sff === "object") {
+        const inflow = Array.isArray(sff.inflow_top) ? sff.inflow_top : [];
+        const outflow = Array.isArray(sff.outflow_top) ? sff.outflow_top : [];
+        if (inflow.length > 0) {
+            sectorInflowTop = inflow.slice(0, 3)
+                .map((b) => typeof b?.name === "string" ? b.name : "")
+                .filter(Boolean)
+                .join("/");
+        }
+        if (outflow.length > 0) {
+            sectorOutflowTop = outflow.slice(0, 3)
+                .map((b) => typeof b?.name === "string" ? b.name : "")
+                .filter(Boolean)
+                .join("/");
+        }
+        // 行业归属判断：industry 非空时才比对（拉取失败则留空，renderHotMoneySummary 会省略）
+        if (industry) {
+            const inHit = inflow.some((b) => typeof b?.name === "string" && b.name.includes(industry));
+            const outHit = outflow.some((b) => typeof b?.name === "string" && b.name.includes(industry));
+            sectorTag = inHit ? "主线" : outHit ? "弱势" : "未上榜";
+        }
+    }
+    // 今日热门股：取前 3 条 name(reason)
+    let hotStocksTop;
+    const hs = Array.isArray(raw.hot_stocks) ? raw.hot_stocks : [];
+    if (hs.length > 0) {
+        hotStocksTop = hs.slice(0, 3).map((r) => {
+            const name = typeof r?.name === "string" ? r.name : "";
+            const reason = typeof r?.reason === "string" && r.reason.trim() ? `(${r.reason.trim().slice(0, 8)})` : "";
+            return `${name}${reason}`;
+        }).filter(Boolean).join("/");
+    }
+    return {
+        main_net_today: num(ff.main_net),
+        super_net_today: num(ff.super_net),
+        large_net_today: num(ff.large_net),
+        northbound_yi: num(nb?.total),
+        northbound_signal: nb?.signal === "inflow" || nb?.signal === "outflow" ? nb.signal : "",
+        dragon_tiger_recent: dragonTigerRecent,
+        dragon_tiger_reason: dragonTigerReason,
+        sector_inflow_top: sectorInflowTop,
+        sector_outflow_top: sectorOutflowTop,
+        sector_in_industry_tag: sectorTag,
+        hot_stocks_top: hotStocksTop,
+    };
 }
 function parseFundamentals(raw) {
     return {
@@ -207,8 +304,9 @@ async function fetchStockData(ticker, name, sector, rankerThesis) {
     const kline = klineRaw ? parseKline(klineRaw) : { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 };
     const news = newsR?.data ? parseNews(newsR.data) : [];
     const newsLayerStats = newsR?.data ? parseNewsLayerStats(newsR.data) ?? undefined : undefined;
-    const hot = hotR?.data ? parseHotMoney(hotR.data) : { net_5d: 0 };
     const fund = fundR?.data ? parseFundamentals(fundR.data) : { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "" };
+    // fund 先于 hot 解析：parseHotMoney 需要 industry 判板块轮动归属（主线/弱势/未上榜）
+    const hot = hotR?.data ? parseHotMoney(hotR.data, fund.industry) : { ...exports.EMPTY_HOT_MONEY };
     return {
         ticker, name, sector,
         kline, news,

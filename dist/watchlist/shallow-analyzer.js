@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.renderHotMoneySummary = renderHotMoneySummary;
 exports.formatAnalystPrompt = formatAnalystPrompt;
 exports.parseAnalystReport = parseAnalystReport;
 exports.formatRiskPrompt = formatRiskPrompt;
@@ -37,7 +38,8 @@ const ANALYST_PROMPT_TEMPLATE = `# 角色
 ## 新闻（最近 7 天 top，含时间与正文摘要）
 {news_density}{news_bullets}
 （注意时效：最近 1-2 天的突发新闻权重高于一周前的旧闻；标题党风险——标题与正文矛盾时以正文为准）
-## 资金流向（5 日净流入 {net_5d}）
+## 资金流向
+{hot_money_summary}
 ## 基本面（PE {pe} / PB {pb} / Q1 营收 {rev_q1} / Q1 净利 {np_q1}）
 {ranker_section}
 
@@ -49,6 +51,60 @@ const ANALYST_PROMPT_TEMPLATE = `# 角色
   "key_signals": ["...", "..."],
   "data_gaps": ["..."]
 }`;
+/** 把 HotMoneyData 渲染成 prompt 里的一行紧凑资金面摘要。
+ *
+ *  范式对齐 newsDensity（news_layer_stats）：有则一行管道分隔，无则兜底标注。
+ *  老实现只塞一个 net_5d 数字（且字段名 bug 恒 0），现把 5 个子源压成一句：
+ *  "北向 +2.3亿(inflow) | 当日主力 +1.2亿(超大+0.45亿/大单+0.21亿) | 龙虎榜近30天2次(最近+1.2亿) | 所在行业未在当日主线 | 今日热门:半导体/军工/锂电"
+ *
+ *  兜底：所有标量全 0 且无任何文本片段 → "(资金数据拉取失败或全空)"，
+ *  让 LLM 知道资金面维度无数据（诚实标注缺失，不编造）。 */
+function formatYi(yuan) {
+    // 元 → 亿元，保留 2 位；0 显示为 0 亿（便于 LLM 区分"无数据"与"净流入 0"）
+    return (yuan / 1e8).toFixed(2);
+}
+function signPrefix(n) {
+    return n > 0 ? "+" : "";
+}
+function renderHotMoneySummary(h) {
+    const parts = [];
+    // 北向资金（全市场外资情绪风向标）
+    if (h.northbound_signal) {
+        const sig = h.northbound_signal === "inflow" ? "流入" : "流出";
+        parts.push(`北向${signPrefix(h.northbound_yi)}${h.northbound_yi.toFixed(2)}亿(${sig})`);
+    }
+    // 当日主力资金（超大单=机构，大单=游资/大户）
+    if (h.main_net_today !== 0 || h.super_net_today !== 0 || h.large_net_today !== 0) {
+        const segs = [`当日主力${signPrefix(h.main_net_today)}${formatYi(h.main_net_today)}亿`];
+        if (h.super_net_today !== 0)
+            segs.push(`超大单${signPrefix(h.super_net_today)}${formatYi(h.super_net_today)}亿`);
+        if (h.large_net_today !== 0)
+            segs.push(`大单${signPrefix(h.large_net_today)}${formatYi(h.large_net_today)}亿`);
+        parts.push(segs.join("/"));
+    }
+    // 龙虎榜（游资/机构席位动向）+ 上榜原因（区分游资炒作 vs 业绩驱动）
+    if (h.dragon_tiger_recent) {
+        const reason = h.dragon_tiger_reason ? `，原因:${h.dragon_tiger_reason}` : "";
+        parts.push(`龙虎榜近30天:${h.dragon_tiger_recent}${reason}`);
+    }
+    // 板块轮动（标的行业是否当日主线）+ 流入/流出 top 名单
+    if (h.sector_in_industry_tag) {
+        const tag = h.sector_in_industry_tag === "主线" ? "所在行业在当日流入主线"
+            : h.sector_in_industry_tag === "弱势" ? "所在行业在当日流出弱势区"
+                : "所在行业未上当日板块榜";
+        const inflow = h.sector_inflow_top ? `(流入top:${h.sector_inflow_top})` : "";
+        const outflow = h.sector_outflow_top ? `(流出top:${h.sector_outflow_top})` : "";
+        parts.push(`${tag}${inflow}${outflow}`);
+    }
+    // 今日热门题材
+    if (h.hot_stocks_top) {
+        parts.push(`今日热门:${h.hot_stocks_top}`);
+    }
+    if (parts.length === 0) {
+        return "(资金数据拉取失败或全空)";
+    }
+    return parts.join(" | ");
+}
 function formatAnalystPrompt(d) {
     const newsBullets = d.news.map(n => {
         const time = n.time ? `[${n.time}] ` : "";
@@ -71,7 +127,7 @@ function formatAnalystPrompt(d) {
         .replace("{resistance}", String(d.kline.resistance))
         .replace("{news_density}", newsDensity)
         .replace("{news_bullets}", newsBullets)
-        .replace("{net_5d}", String(d.hot_money.net_5d))
+        .replace("{hot_money_summary}", renderHotMoneySummary(d.hot_money))
         .replace("{pe}", String(d.fundamentals.pe))
         .replace("{pb}", String(d.fundamentals.pb))
         .replace("{rev_q1}", String(d.fundamentals.rev_q1))
@@ -161,7 +217,8 @@ const RISK_PROMPT_TEMPLATE = `# 角色
 # 数据
 ## K 线（5 日 +{pct_5d}% / 20 日 +{pct_20d}%，量比 {volume_ratio_5_20}）
 - 量比 < 0.8 = 缩量；> 1.2 = 放量；0.8-1.2 = 正常
-## 资金流向（5 日净流入 {net_5d}）
+## 资金流向
+{hot_money_summary}
 ## 基本面（PE {pe} / PB {pb} / Q1 营收 {rev_q1} / Q1 净利 {np_q1}）
 
 ## VPA 量价预计算
@@ -188,7 +245,7 @@ function formatRiskPrompt(d, analyst) {
         .replace("{pct_5d}", String(d.kline.pct_5d))
         .replace("{pct_20d}", String(d.kline.pct_20d))
         .replace("{volume_ratio_5_20}", String(d.kline.volume_ratio_5_20))
-        .replace("{net_5d}", String(d.hot_money.net_5d))
+        .replace("{hot_money_summary}", renderHotMoneySummary(d.hot_money))
         .replace("{pe}", String(d.fundamentals.pe))
         .replace("{pb}", String(d.fundamentals.pb))
         .replace("{rev_q1}", String(d.fundamentals.rev_q1))

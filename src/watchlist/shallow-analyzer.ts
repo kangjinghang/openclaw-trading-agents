@@ -27,6 +27,32 @@ export interface NewsLayerStats {
   total_categorized: number;
 }
 
+/** 资金面摘要（来自 hot_money.py 的 5 个子源，parseHotMoney 预压缩为浅层字段 + 文本片段）。
+ *
+ *  ⚠️ 字段命名诚实：main_net_today 是「当日」主力净流入，不是 5 日累计——
+ *  hot_money.py 的 _fetch_fund_flow 只解析最后一根日 K（klt=1, klines[-1]），
+ *  没有 5 日聚合逻辑。老实现字段叫 net_5d 但实际取不到值（顶层无此字段，恒 0），
+ *  此处修正为 main_net_today 与脚本语义对齐，避免误导 LLM 把当日数字当成 5 日趋势。
+ *
+ *  - 标量字段（main_net_today / *_net_today / northbound_*）：缺失或拉取失败 → 0/空串
+ *  - 文本片段（dragon_tiger_recent / sector_inflow_top / sector_outflow_top / hot_stocks_top）：
+ *    缺数据 → undefined，renderHotMoneySummary 据此省略对应分句
+ *  - sector_in_industry_tag：标的行业是否落在当日板块流入/流出榜，"主线"|"弱势"|"未上榜"|""
+ *  - dragon_tiger_reason：最近一次上榜原因（日涨幅偏离/换手达标等），判断游资炒作 vs 业绩驱动 */
+export interface HotMoneyData {
+  main_net_today: number;        // 当日主力净流入（元）
+  super_net_today: number;       // 当日超大单净流入（元）
+  large_net_today: number;       // 当日大单净流入（元）
+  northbound_yi: number;         // 全市场北向净流入（亿元）
+  northbound_signal: string;     // "inflow"|"outflow"|""（无北向数据则空串）
+  dragon_tiger_recent?: string;  // 近 30 天龙虎榜预压缩文本（最近 2 条：日期+净买+换手）
+  dragon_tiger_reason?: string;  // 最近一次上榜原因（东财 EXPLANATION，截 20 字）
+  sector_inflow_top?: string;    // 当日行业板块流入 top3 名称（"/" 分隔）
+  sector_outflow_top?: string;   // 当日行业板块流出 top3 名称（"/" 分隔）
+  sector_in_industry_tag: string;// 标的行业归属："主线"|"弱势"|"未上榜"|""
+  hot_stocks_top?: string;       // 当日热门股 top3 预压缩文本
+}
+
 export interface StockData {
   ticker: string;
   name: string;
@@ -35,7 +61,7 @@ export interface StockData {
   /** 个股新闻（最多 5 条，含标题/正文摘要/时间）。
    *  旧实现是 string[]（只有标题），现升级为 NewsItem[] 让 LLM 判断时效性 + 标题党。 */
   news: NewsItem[];
-  hot_money: { net_5d: number };
+  hot_money: HotMoneyData;
   fundamentals: { pe: number; pb: number; rev_q1: number; np_q1: number; industry: string };
   ranker_thesis?: string;
   /** kline.py 预计算的 VPA 量价分析文本（含"顶部背离信号/放量滞涨"等结论）。
@@ -76,7 +102,8 @@ const ANALYST_PROMPT_TEMPLATE = `# 角色
 ## 新闻（最近 7 天 top，含时间与正文摘要）
 {news_density}{news_bullets}
 （注意时效：最近 1-2 天的突发新闻权重高于一周前的旧闻；标题党风险——标题与正文矛盾时以正文为准）
-## 资金流向（5 日净流入 {net_5d}）
+## 资金流向
+{hot_money_summary}
 ## 基本面（PE {pe} / PB {pb} / Q1 营收 {rev_q1} / Q1 净利 {np_q1}）
 {ranker_section}
 
@@ -88,6 +115,67 @@ const ANALYST_PROMPT_TEMPLATE = `# 角色
   "key_signals": ["...", "..."],
   "data_gaps": ["..."]
 }`;
+
+/** 把 HotMoneyData 渲染成 prompt 里的一行紧凑资金面摘要。
+ *
+ *  范式对齐 newsDensity（news_layer_stats）：有则一行管道分隔，无则兜底标注。
+ *  老实现只塞一个 net_5d 数字（且字段名 bug 恒 0），现把 5 个子源压成一句：
+ *  "北向 +2.3亿(inflow) | 当日主力 +1.2亿(超大+0.45亿/大单+0.21亿) | 龙虎榜近30天2次(最近+1.2亿) | 所在行业未在当日主线 | 今日热门:半导体/军工/锂电"
+ *
+ *  兜底：所有标量全 0 且无任何文本片段 → "(资金数据拉取失败或全空)"，
+ *  让 LLM 知道资金面维度无数据（诚实标注缺失，不编造）。 */
+function formatYi(yuan: number): string {
+  // 元 → 亿元，保留 2 位；0 显示为 0 亿（便于 LLM 区分"无数据"与"净流入 0"）
+  return (yuan / 1e8).toFixed(2);
+}
+
+function signPrefix(n: number): string {
+  return n > 0 ? "+" : "";
+}
+
+export function renderHotMoneySummary(h: HotMoneyData): string {
+  const parts: string[] = [];
+
+  // 北向资金（全市场外资情绪风向标）
+  if (h.northbound_signal) {
+    const sig = h.northbound_signal === "inflow" ? "流入" : "流出";
+    parts.push(`北向${signPrefix(h.northbound_yi)}${h.northbound_yi.toFixed(2)}亿(${sig})`);
+  }
+
+  // 当日主力资金（超大单=机构，大单=游资/大户）
+  if (h.main_net_today !== 0 || h.super_net_today !== 0 || h.large_net_today !== 0) {
+    const segs = [`当日主力${signPrefix(h.main_net_today)}${formatYi(h.main_net_today)}亿`];
+    if (h.super_net_today !== 0) segs.push(`超大单${signPrefix(h.super_net_today)}${formatYi(h.super_net_today)}亿`);
+    if (h.large_net_today !== 0) segs.push(`大单${signPrefix(h.large_net_today)}${formatYi(h.large_net_today)}亿`);
+    parts.push(segs.join("/"));
+  }
+
+  // 龙虎榜（游资/机构席位动向）+ 上榜原因（区分游资炒作 vs 业绩驱动）
+  if (h.dragon_tiger_recent) {
+    const reason = h.dragon_tiger_reason ? `，原因:${h.dragon_tiger_reason}` : "";
+    parts.push(`龙虎榜近30天:${h.dragon_tiger_recent}${reason}`);
+  }
+
+  // 板块轮动（标的行业是否当日主线）+ 流入/流出 top 名单
+  if (h.sector_in_industry_tag) {
+    const tag = h.sector_in_industry_tag === "主线" ? "所在行业在当日流入主线"
+      : h.sector_in_industry_tag === "弱势" ? "所在行业在当日流出弱势区"
+      : "所在行业未上当日板块榜";
+    const inflow = h.sector_inflow_top ? `(流入top:${h.sector_inflow_top})` : "";
+    const outflow = h.sector_outflow_top ? `(流出top:${h.sector_outflow_top})` : "";
+    parts.push(`${tag}${inflow}${outflow}`);
+  }
+
+  // 今日热门题材
+  if (h.hot_stocks_top) {
+    parts.push(`今日热门:${h.hot_stocks_top}`);
+  }
+
+  if (parts.length === 0) {
+    return "(资金数据拉取失败或全空)";
+  }
+  return parts.join(" | ");
+}
 
 export function formatAnalystPrompt(d: StockData): string {
   const newsBullets = d.news.map(n => {
@@ -111,7 +199,7 @@ export function formatAnalystPrompt(d: StockData): string {
     .replace("{resistance}", String(d.kline.resistance))
     .replace("{news_density}", newsDensity)
     .replace("{news_bullets}", newsBullets)
-    .replace("{net_5d}", String(d.hot_money.net_5d))
+    .replace("{hot_money_summary}", renderHotMoneySummary(d.hot_money))
     .replace("{pe}", String(d.fundamentals.pe))
     .replace("{pb}", String(d.fundamentals.pb))
     .replace("{rev_q1}", String(d.fundamentals.rev_q1))
@@ -175,7 +263,8 @@ const RISK_PROMPT_TEMPLATE = `# 角色
 # 数据
 ## K 线（5 日 +{pct_5d}% / 20 日 +{pct_20d}%，量比 {volume_ratio_5_20}）
 - 量比 < 0.8 = 缩量；> 1.2 = 放量；0.8-1.2 = 正常
-## 资金流向（5 日净流入 {net_5d}）
+## 资金流向
+{hot_money_summary}
 ## 基本面（PE {pe} / PB {pb} / Q1 营收 {rev_q1} / Q1 净利 {np_q1}）
 
 ## VPA 量价预计算
@@ -203,7 +292,7 @@ export function formatRiskPrompt(d: StockData, analyst: AnalystReport): string {
     .replace("{pct_5d}", String(d.kline.pct_5d))
     .replace("{pct_20d}", String(d.kline.pct_20d))
     .replace("{volume_ratio_5_20}", String(d.kline.volume_ratio_5_20))
-    .replace("{net_5d}", String(d.hot_money.net_5d))
+    .replace("{hot_money_summary}", renderHotMoneySummary(d.hot_money))
     .replace("{pe}", String(d.fundamentals.pe))
     .replace("{pb}", String(d.fundamentals.pb))
     .replace("{rev_q1}", String(d.fundamentals.rev_q1))

@@ -147,11 +147,90 @@ describe("parseNewsLayerStats", () => {
 });
 
 describe("parseHotMoney", () => {
-  it("提取 net_5d 净流入", () => {
-    expect(parseHotMoney({ net_5d: 1.23e8 })).toEqual({ net_5d: 1.23e8 });
+  it("解析真实 hot_money.py 结构：fund_flow + northbound + 3 个数组子源", () => {
+    // 结构对齐 hot_money.py 实际输出（exec-python.ts 已把 raw.data 提到顶层）
+    const raw = {
+      ticker: "600519",
+      fund_flow: { main_net: 1.23e8, large_net: 5e7, super_net: 7.3e7 },
+      northbound: { total: 2.3, signal: "inflow" },
+      sector_fund_flow: {
+        inflow_top: [
+          { name: "白酒", main_net_yi: 5.1 },
+          { name: "半导体", main_net_yi: 4.2 },
+          { name: "军工", main_net_yi: 3.0 },
+        ],
+        outflow_top: [
+          { name: "房地产" },
+          { name: "银行" },
+          { name: "建材" },
+        ],
+      },
+      hot_stocks: [
+        { code: "600519", name: "贵州茅台", reason: "提价" },
+        { code: "000001", name: "平安银行", reason: "降准" },
+      ],
+      dragon_tiger: [
+        { date: "2026-06-18", net_buy: 1.2, turnover: 8.3, reason: "日涨幅偏离值达7%" },
+        { date: "2026-06-10", net_buy: -0.4, turnover: 5.1, reason: "日换手率达20%" },
+      ],
+    };
+    const r = parseHotMoney(raw, "白酒");
+    expect(r.main_net_today).toBe(1.23e8);
+    expect(r.super_net_today).toBe(7.3e7);
+    expect(r.large_net_today).toBe(5e7);
+    expect(r.northbound_yi).toBe(2.3);
+    expect(r.northbound_signal).toBe("inflow");
+    expect(r.dragon_tiger_recent).toContain("2次");
+    expect(r.dragon_tiger_recent).toContain("06-18");
+    expect(r.dragon_tiger_recent).toContain("净买+1.2亿");
+    expect(r.dragon_tiger_reason).toBe("日涨幅偏离值达7%");  // 最近一条 reason
+    expect(r.sector_inflow_top).toBe("白酒/半导体/军工");
+    expect(r.sector_outflow_top).toBe("房地产/银行/建材");
+    expect(r.sector_in_industry_tag).toBe("主线");  // 白酒在 inflow_top
+    expect(r.hot_stocks_top).toContain("贵州茅台");
   });
-  it("缺字段 → 0", () => {
-    expect(parseHotMoney({})).toEqual({ net_5d: 0 });
+
+  it("标的行业在 outflow_top → 弱势", () => {
+    const raw = {
+      sector_fund_flow: {
+        inflow_top: [{ name: "半导体" }],
+        outflow_top: [{ name: "白酒" }],
+      },
+    };
+    expect(parseHotMoney(raw, "白酒").sector_in_industry_tag).toBe("弱势");
+  });
+
+  it("标的行业不在榜 → 未上榜", () => {
+    const raw = { sector_fund_flow: { inflow_top: [{ name: "半导体" }] } };
+    expect(parseHotMoney(raw, "白酒").sector_in_industry_tag).toBe("未上榜");
+  });
+
+  it("industry 为空（拉取失败）→ sector_in_industry_tag 留空，不误判", () => {
+    const raw = { sector_fund_flow: { inflow_top: [{ name: "白酒" }] } };
+    expect(parseHotMoney(raw, "").sector_in_industry_tag).toBe("");
+  });
+
+  it("缺字段 → 全 0/空（容忍，不抛）", () => {
+    expect(parseHotMoney({})).toEqual({
+      main_net_today: 0, super_net_today: 0, large_net_today: 0,
+      northbound_yi: 0, northbound_signal: "",
+      sector_in_industry_tag: "",
+    });
+  });
+
+  it("null/非对象输入 → 全 0", () => {
+    expect(parseHotMoney(null)).toEqual({
+      main_net_today: 0, super_net_today: 0, large_net_today: 0,
+      northbound_yi: 0, northbound_signal: "",
+      sector_in_industry_tag: "",
+    });
+  });
+
+  it("老格式 {net_5d:...}（已废弃的字段名）→ 不再被读取，返回 0", () => {
+    // 回归测试：老实现读 raw.net_5d，但 hot_money.py 顶层无此字段（恒 0）。
+    // 修正后读 raw.fund_flow.main_net，老格式的 net_5d 应被忽略。
+    const r = parseHotMoney({ net_5d: 1.23e8 });
+    expect(r.main_net_today).toBe(0);  // 不再从 net_5d 读
   });
 });
 
@@ -204,7 +283,7 @@ function mockBySkill(vpaContent?: string) {
         layer_stats: { realtime_6h_count: 1, extended_24h_count: 2, history_7d_count: 3, total_categorized: 6 },
       },
     } as any;
-    if (skillName === "trading-hot-money") return { success: true, data: { net_5d: 1e8 } } as any;
+    if (skillName === "trading-hot-money") return { success: true, data: { fund_flow: { main_net: 1e8, large_net: 2e7, super_net: 3e7 }, northbound: { total: 1.5, signal: "inflow" } } } as any;
     if (skillName === "trading-fundamentals") return { success: true, data: { pe_ttm: 20, pb: 3, stock_info: { industry: "x" } } } as any;
     return { success: false } as any;
   });
@@ -265,7 +344,7 @@ describe("fetchStockData news 调用参数 + layer_stats", () => {
 /** 辅助：复用 mockBySkill 的返回值逻辑（不重置 mock）。 */
 function mockBySkillReturnValue(skillName: string): any {
   if (skillName === "trading-kline") return { success: true, data: { data: [{ close: 10, volume: 100 }, { close: 11, volume: 110 }] } };
-  if (skillName === "trading-hot-money") return { success: true, data: { net_5d: 1e8 } };
+  if (skillName === "trading-hot-money") return { success: true, data: { fund_flow: { main_net: 1e8, large_net: 2e7, super_net: 3e7 }, northbound: { total: 1.5, signal: "inflow" } } };
   if (skillName === "trading-fundamentals") return { success: true, data: { pe_ttm: 20, pb: 3, stock_info: { industry: "x" } } };
   return { success: false };
 }

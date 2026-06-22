@@ -15,7 +15,7 @@ describe("formatAnalystPrompt", () => {
         { title: "新闻 1", content: "正文 1", time: "2026-06-22 10:00", source: "财联社" },
         { title: "新闻 2" },
       ],
-      hot_money: { net_5d: 1.2e8 },
+      hot_money: { main_net_today: 1.2e8, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" },
       fundamentals: { pe: 50, pb: 5, rev_q1: 1e9, np_q1: 1e8, industry: "电子" },
       ranker_thesis: "TLVR 电感获英伟达认证",
       news_layer_stats: { realtime_6h_count: 1, extended_24h_count: 2, history_7d_count: 3, total_categorized: 6 },
@@ -29,7 +29,7 @@ describe("formatAnalystPrompt", () => {
     expect(prompt).toContain("新闻密度");            // layer_stats 注入
     expect(prompt).toContain("6h 内 1 条突发");      // realtime 突发
     expect(prompt).toContain("7 天共 6 条");          // total 密度
-    expect(prompt).toContain("120000000");
+    expect(prompt).toContain("1.20亿");  // main_net_today 1.2e8 元 → formatYi 渲染为 1.20 亿
     expect(prompt).toContain("英伟达认证");
   });
 
@@ -37,7 +37,7 @@ describe("formatAnalystPrompt", () => {
     const prompt = formatAnalystPrompt({
       ticker: "SZ300319", name: "麦捷科技", sector: "电子",
       kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 },
-      news: [], hot_money: { net_5d: 0 },
+      news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" },
       fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "" },
     });
     // 锚点关键词（对齐下游 ≥8 BUY / ≤5 减仓 / ≤6 不买 阈值）
@@ -51,7 +51,7 @@ describe("formatAnalystPrompt", () => {
     const prompt = formatAnalystPrompt({
       ticker: "SZ300319", name: "麦捷科技", sector: "电子",
       kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 },
-      news: [], hot_money: { net_5d: 0 },
+      news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" },
       fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "" },
       // 无 news_layer_stats
     });
@@ -100,7 +100,7 @@ describe("formatRiskPrompt", () => {
     const data: any = {
       ticker: "SZ300319", name: "麦捷科技", sector: "电子",
       kline: { pct_5d: 12, pct_20d: 45, support: 25, resistance: 30, volume_ratio_5_20: 0.6 },
-      news: [{ title: "n1" }], hot_money: { net_5d: 1 }, fundamentals: { pe: 50, pb: 5, rev_q1: 1, np_q1: 0.1 },
+      news: [{ title: "n1" }], hot_money: { main_net_today: 1, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 50, pb: 5, rev_q1: 1, np_q1: 0.1 },
     };
     const analyst: AnalystReport = {
       thesis: "TLVR 电感放量", fitness_score: 8.5, data_freshness: "2026-06-21",
@@ -116,7 +116,7 @@ describe("formatRiskPrompt", () => {
     const data: any = {
       ticker: "SZ300319", name: "麦捷科技", sector: "电子",
       kline: { pct_5d: 15.2, pct_20d: 45.6, support: 25, resistance: 30, volume_ratio_5_20: 0.6 },
-      news: [{ title: "n1" }], hot_money: { net_5d: 1.2e8 }, fundamentals: { pe: 50, pb: 5, rev_q1: 1e9, np_q1: 1e8 },
+      news: [{ title: "n1" }], hot_money: { main_net_today: 1.2e8, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 50, pb: 5, rev_q1: 1e9, np_q1: 1e8 },
     };
     const analyst: AnalystReport = {
       thesis: "x", fitness_score: 8, data_freshness: "2026-06-21", key_signals: [], data_gaps: [],
@@ -133,7 +133,7 @@ describe("formatRiskPrompt", () => {
     const data: any = {
       ticker: "SZ300319", name: "麦捷科技", sector: "电子",
       kline: { pct_5d: 12, pct_20d: 45, support: 25, resistance: 30, volume_ratio_5_20: 0.6 },
-      news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0 },
+      news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0 },
       vpa_text: "## VPA\n- **顶部背离信号**: 近5日价格上涨但成交量递减，上涨动能可能衰竭",
     };
     const analyst: AnalystReport = {
@@ -148,7 +148,7 @@ describe("formatRiskPrompt", () => {
     const data: any = {
       ticker: "SZ300319", name: "麦捷科技", sector: "电子",
       kline: { pct_5d: 12, pct_20d: 45, support: 25, resistance: 30, volume_ratio_5_20: 0.6 },
-      news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0 },
+      news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0 },
       // 无 vpa_text
     };
     const analyst: AnalystReport = {
@@ -162,7 +162,7 @@ describe("formatRiskPrompt", () => {
     const data: any = {
       ticker: "SZ300319", name: "麦捷科技", sector: "电子",
       kline: { pct_5d: 12, pct_20d: 45, support: 25, resistance: 30, volume_ratio_5_20: 0.6 },
-      news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 85, pb: 5, rev_q1: 1e9, np_q1: 1e8 },
+      news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 85, pb: 5, rev_q1: 1e9, np_q1: 1e8 },
     };
     const analyst: AnalystReport = {
       thesis: "x", fitness_score: 8, data_freshness: "2026-06-21", key_signals: [], data_gaps: [],
@@ -227,8 +227,8 @@ describe("analyzeAll", () => {
       { ticker: "SH600183", name: "生益科技", is_held: false, current_weight: 0, days_held: 0, locked: false, ranker_score: 9.0 },
     ];
     const dataByTicker = new Map<string, StockData>([
-      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "电子", kline: { pct_5d: 1, pct_20d: 2, support: 1, resistance: 2, volatility_20d: 0.02, volume_ratio_5_20: 1.0 }, news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 1, pb: 1, rev_q1: 1, np_q1: 1, industry: "电子" } }],
-      ["SH600183", { ticker: "SH600183", name: "生益科技", sector: "PCB", kline: { pct_5d: 1, pct_20d: 2, support: 1, resistance: 2, volatility_20d: 0.02, volume_ratio_5_20: 1.0 }, news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 1, pb: 1, rev_q1: 1, np_q1: 1, industry: "PCB" } }],
+      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "电子", kline: { pct_5d: 1, pct_20d: 2, support: 1, resistance: 2, volatility_20d: 0.02, volume_ratio_5_20: 1.0 }, news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 1, pb: 1, rev_q1: 1, np_q1: 1, industry: "电子" } }],
+      ["SH600183", { ticker: "SH600183", name: "生益科技", sector: "PCB", kline: { pct_5d: 1, pct_20d: 2, support: 1, resistance: 2, volatility_20d: 0.02, volume_ratio_5_20: 1.0 }, news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 1, pb: 1, rev_q1: 1, np_q1: 1, industry: "PCB" } }],
     ]);
     const mockCaller: ShallowLlmCaller = async ({ role }) => {
       if (role === "analyst") {
@@ -249,7 +249,7 @@ describe("analyzeAll", () => {
     ];
     const dataByTicker = new Map<string, StockData>();
     for (const m of metas) {
-      dataByTicker.set(m.ticker, { ticker: m.ticker, name: m.name, sector: "x", kline: { pct_5d: 1, pct_20d: 1, support: 1, resistance: 2, volatility_20d: 0.02, volume_ratio_5_20: 1.0 }, news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 1, pb: 1, rev_q1: 1, np_q1: 1, industry: "x" } });
+      dataByTicker.set(m.ticker, { ticker: m.ticker, name: m.name, sector: "x", kline: { pct_5d: 1, pct_20d: 1, support: 1, resistance: 2, volatility_20d: 0.02, volume_ratio_5_20: 1.0 }, news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 1, pb: 1, rev_q1: 1, np_q1: 1, industry: "x" } });
     }
     const mockCaller: ShallowLlmCaller = async ({ role, data }) => {
       if (data.ticker === "FAIL") throw new Error("network");
@@ -311,7 +311,7 @@ describe("analyzeAll 持仓股失败兜底", () => {
     return {
       ticker, name, sector: "电子",
       kline: { pct_5d: 1, pct_20d: 2, support: 1, resistance: 2, volatility_20d: 0.02, volume_ratio_5_20: 1.0 },
-      news: [], hot_money: { net_5d: 0 },
+      news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" },
       fundamentals: { pe: 1, pb: 1, rev_q1: 1, np_q1: 1, industry: "电子" },
     };
   }
