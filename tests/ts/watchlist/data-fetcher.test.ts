@@ -235,22 +235,40 @@ describe("parseHotMoney", () => {
 });
 
 describe("parseFundamentals", () => {
-  it("提取 pe/pb/rev_q1/np_q1 + industry（来自 stock_info）", () => {
+  // 真实结构对齐 fundamentals.py 的输出（fundamentals.py:27-89）：
+  //   valuation.{pe_ttm,pb,...} / financial_snapshot.{revenue,net_profit,...} / stock_info.industry
+  // 老测试传伪造的扁平结构（顶层 pe_ttm/pb/revenue_q1/net_profit_q1），与脚本输出不符，
+  // 掩盖了字段路径 bug。这里改用真实嵌套结构，确保 parseFundamentals 与 fundamentals.py 对齐。
+  it("从嵌套结构提取 pe/pb/rev_q1/np_q1 + industry（对齐 fundamentals.py）", () => {
     const raw = {
-      pe_ttm: 35.2, pb: 4.5, revenue_q1: 1.2e9, net_profit_q1: 1.3e8,
+      ticker: "600519",
+      valuation: { pe_ttm: 35.2, pb: 4.5, name: "贵州茅台", market_cap_yi: 21000 },
+      financial_snapshot: { revenue: 1.2e9, net_profit: 1.3e8, roe: 15.2, debt_ratio: 20.1 },
       stock_info: { industry: "白酒", name: "贵州茅台", total_mv: 2.1e12 },
     };
     expect(parseFundamentals(raw)).toEqual({ pe: 35.2, pb: 4.5, rev_q1: 1.2e9, np_q1: 1.3e8, industry: "白酒" });
   });
-  it("支持 pe_ttm 别名 + industry 缺失 → 空字符串", () => {
+  it("兼容老扁平格式（顶层 pe_ttm/pb + 别名 rev_q1/np_q1）", () => {
     const raw = { pe: 20, pb: 3, rev_q1: 5e8, np_q1: 6e7 };
     expect(parseFundamentals(raw)).toEqual({ pe: 20, pb: 3, rev_q1: 5e8, np_q1: 6e7, industry: "" });
+  });
+  it("嵌套结构与扁平结构同时存在时，嵌套优先（对齐 fundamentals.py 主路）", () => {
+    const raw = {
+      pe_ttm: 999, pb: 999,  // 顶层干扰值，应被嵌套覆盖
+      valuation: { pe_ttm: 18.5, pb: 2.1 },
+      financial_snapshot: { revenue: 2850000000, net_profit: 320000000 },
+    };
+    expect(parseFundamentals(raw)).toEqual({ pe: 18.5, pb: 2.1, rev_q1: 2850000000, np_q1: 320000000, industry: "" });
   });
   it("缺字段 → 0 + industry 空字符串", () => {
     expect(parseFundamentals({})).toEqual({ pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "" });
   });
   it("industry 空白字符串 → trim 为空", () => {
     expect(parseFundamentals({ stock_info: { industry: "   " } }).industry).toBe("");
+  });
+  it("非数字（NaN/字符串）不污染数值字段（num 守卫）", () => {
+    const raw = { valuation: { pe_ttm: NaN, pb: "高" }, financial_snapshot: { revenue: null } };
+    expect(parseFundamentals(raw)).toEqual({ pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "" });
   });
 });
 

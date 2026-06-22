@@ -243,12 +243,22 @@ export function parseHotMoney(raw: any, industry?: string): HotMoneyData {
 }
 
 export function parseFundamentals(raw: any): { pe: number; pb: number; rev_q1: number; np_q1: number; industry: string } {
+  // fundamentals.py 的真实输出是嵌套结构：
+  //   valuation.pe_ttm / valuation.pb          （腾讯实时估值）
+  //   financial_snapshot.revenue / .net_profit （mootdx 财务快照）
+  //   stock_info.industry                       （东方财富 f127 / datacenter BOARD_NAME 双路）
+  // 老实现误读顶层 pe_ttm/pb/revenue_q1/net_profit_q1 → 恒 0，导致 shallow-analyzer
+  // 的 PE/PB/营收/净利全盲，fitness 被评分规则压制到 ≤6（无法证实业绩）。
+  // 主路读嵌套字段；保留顶层/别名作为容错（兼容可能的旧扁平格式或其他调用方）。
+  const val = raw?.valuation ?? {};
+  const snap = raw?.financial_snapshot ?? {};
+  const num = (v: unknown): number => typeof v === "number" && Number.isFinite(v) ? v : 0;
   return {
-    pe: typeof raw?.pe_ttm === "number" ? raw.pe_ttm : (typeof raw?.pe === "number" ? raw.pe : 0),
-    pb: typeof raw?.pb === "number" ? raw.pb : 0,
-    rev_q1: typeof raw?.revenue_q1 === "number" ? raw.revenue_q1 : (typeof raw?.rev_q1 === "number" ? raw.rev_q1 : 0),
-    np_q1: typeof raw?.net_profit_q1 === "number" ? raw.net_profit_q1 : (typeof raw?.np_q1 === "number" ? raw.np_q1 : 0),
-    // industry 来自 fundamentals.py 的 stock_info.industry（东方财富 f127 / datacenter BOARD_NAME 双路拉取）
+    pe: num(val.pe_ttm) || num(val.pe) || num(raw?.pe_ttm) || num(raw?.pe),
+    pb: num(val.pb) || num(raw?.pb),
+    // 字段名对齐 fundamentals.py：snapshot 用 revenue/net_profit（无 _q1 后缀）
+    rev_q1: num(snap.revenue) || num(snap.revenue_q1) || num(raw?.revenue_q1) || num(raw?.rev_q1),
+    np_q1: num(snap.net_profit) || num(snap.net_profit_q1) || num(raw?.net_profit_q1) || num(raw?.np_q1),
     industry: typeof raw?.stock_info?.industry === "string" && raw.stock_info.industry.trim() ? raw.stock_info.industry.trim() : "",
   };
 }
