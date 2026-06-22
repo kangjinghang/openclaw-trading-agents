@@ -42,11 +42,47 @@ exports.fetchAllStockData = fetchAllStockData;
 const path = __importStar(require("path"));
 const exec_python_1 = require("../exec-python");
 const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
+/** 从 kline.py 输出抽取收盘价数组。
+ *  kline.py 实际输出 `{data: [{close, open, ...}]}`（对象数组），exec-python.ts:277
+ *  把 raw.data 提到顶层。老测试用扁平 `raw.closes`，保留兼容。 */
+function extractCloses(raw) {
+    // 优先：kline.py 真实结构（对象数组，每条带 close）
+    if (Array.isArray(raw?.data)) {
+        const fromData = raw.data
+            .map((row) => (row && typeof row.close === "number") ? row.close : NaN)
+            .filter((c) => !isNaN(c));
+        if (fromData.length > 0)
+            return fromData;
+    }
+    // 兼容：扁平 closes 数组（老测试 / 未来其他脚本）
+    if (Array.isArray(raw?.closes)) {
+        return raw.closes.filter((c) => typeof c === "number" && !isNaN(c));
+    }
+    return [];
+}
+/** 计算最近 N 日的日收益率标准差（波动率，单位 %）。
+ *  数据不足或价格异常返回 0（容忍）。 */
+function computeVolatility(closes, windowDays = 20) {
+    if (closes.length < windowDays + 1)
+        return 0;
+    const slice = closes.slice(-(windowDays + 1)); // 需要 N+1 个点算 N 个收益率
+    const returns = [];
+    for (let i = 1; i < slice.length; i++) {
+        const prev = slice[i - 1];
+        if (prev > 0)
+            returns.push((slice[i] - prev) / prev * 100);
+    }
+    if (returns.length < 2)
+        return 0;
+    const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
+    const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / returns.length;
+    return Math.sqrt(variance);
+}
 /** 从 kline.py 输出解析 K 线摘要。容忍字段缺失。 */
 function parseKline(raw) {
-    const closes = Array.isArray(raw?.closes) ? raw.closes : [];
+    const closes = extractCloses(raw);
     if (closes.length < 2)
-        return { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0 };
+        return { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0 };
     const last = closes[closes.length - 1];
     const ago5 = closes.length > 5 ? closes[closes.length - 6] : closes[0];
     const ago20 = closes.length > 20 ? closes[closes.length - 21] : closes[0];
@@ -56,6 +92,7 @@ function parseKline(raw) {
         pct_20d: ago20 > 0 ? (last - ago20) / ago20 * 100 : 0,
         support: Math.min(...recent),
         resistance: Math.max(...recent),
+        volatility_20d: computeVolatility(closes, 20),
     };
 }
 function parseNews(raw) {
@@ -83,7 +120,7 @@ async function fetchStockData(ticker, name, sector, rankerThesis) {
         safeCall(() => (0, exec_python_1.execSkillScript)("trading-fundamentals", "fundamentals", PROJECT_ROOT, [ticker])),
     ];
     const [klineR, newsR, hotR, fundR] = await Promise.all(tasks);
-    const kline = klineR ? parseKline(klineR) : { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0 };
+    const kline = klineR ? parseKline(klineR) : { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0 };
     const news = newsR ? parseNews(newsR) : [];
     const hot = hotR ? parseHotMoney(hotR) : { net_5d: 0 };
     const fund = fundR ? parseFundamentals(fundR) : { pe: 0, pb: 0, rev_q1: 0, np_q1: 0 };

@@ -9,31 +9,36 @@ const constraint_validator_1 = require("./constraint-validator");
 const candidate_selector_1 = require("./candidate-selector");
 const shallow_analyzer_1 = require("./shallow-analyzer");
 const execution_planner_1 = require("./execution-planner");
+const position_calculator_1 = require("./position-calculator");
 const REBALANCER_PROMPT_TEMPLATE = `# 角色
 你是 A 股投资组合管理者，管理一个 5-10 只持仓的中等换手组合。
 基于今日候选 + 当前持仓，输出最优调仓方案。
 
 # 任务流程（必须按此顺序思考）
 1. 对每只候选/持仓股独立评估：值得入组 / 继续持有 / 应该退出
-2. 在硬约束下选择最优组合配置
-3. 排序 actions（SELL 优先释放资金，BUY/ADD 用释放的资金）
-4. 自检约束 + 自检 anti-churn 锁定
+2. 对每只股给出**方向**（BUY/SELL/ADD/REDUCE/HOLD/SKIP）
+3. 自检 anti-churn 锁定（locked 股禁止 SELL/REDUCE）
 
-# 评估框架（每股独立判断）
+# ⚠️ 重要：你只决定方向，不决定仓位数字
+**不要输出 target_weight / delta / portfolio_after 的数字。**
+具体仓位由确定性公式计算（基于 fitness、波动率、风险等级），代码会自动填入。
+你只需要判断"该买/该卖/该加/该减/该持有/跳过"，把方向和理由写清楚即可。
+
+# 评估框架（每股独立判断，只给方向）
 
 ## 候选股（未持仓）
-- fitness ≥8 且 risk=low：BUY（target_weight 5-10%）
-- fitness ≥8 且 risk=medium：BUY（target_weight ≤5%）或跳过
-- fitness 6-7：跳过
-- fitness ≤5 或 deal_breaker=true：跳过
+- fitness ≥8 且 risk=low：BUY
+- fitness ≥8 且 risk=medium：BUY 或 SKIP（看驱动逻辑是否硬）
+- fitness 6-7：SKIP
+- fitness ≤5 或 deal_breaker=true：SKIP
 
 ## 持仓股
-- fitness ≥8 且 risk=low：HOLD 或 ADD（小幅加 2-3%）
+- fitness ≥8 且 risk=low：HOLD 或 ADD
 - fitness 6-7 且 risk 可控：HOLD（默认）
-- fitness ≤5 或 risk=high 或 deal_breaker=true：REDUCE（减半）或 SELL（清仓）
+- fitness ≤5 或 risk=high 或 deal_breaker=true：REDUCE 或 SELL
 - locked=true（持仓<{anti_churn_days}天）：只能 HOLD 或 ADD，禁止 SELL/REDUCE
 
-# 硬约束（违反则方案作废，validator 会强制 revise）
+# 硬约束（validator 会强制 revise）
 - 单仓 ≤ {single_name}
 - 单行业 ≤ {single_sector}（按 sector 字段聚合）
 - 日换手 = sum(|delta|) ≤ {daily_turnover}
@@ -47,7 +52,7 @@ const REBALANCER_PROMPT_TEMPLATE = `# 角色
 - 同行业新增要谨慎
 
 # 反"老好人"硬规则
-- fitness ≤5 的持仓必须 REDUCE 或 SELL
+- fitness ≤5 的持仓必须 REDUCE 或 SELL（不准 HOLD 蒙混）
 - actions 不能全是 HOLD，除非：所有持仓 fitness ≥7 + 所有候选 fitness <6 + 无 deal_breaker
 - fitness 最高的候选必须出现在 actions 里（BUY/ADD），除非触发 anti-churn 或约束上限
 
@@ -55,7 +60,7 @@ const REBALANCER_PROMPT_TEMPLATE = `# 角色
 - 必须含至少 1 个具体词（产品/客户/数据/业务节点）
 - 禁止模糊词（共振/资金追捧/活跃/爆发力强...）
 
-# 输出格式（严格 JSON）
+# 输出格式（严格 JSON，只含方向和理由，不含数字）
 {
   "evaluations": [
     { "ticker": "...", "judgment": "BUY|HOLD|REDUCE|SELL|SKIP", "brief": "1 句评估" }
@@ -63,17 +68,18 @@ const REBALANCER_PROMPT_TEMPLATE = `# 角色
   "actions": [
     {
       "action": "BUY" | "SELL" | "ADD" | "REDUCE" | "HOLD",
-      "ticker": "...", "name": "...",
-      "current_weight": 0.0, "target_weight": 0.0, "delta": -0.10,
-      "reason": "...", "priority": 1
+      "ticker": "...",
+      "name": "...",
+      "reason": "..."
     }
   ],
-  "portfolio_after": {
-    "positions": [{"ticker": "...", "weight": 0.0}],
-    "cash_pct": 0.0
-  },
-  "summary": "一句话总结"
+  "summary": "一句话总结今日调仓逻辑"
 }
+
+注意：
+- actions 里**不要**写 current_weight / target_weight / delta / priority（代码会自动算）
+- portfolio_after 字段**不要写**（代码会自动重算）
+- current_weight 由代码从持仓状态填入，你不需要关心
 
 # 当前持仓
 {holdings_json}
@@ -212,8 +218,14 @@ function extractJson(content) {
         return null;
     }
 }
-/** 跑 rebalancer + revise loop。最多 max_revise_retries 次。 */
-async function runRebalanceWithRevise(caller, basePrompt, ctx, config) {
+/** 跑 rebalancer + revise loop。最多 max_revise_retries 次。
+ *
+ *  positionCtx 可选：传入后每次 parse 出的 plan 会先经 applyPositions 改写
+ *  （LLM 只出方向，代码算仓位），再 validate。这是确定性仓位计算器的接入点。 */
+async function runRebalanceWithRevise(caller, basePrompt, ctx, config, positionCtx, 
+/** ticker → 当前仓位（持仓股才有，候选股=0）。
+ *  用于 parse 后补齐 current_weight（LLM 不再输出这个字段）。 */
+currentWeights) {
     let userMessage = basePrompt;
     let lastPlan = null;
     let lastViolations = [];
@@ -226,14 +238,28 @@ async function runRebalanceWithRevise(caller, basePrompt, ctx, config) {
         catch {
             return { plan: lastPlan, reviseCount, status: "llm_failed", finalViolations: lastViolations };
         }
-        lastPlan = parseRebalancePlan(content, ctx.tickersInPool);
-        if (!lastPlan) {
+        let parsed = parseRebalancePlan(content, ctx.tickersInPool);
+        if (!parsed) {
             // JSON 解析失败，再试一次（算 revise）
             userMessage = basePrompt + "\n\n上一次输出不是合法 JSON，请严格按格式输出。";
             reviseCount++;
             continue;
         }
-        const result = (0, constraint_validator_1.validateRebalance)(lastPlan, ctx, config.constraints);
+        // 补齐 current_weight（LLM 不再输出，从持仓状态取）
+        if (currentWeights) {
+            for (const a of parsed.actions) {
+                if (currentWeights.has(a.ticker)) {
+                    a.current_weight = currentWeights.get(a.ticker);
+                }
+            }
+        }
+        // 应用确定性仓位计算器（LLM 出方向，代码算数字）
+        if (positionCtx) {
+            const applied = (0, position_calculator_1.applyPositions)(parsed, positionCtx);
+            parsed = applied.plan;
+        }
+        lastPlan = parsed;
+        const result = (0, constraint_validator_1.validateRebalance)(parsed, ctx, config.constraints);
         if (result.passed) {
             return { plan: lastPlan, reviseCount, status: "ok", finalViolations: [] };
         }
@@ -292,9 +318,27 @@ async function rebalancePipeline(input) {
         tickersInPool: new Set(reports.map(r => r.ticker)),
         recentSoldTickers: recentSold,
     };
-    // 4. rebalancer + revise
+    // 4. rebalancer + revise（接入确定性仓位计算器）
     const prompt = formatRebalancerPrompt(reports, input.holdings, input.lastRebalance, config.constraints, config.anti_churn_days);
-    const rebalanceResult = await runRebalanceWithRevise(input.rebalanceCaller, prompt, ctx, config);
+    // 4a. 构造仓位计算器上下文：波动率（来自 data-fetcher）+ reports + 约束
+    const volatilityByTicker = new Map();
+    for (const [ticker, data] of dataByTicker) {
+        volatilityByTicker.set(ticker, data.kline.volatility_20d);
+    }
+    const reportsByTicker = new Map();
+    for (const r of reports)
+        reportsByTicker.set(r.ticker, r);
+    const positionCtx = {
+        reportsByTicker,
+        volatilityByTicker,
+        constraints: config.constraints,
+        initialCash: input.holdings.cash_pct,
+    };
+    // 4b. 构造 currentWeight 映射（持仓股才有，候选股=0）
+    const currentWeights = new Map();
+    for (const p of input.holdings.positions)
+        currentWeights.set(p.ticker, p.weight);
+    const rebalanceResult = await runRebalanceWithRevise(input.rebalanceCaller, prompt, ctx, config, positionCtx, currentWeights);
     if (!rebalanceResult.plan) {
         return {
             reports,

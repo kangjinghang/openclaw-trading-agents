@@ -14,6 +14,7 @@ export interface StockData {
         pct_20d: number;
         support: number;
         resistance: number;
+        volatility_20d: number;
     };
     news: string[];
     hot_money: {

@@ -1,11 +1,13 @@
 import type { StockData } from "./shallow-analyzer";
-/** 从 kline.py 输出解析 K 线摘要。容忍字段缺失。 */
-export declare function parseKline(raw: any): {
+export interface KlineSummary {
     pct_5d: number;
     pct_20d: number;
     support: number;
     resistance: number;
-};
+    volatility_20d: number;
+}
+/** 从 kline.py 输出解析 K 线摘要。容忍字段缺失。 */
+export declare function parseKline(raw: any): KlineSummary;
 export declare function parseNews(raw: any): string[];
 export declare function parseHotMoney(raw: any): {
     net_5d: number;

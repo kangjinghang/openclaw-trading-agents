@@ -73,10 +73,17 @@ last_rebalance.json (上次调仓, 防反向)
    │
    ▼ ⑤ rebalancer (1 LLM call, decision_deep 模型, temperature=0)
    │   （跨股决策: 输入 N 份 reports + holdings + 约束 + last_rebalance
-   │    输出 REBALANCE_PLAN: evaluations + actions + portfolio_after + summary）
+   │    输出 REBALANCE_PLAN: evaluations + actions + summary
+   │    ⚠️ LLM 只出**方向**（BUY/SELL/ADD/REDUCE/HOLD），不出数字）
+   │
+   ▼ ⑤b position-calculator (纯代码，确定性仓位计算器)
+   │   （改写 LLM 的 actions：target_weight/delta/portfolio_after 全部由公式算
+   │    公式：基础仓位(fitness查表) × 波动率折扣 × 风险因子
+   │    再经：现金排队 + 单仓上限钳制
+   │    deal_breaker 强制改 SELL）
    │
    ▼ ⑥ constraint-validator (10 条规则, 纯代码)
-   │   （违反 → 回 ⑤ revise, max 2 次重试）
+   │   （违反 → 回 ⑤ revise, max 2 次重试。校验的是改写后的 plan）
    │
    ▼ ⑦ execution-planner (纯代码)
    │   （排序 SELL→REDUCE→BUY→ADD, cash 累计, HOLD 过滤）
@@ -383,7 +390,94 @@ last_rebalance.json (上次调仓, 防反向)
 | LLM 输出 sum(weight) ≠ 1 | validator 打回，revise loop |
 | LLM 给 locked 股出 SELL | validator 打回，要求改 HOLD/ADD |
 
-### 5.6 constraint-validator（`src/watchlist/constraint-validator.ts`）
+### 5.6 position-calculator 确定性仓位计算器（`src/watchlist/position-calculator.ts`）
+
+> **2026-06-22 新增**：把 target_weight 的决定权从 LLM 手里拿走，交给可解释、可复盘的公式。LLM 只决定**方向**（BUY/SELL/ADD/REDUCE/HOLD），公式根据 fitness + 波动率 + 风险等级算出**数字**。
+
+#### 设计动机
+
+原设计中 LLM 既出方向又出 target_weight，导致：
+- **仓位凭 AI 感觉**：prompt 给区间（"5%-10%"），AI 在区间内拍数字，无量化依据
+- **复盘是空话**：temperature=0 本意"同输入同输出便于复盘"，但仓位是黑箱，无法判断"为什么是 7%"
+- **分数与仓位脱节**：两只分数相同的股，仓位可能差一倍
+
+详见 [§11.11 为什么仓位用公式不用 LLM](#1111-为什么仓位用公式不用-llm)。
+
+#### 核心公式
+
+```
+目标仓位 = 基础仓位(fitness查表) × 波动率折扣 × 风险因子
+再经：现金排队（按分数花钱）+ 单仓上限钳制
+```
+
+#### 基础仓位档位（平衡档，可调）
+
+| fitness | 基础仓位 | 含义 |
+|---------|---------|------|
+| ≥9 | 7% | 特别好，给足 |
+| 8 | 5% | 好 |
+| 8.5 | 6%（线性插值） | — |
+| 7 | 3% | 还行，试探 |
+| ≤6 | 0%（不买） | 不达标 |
+
+#### 波动率折扣（20 日日收益率标准差）
+
+| 波动率/日 | 折扣 | 典型 |
+|-----------|------|------|
+| <2% | ×1.0 | 大盘股、白酒 |
+| 2-4% | ×0.8 | 普通成长股 |
+| >4% | ×0.6 | 题材股、次新 |
+
+#### 风险因子（来自 shallow-analyzer 的 overall_risk）
+
+| 风险等级 | 因子 |
+|---------|------|
+| low | ×1.0 |
+| medium | ×0.6 |
+| high | ×0.3 |
+| deal_breaker | **强制 SELL（0）** |
+
+#### Action 类型对应的目标仓位
+
+| Action | 目标仓位算法 | 说明 |
+|--------|------------|------|
+| BUY | 基础仓位 × 波动率 × 风险 | 完整公式 |
+| ADD | max(当前仓位, 基础仓位档) | 加到档位为止，不到不动 |
+| HOLD | = 当前仓位 | 不动 |
+| REDUCE | 当前仓位 × 50% | 减半 |
+| SELL | 0 | 清仓 |
+| deal_breaker（任何方向） | 0 + 改 action 为 SELL | 致命雷覆盖 AI 判断 |
+
+#### 计算示例
+
+| 股票 | 方向 | fitness | 波动率 | 风险 | 基础 | ×波动 | ×风险 | =目标 |
+|------|------|---------|--------|------|------|-------|-------|-------|
+| A | BUY | 9 | 1.5%/日 | low | 7% | ×1.0 | ×1.0 | **7.0%** |
+| B | BUY | 9 | 2.5%/日 | medium | 7% | ×0.8 | ×0.6 | **3.36%** |
+| C | BUY | 8 | 5%/日 | high | 5% | ×0.6 | ×0.3 | **0.9%**（观察仓） |
+| D | REDUCE | — | — | — | — | — | — | 当前 10% → **5%** |
+| E | deal_breaker | — | — | — | — | — | — | 强制 **0% + SELL** |
+
+每个数字都能往前追溯到原因（"9 分基础 7%，因为波动 2.5% 打 8 折，因为风险 medium 打 6 折 = 3.36%"），这才是真正的**可复盘**。
+
+#### 现金排队
+
+多只股都要 BUY 时，按 fitness 降序排队，现金不够的低分股降级为 HOLD：
+
+```
+可用现金 = 初始现金 + SELL/REDUCE 释放 - 现金下限(10%)
+→ 高分股先买满，低分股现金不够就 HOLD
+```
+
+#### 接入点
+
+在 `runRebalanceWithRevise` 内部，`parseRebalancePlan` 之后、`validateRebalance` 之前调用 `applyPositions`。这让 revise loop 看到的是改写后的 plan，validator 校验的是公式算的仓位（不是 LLM 拍的）。
+
+#### 顺带修复的阻塞 bug
+
+实现波动率折扣时发现 `data-fetcher.ts` 的 `parseKline` 读的是不存在的 `raw.closes` 字段（kline.py 实际输出 `raw.data: [{close}]`），导致线上 `pct_5d/pct_20d/support/resistance` **一直恒为 0**。本次一并修复：从 `raw.data` 抽 close，并新增 `volatility_20d` 字段。
+
+### 5.7 constraint-validator（`src/watchlist/constraint-validator.ts`）
 
 #### 10 条规则（纯代码）
 
@@ -433,7 +527,7 @@ max 2 次重试
 请重新输出 REBALANCE_PLAN，确保满足所有硬约束。
 ```
 
-### 5.7 execution-planner（`src/watchlist/execution-planner.ts`）
+### 5.8 execution-planner（`src/watchlist/execution-planner.ts`）
 
 **`buildExecutionPlan(plan, initialCash)`**：
 
@@ -497,7 +591,11 @@ interface RebalancePlanFile {
 }
 ```
 
-## 7. 实际运行示例（2026-06-18）
+## 7. 实际运行示例
+
+### 7.1 改造前（2026-06-18，LLM 拍仓位）
+
+> 这是仓位计算器引入前的运行记录。LLM 既出方向又出 target_weight，仓位数字是 LLM 在 prompt 区间内拍的。保留作为对照基线。
 
 ### 输入
 
@@ -578,6 +676,86 @@ interface RebalancePlanFile {
    - 所有 action 的 current/target 关系一致 ✓
    - LLM 没幻觉 ticker ✓
    - 所有 target>0 的有 sector ✓
+
+### 7.2 改造后（2026-06-22 smoke test，公式驱动仓位）
+
+> 仓位计算器引入后的真实运行。同一份 scan.json（2026-06-18）+ 同一份 holdings.json，但仓位由公式算，不是 LLM 拍。
+
+#### 运行统计
+
+- 数据 fetch：10/10 只股拿到完整数据（parseKline bug 修复后 K 线真正可用）
+- shallow-analyzer：10/10 reports 完成（concurrency=3，无 429）
+- rebalancer：revise 1 次后通过（首次约束违反，修正后 ok）
+- tokens：59K（glm-4.7 带 reasoning，比 free tier 多）
+- status：**ok**
+
+#### shallow-analyzer 报告（按 fitness 降序）
+
+| ticker | 持仓 | fitness | risk | 关键判断 |
+|---|---|---|---|---|
+| SZ300319 麦捷科技 | **持仓** | 8 | medium | TLVR 电感已批量供货英伟达，获研发项目权限 |
+| SH605589 圣泉集团 | 候选 | 8 | medium | 电子级 PPO/PPE 树脂满产满销，新增 2000 吨订单排至 2027 |
+| SZ301630 同宇新材 | 候选 | 7 | medium | PPO 树脂认证完成，地缘事件驱动逻辑脆弱 |
+| SH600183 生益科技 | **持仓** | 7 | medium | PTFE 覆铜板国际标准，Q1 净利 +105% |
+| SZ301377 鼎泰高科 | 候选 | 6 | medium | PCB 钻针供应商，AI 服务器高层数 PCB 受益 |
+| SZ300285 国瓷材料 | 候选 | 6 | medium | 氧化锆断供替代预期，尚未兑现为订单 |
+| SH600392 盛和资源 | 候选 | 6 | medium | 5N 氧化镝量产，主营稀土周期性强 |
+| SZ300522 世名科技 | 候选 | 5 | medium | 光刻胶分散液实验室阶段 |
+| SH600378 昊华科技 | 候选 | 5 | **high** | 英伟达 PTFE 供货**为传闻**，存证伪风险 |
+| SZ300491 通合科技 | 候选 | 3 | medium | 台达单一客户集中度过高 |
+
+#### 调仓方案（仓位由公式算）
+
+```
+[P3] BUY SH605589 圣泉集团 0%→3.0% (+3.0%)
+     reason: 电子级PPO/PPE树脂产能满产满销，新增2000吨产能订单已排至2027，
+             填补全球供应缺口，业绩确定性极高。
+
+[P5] HOLD SZ300319 麦捷科技 10%→10% (0%)
+     reason: 获得英伟达研发项目权限并实现TLVR电感批量供货，
+             AI服务器需求明确，虽估值偏高但处于锁定期持有。
+
+[P5] HOLD SH600183 生益科技 10%→10% (0%)
+     reason: Q1净利同比+105%验证高成长性，主导PTFE覆铜板标准确立壁垒，
+             受调仓冷却期限制暂不进行买卖操作。
+```
+
+**Portfolio after**：圣泉 3% + 麦捷 10% + 生益 10% + cash **77%**。
+
+#### 仓位计算溯源（这是改造的核心价值）
+
+| 股票 | 方向 | fitness | 基础(查表) | ×波动率 | ×风险 | =目标 | 溯源 |
+|------|------|---------|-----------|---------|-------|-------|------|
+| SH605589 | BUY | 8 | 5% | ×1.0 (<2%/日) | ×0.6 (medium) | **3.0%** | 5%×1.0×0.6=3% ✓ |
+| SZ300319 | HOLD | 8 | — | — | — | **10%** | =当前（locked 不动） |
+| SH600183 | HOLD | 7 | — | — | — | **10%** | =当前（fit≥6 合理持有） |
+
+**每个数字都能往前追溯到原因**——"3% 来自 8 分基础 5%，因为波动<2% 不打折，因为 risk medium 打 6 折"。这是改造前（LLM 拍）做不到的。
+
+#### 新旧对照（7.1 vs 7.2）
+
+| 维度 | 改造前（LLM 拍） | 改造后（公式算） |
+|------|----------------|----------------|
+| SH600183 处理 | REDUCE 10%→5%（LLM 拍"减半"） | HOLD 10%→10%（fit=7≥6，HOLD 合理） |
+| 仓位来源 | LLM 在 prompt 区间凭感觉 | 公式：基础×波动率×风险 |
+| 新买候选 | 无（全 SKIP） | BUY SH605589（fit=8 达标） |
+| 圣泉集团仓位 | — | 3%（5%×1.0×0.6，可溯源） |
+| 最终现金 | 85% | 77% |
+| 仓位可复盘 | ❌ 黑箱（LLM 为什么拍 5%） | ✅ 白盒（公式每步可查） |
+
+> ⚠️ 两次跑的 fitness 不同（LLM 判断会变），不是纯对照组。SH600183 旧版 fit=5 触发硬减仓、新版 fit=7 合理 HOLD——这反映的是 **shallow-analyzer 判断的波动**，不是仓位公式的差异。关键差异在仓位的**来源**：旧的 5%/10% 是 LLM 拍的，新的 3% 是公式算的。
+
+#### 公式档位评估
+
+**✅ 合理：**
+- BUY 门槛严格（fit≥8）：10 支里只有 2 支达标，不强买
+- 仓位与风险挂钩：圣泉 fit=8 但 risk=medium，仓位从基础 5% 砍到 3%——风险真的落到仓位上
+- locked 自动遵守：麦捷 locked（持仓 3 天），只能 HOLD
+- 权重和=100%：3%+10%+10%+77% cash ✓
+
+**⚠️ 待观察：**
+- 公式偏保守：最高分 8（无 9 分股），BUY 只给 3%。是否"8 分+medium risk 就该 3%"太轻，需跑几天看实际表现再校准基础档/风险因子
+- shallow-analyzer 判断会变（同一只股两次跑 fitness 从 5→7）：fitness 的稳定性可能比仓位公式更重要
 
 ## 8. 配置参数
 
@@ -665,10 +843,11 @@ src/
     rebalance-types.ts                      # Holdings/Action/Plan/StockReport 类型
     holdings-loader.ts                      # 读 holdings + 校验 + computeLocked
     candidate-selector.ts                   # ranker top-N + 持仓合并 + 标 locked
-    data-fetcher.ts                         # 跨股并行 Python (kline/news/hot_money/fundamentals)
+    data-fetcher.ts                         # 跨股并行 Python (kline/news/hot_money/fundamentals) + volatility_20d
     shallow-analyzer.ts                     # analyst + risk 双 call + analyzeAll 并发池
+    position-calculator.ts                  # ⭐ 确定性仓位计算器（公式驱动 target_weight）
     constraint-validator.ts                 # 10 规则 + composeReviseFeedback
-    rebalancer.ts                           # prompt + parse + revise loop + 主入口 pipeline
+    rebalancer.ts                           # prompt + parse + revise loop + applyPositions 接入 + 主入口 pipeline
     execution-planner.ts                    # 排序 + cash 累计
 tests/ts/watchlist/
   holdings-loader.test.ts                   # 7 tests
@@ -676,11 +855,12 @@ tests/ts/watchlist/
   constraint-validator.test.ts              # 16 tests
   execution-planner.test.ts                 # 5 tests
   shallow-analyzer.test.ts                  # 12 tests
-  rebalancer.test.ts                        # 11 tests（含 integration）
-  data-fetcher.test.ts                      # 9 tests
+  rebalancer.test.ts                        # 13 tests（含 integration：deal_breaker 强制 SELL / 现金不足降级）
+  position-calculator.test.ts               # ⭐ 35 tests（基础查表/波动率/风险/现金排队/deal_breaker）
+  data-fetcher.test.ts                      # 11 tests（含 volatility_20d + data 对象数组真实结构）
 ```
 
-**总计**：65 个新单测，全部通过。整个项目从 535 → 600 tests。
+**总计**：watchlist 子系统 197 个单测全部通过。整个项目 639 tests。
 
 ## 11. 设计权衡与教训
 
@@ -784,6 +964,41 @@ LLM 算错权重和、超单仓上限这种事很常见。直接 abort 体验差
 
 实测：max 2 已经足够。
 
+### 11.11 为什么仓位用公式不用 LLM
+
+**原设计**：LLM 既出方向（BUY/SELL）又出 target_weight（5%-10% 区间内凭感觉）。
+
+**问题**：
+1. **仓位凭 AI 感觉**：prompt 给区间（"5%-10%"），AI 在区间内拍数字，无量化依据。两只分数相同的股，仓位可能差一倍。
+2. **复盘是空话**：temperature=0 本意"同输入同输出便于复盘"，但仓位是黑箱——你不知道 7% 是经过算的，还是 AI 随手写的。下次同样的输入，它可能给 8%。
+3. **分数与仓位脱节**：validator 只查上限（≤15%），查不了"为什么是 7% 不是 8%"。
+4. **看空 AI 的 risk 等级形同虚设**：LLM 标了 "high risk"，但仓位数字还是它拍的，risk 标签不影响最终仓位。
+
+**改法**：把 LLM 的工作从"出方向 + 出数字"收缩为"只出方向"。具体数字交给确定性公式：
+
+```
+目标仓位 = 基础仓位(fitness查表) × 波动率折扣 × 风险因子
+```
+
+- fitness 9 → 7% 基础（不是 AI 拍）
+- 波动率 2.5%/日 → 打 8 折（数据驱动，不是 AI 拍）
+- risk medium → 打 6 折（看空 AI 的判断落到仓位上）
+- = 3.36%（可追溯到每一步）
+
+**这解决了什么**：
+| 原病 | 治法 |
+|------|------|
+| 仓位凭 AI 感觉，复盘是空话 | 每个数字有公式，改公式能算"如果波动折扣更狠会怎样" |
+| 分数和仓位脱节 | 分数相同→基础仓位相同，差异只来自客观数据（波动/风险） |
+| temperature=0 的"确定性"被抵消 | 现在真确定了：同输入→同公式→同仓位 |
+| 看空 AI 的 risk 等级形同虚设 | risk 直接进公式，high risk 仓位砍到 30% |
+
+**代价**：牺牲了 LLM 对仓位的"灵活性"。如果某只股 AI 觉得该重仓（有 prompt 外的判断），公式不会通融——它严格按 fitness/波动率/风险算。这是**有意的取舍**：确定性 > 灵活性，因为基金经理最核心的能力（定仓位）必须可解释、可复盘。
+
+**ADD 不打折的设计取舍**：ADD 是加仓（已有持仓），波动率/风险在当初 BUY 时已经算过。ADD 只是把仓位加到 fitness 对应的档位为止（max(当前, 基础档)），不重新打折。这避免"加仓时又被砍一刀"的双计问题。
+
+**校准路径**：公式档位（9分→7% / 8分→5% 等）先用经验值。跑一个月后回头看：那些买了的股，事后表现怎么样？分数 9 的普遍比分数 8 的好吗？如果不好，说明分数→仓位映射要调。这才是真正的"复盘"——复盘的对象从"AI 为什么拍 7%"（黑箱，没法复），变成"公式参数对不对"（白盒，能调）。
+
 ## 12. 测试策略
 
 沿用 ranker 模式（mock LLM + 假数据 + 不触网）：
@@ -798,13 +1013,16 @@ LLM 算错权重和、超单仓上限这种事很常见。直接 abort 体验差
 | execution-planner | 排序、HOLD 过滤、cash 累计、cash 不足时降级 |
 | shallow-analyzer | prompt 渲染、JSON 解析、字段补齐、buildStockReport |
 | rebalancer | prompt 渲染、JSON 解析、幻觉 ticker 过滤、revise loop、空 plan |
-| data-fetcher | 4 个解析器（parseKline/parseNews/parseHotMoney/parseFundamentals） |
+| position-calculator | 基础查表/波动率折扣/风险因子/现金排队/deal_breaker 强制 SELL（共 35 tests） |
+| data-fetcher | 4 个解析器（parseKline 含 volatility_20d / parseNews / parseHotMoney / parseFundamentals） |
 
 ### 12.2 Integration tests
 
-- 完整 pipeline + mock LLM 跑通
+- 完整 pipeline + mock LLM 跑通（仓位由公式算，不是 LLM 拍）
 - 约束违反 → revise loop → 最终通过
 - shallow-analyzer 数据缺失 → 候选股跳过
+- **deal_breaker 持仓：AI 出 HOLD 但代码强制改 SELL**（防 AI 漏判致命雷）
+- **现金不足：BUY 降级为 HOLD**（保留现金下限）
 
 ### 12.3 真实数据 smoke test
 

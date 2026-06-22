@@ -2,6 +2,7 @@ import type { Holdings, LastRebalance, RebalanceConstraints, RebalancePlan, Stoc
 import { type ValidationContext } from "./constraint-validator";
 import { type ShallowLlmCaller, type StockData } from "./shallow-analyzer";
 import { buildExecutionPlan } from "./execution-planner";
+import { type ApplyPositionsContext } from "./position-calculator";
 import type { ScanSummary } from "./types";
 export declare function formatRebalancerPrompt(reports: StockReport[], holdings: Holdings, lastRebalance: LastRebalance | null, c: RebalanceConstraints, antiChurnDays: number): string;
 /** 解析 rebalancer 输出。过滤幻觉 ticker。失败返回 null。 */
@@ -16,8 +17,14 @@ export interface RebalanceResult {
     status: "ok" | "constraint_violation" | "llm_failed";
     finalViolations: ConstraintViolation[];
 }
-/** 跑 rebalancer + revise loop。最多 max_revise_retries 次。 */
-export declare function runRebalanceWithRevise(caller: RebalanceLlmCaller, basePrompt: string, ctx: ValidationContext, config: RebalanceConfig): Promise<RebalanceResult>;
+/** 跑 rebalancer + revise loop。最多 max_revise_retries 次。
+ *
+ *  positionCtx 可选：传入后每次 parse 出的 plan 会先经 applyPositions 改写
+ *  （LLM 只出方向，代码算仓位），再 validate。这是确定性仓位计算器的接入点。 */
+export declare function runRebalanceWithRevise(caller: RebalanceLlmCaller, basePrompt: string, ctx: ValidationContext, config: RebalanceConfig, positionCtx?: ApplyPositionsContext, 
+/** ticker → 当前仓位（持仓股才有，候选股=0）。
+ *  用于 parse 后补齐 current_weight（LLM 不再输出这个字段）。 */
+currentWeights?: Map<string, number>): Promise<RebalanceResult>;
 export interface RebalancePipelineInput {
     scan: ScanSummary;
     holdings: Holdings;
