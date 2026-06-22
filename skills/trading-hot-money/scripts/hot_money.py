@@ -53,29 +53,73 @@ def _fetch_northbound():
 
 
 def _fetch_fund_flow(code, date):
-    """Fetch individual stock fund flow from 东财 push2."""
+    """Fetch individual stock fund flow (当日主力/超大单/大单净流入) from 东财.
+
+    双路容灾（push2his 日 K 为主，push2 分钟 K 为辅）：
+    - 主路 push2his.eastmoney.com/api/qt/stock/fflow/daykline/get（日 K，klt=101）
+      历史/统计接口，限流比 push2（实时行情）宽松，且只要「当日」用日 K 更贴合。
+      字段编号（东财资金流标准）：f54=主力净额 f56=超大单净额 f58=大单净额（单位：元）
+    - 降级 push2.eastmoney.com/api/qt/stock/fflow/kline/get（分钟 K，klt=1）
+      push2 的 fflow 系列接口反爬较严，常被 RemoteDisconnected，仅作兜底。
+
+    实测 2026-06：push2 fflow 接口持续被封，push2his 也间歇——东财 host 级限流，
+    非脚本问题。失败返回 None，上游用 EMPTY_HOT_MONEY 兜底（诚实标注资金面无数据）。
+    """
     start = time.monotonic()
     secid = f"1.{code}" if code.startswith("6") else f"0.{code}"
-    try:
-        url = "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get"
-        params = {
-            "secid": secid, "klt": 1,
-            "fields1": "f1,f2,f3,f7",
-            "fields2": "f51,f52,f53,f54,f55,f56,f57",
-        }
-        r = em_get(url, params=params, timeout=10)
-        d = r.json()
+
+    def _parse_daykline(d):
+        """push2his 日 K：fields2=f51,f54,f56,f58 → [日期, 主力净额, 超大单净额, 大单净额]"""
         klines = d.get("data", {}).get("klines", [])
         if not klines:
-            record_call("hot_money/fund_flow", success=False, error="No klines data", duration_ms=(time.monotonic() - start) * 1000)
+            return None
+        last = klines[-1].split(",")
+        # index 对齐 fields2 顺序：0=日期 1=主力净额(f54) 2=超大单(f56) 3=大单(f58)
+        return {
+            "main_net": float(last[1]) if len(last) > 1 else 0,
+            "super_net": float(last[2]) if len(last) > 2 else 0,
+            "large_net": float(last[3]) if len(last) > 3 else 0,
+        }
+
+    def _parse_minkline(d):
+        """push2 分钟 K（老接口，fallback）：fields2=f51..f57 → 取最后一根"""
+        klines = d.get("data", {}).get("klines", [])
+        if not klines:
             return None
         last = klines[-1].split(",")
         result = {"main_net": float(last[1]) if len(last) > 1 else 0}
         if len(last) >= 6:
             result["large_net"] = float(last[4])
             result["super_net"] = float(last[5])
-        record_call("hot_money/fund_flow", success=True, duration_ms=(time.monotonic() - start) * 1000)
         return result
+
+    try:
+        # 主路：push2his 日 K（只要最新 1 根，lmt=1 省流量）
+        r = em_get(
+            "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get",
+            params={"secid": secid, "klt": 101, "lmt": 1,
+                    "fields1": "f1,f2,f3,f7", "fields2": "f51,f54,f56,f58"},
+            timeout=10,
+        )
+        result = _parse_daykline(r.json())
+        if result:
+            record_call("hot_money/fund_flow", success=True, duration_ms=(time.monotonic() - start) * 1000)
+            return result
+
+        # 降级：push2 分钟 K（em_get 内置限流会自动间隔，避免双发触发更严封禁）
+        r = em_get(
+            "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get",
+            params={"secid": secid, "klt": 1,
+                    "fields1": "f1,f2,f3,f7", "fields2": "f51,f52,f53,f54,f55,f56,f57"},
+            timeout=10,
+        )
+        result = _parse_minkline(r.json())
+        if result:
+            record_call("hot_money/fund_flow", success=True, duration_ms=(time.monotonic() - start) * 1000)
+            return result
+
+        record_call("hot_money/fund_flow", success=False, error="No klines data (both push2his & push2)", duration_ms=(time.monotonic() - start) * 1000)
+        return None
     except Exception as e:
         record_call("hot_money/fund_flow", success=False, error=str(e), duration_ms=(time.monotonic() - start) * 1000)
         return None
@@ -121,7 +165,9 @@ def _fetch_dragon_tiger(code, date, lookback=30):
             sort_types="-1",
         )
         if not data:
-            record_call("hot_money/dragon_tiger", success=False, error="No data returned", duration_ms=(time.monotonic() - start) * 1000)
+            # 空数组是合法结果（该股 30 天内未上榜），不是接口故障——
+            # 之前误记 success=False 会污染数据源健康统计（误报龙虎榜源宕机）。
+            record_call("hot_money/dragon_tiger", success=True, duration_ms=(time.monotonic() - start) * 1000)
             return []
         result = [
             {
