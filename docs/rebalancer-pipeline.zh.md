@@ -264,6 +264,18 @@ fundamentals.py 的 `stock_info.industry`（东方财富 f127 主路 + datacente
 }
 ```
 
+**评分锚点（2026-06-22 新增）**：prompt 内嵌 5 档评分标准，对齐下游消费者阈值（≥8 才 BUY / ≤5 必须减仓 / ≤6 不买）：
+
+| 分数 | 特征 |
+|------|------|
+| 9-10 | 业绩已兑现 + 订单/产能可见 + 估值合理 |
+| 8 | 驱动明确（订单/涨价/政策落地）+ 数据支撑 |
+| 7 | 有逻辑但部分未验证，或估值偏高/周期性强 |
+| 5-6 | 概念早期/传闻未证实/单一客户依赖/数据缺失 |
+| ≤4 | 零营收/财务造假/退市风险/纯炒作 |
+
+**temperature=0**（2026-06-22 改）：analyst + risk 双 call 都用 0.0（和 rebalancer 一致），最大化稳定性。修复前用 0.3 导致同一只股两次跑 fitness 从 5 漂移到 7，操作建议相反（REDUCE vs HOLD）。详见 §11.13。
+
 #### Call 2: risk-role（识别风险）
 
 输入：同 Call 1 数据 + Call 1 的 thesis
@@ -1023,6 +1035,28 @@ LLM 算错权重和、超单仓上限这种事很常见。直接 abort 体验差
 **代价**：用户填的 sector 可能和 fundamentals 不一致时，规则 3 按 fundamentals 算。如果用户刻意要用自己的分类（比如自定义"AI 算力链"这种跨行业标准板块的概念），当前实现不支持——需要未来加"用户自定义 sector 覆盖 fundamentals"的开关。
 
 **拉取失败的兜底**：fundamentals.industry 为空 → 回退 report.sector / holdings.sector，仍为空则标"未分类" + console warning（规则 3 对该股按"未分类"累计）。warning 让用户知道哪些股的行业没查到，便于判断规则 3 的可信度。
+
+### 11.13 为什么 fitness 要评分锚点 + temperature=0
+
+**问题**：同一只股（SH600183 生益科技）两次跑 fitness 从 5→7，导致操作建议相反（REDUCE vs HOLD）。fitness 是整个 rebalancer 的决策基石——仓位公式、BUY 门槛、反老好人硬规则全依赖它。fitness 不稳，下游再精确也白搭。
+
+**根因（两个）**：
+1. **temperature=0.3**：shallow-analyzer 有随机性，同输入不同输出
+2. **prompt 无评分标准**：只写"fitness_score: 0-10"，LLM 不知道几分对应什么股，全凭自己理解尺度。不同次跑、不同 LLM 实例，对"这只股值几分"的理解会漂移
+
+**改法**：
+- **temperature 0.3 → 0.0**：消除随机性（和 rebalancer 一致）
+- **prompt 内嵌评分锚点**：把下游消费者（position-calculator + rebalancer）已经在用的 5 个阈值写进 prompt，让 LLM 知道"8 分意味着订单/涨价/政策落地 + 数据支撑"
+
+**为什么锚点要对齐下游阈值**：position-calculator 的 baseWeight 用 ≥9/≥8/7 分档，rebalancer 的 BUY 门槛是 ≥8、强制减仓是 ≤5、不买是 ≤6。如果 LLM 不知道这些阈值对应什么特征，它打的分和下游消费的逻辑就对不上。锚点表把这层"隐含契约"显式化——LLM 打 8 分时，下游就知道"这是驱动明确+数据支撑的股，该给 5% 基础仓位"。
+
+**代价**：
+- 牺牲了 thesis 的多样性（temperature=0 后多只股的描述可能更趋同）
+- 锚点表可能让 LLM 过于保守（严格按表打分，不敢给高分）——这反而是好事，治"老好人打高分"的毛病
+
+**为什么不加 few-shot 示例**：锚点表已经够明确（每档有具体特征描述），few-shot 会让 prompt 过长（每个示例 200+ tokens），成本上升但收益小。如果后续发现锚点不够细（LLM 仍跨阈值），再考虑加 1-2 个示例。
+
+**验证路径**：改完后用真实数据连跑 3 次，对比 fitness 是否稳定。之前 5→7 的漂移应消失（或收敛到 ±0.5 以内）。
 
 ## 12. 测试策略
 

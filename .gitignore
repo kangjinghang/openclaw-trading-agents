@@ -15,3 +15,4 @@ logs/
 
 # opencode AI 工具配置（本地，不入库）
 opencode.json
+.DS_Store

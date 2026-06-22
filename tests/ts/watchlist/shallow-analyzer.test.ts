@@ -10,10 +10,10 @@ describe("formatAnalystPrompt", () => {
       ticker: "SZ300319",
       name: "麦捷科技",
       sector: "电子",
-      kline: { pct_5d: 12.3, pct_20d: 45.6, support: 25.0, resistance: 30.0 },
+      kline: { pct_5d: 12.3, pct_20d: 45.6, support: 25.0, resistance: 30.0, volatility_20d: 0.02 },
       news: ["新闻 1", "新闻 2"],
       hot_money: { net_5d: 1.2e8 },
-      fundamentals: { pe: 50, pb: 5, rev_q1: 1e9, np_q1: 1e8 },
+      fundamentals: { pe: 50, pb: 5, rev_q1: 1e9, np_q1: 1e8, industry: "电子" },
       ranker_thesis: "TLVR 电感获英伟达认证",
     });
     expect(prompt).toContain("SZ300319 麦捷科技");
@@ -22,6 +22,20 @@ describe("formatAnalystPrompt", () => {
     expect(prompt).toContain("新闻 1");
     expect(prompt).toContain("120000000");
     expect(prompt).toContain("英伟达认证");
+  });
+
+  it("包含评分锚点（5 档标准，对齐下游阈值）", () => {
+    const prompt = formatAnalystPrompt({
+      ticker: "SZ300319", name: "麦捷科技", sector: "电子",
+      kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0 },
+      news: [], hot_money: { net_5d: 0 },
+      fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "" },
+    });
+    // 锚点关键词（对齐下游 ≥8 BUY / ≤5 减仓 / ≤6 不买 阈值）
+    expect(prompt).toContain("业绩已兑现");
+    expect(prompt).toContain("传闻未证实");
+    expect(prompt).toContain("零营收");
+    expect(prompt).toContain("严格对齐");
   });
 });
 
