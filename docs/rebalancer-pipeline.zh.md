@@ -241,22 +241,75 @@ analyst 给的 fitness_score 直接驱动仓位公式：
 | **资金流向只有 5 日** | 没有更长周期（20日/60日）的资金趋势 | 短期资金波动可能误导判断 |
 | **数据失败静默降级** | 某个脚本超时 → 对应字段填零 → LLM 可能因"PE=0"给出低分 | 看 plan.md 的 `data_gaps` 字段确认数据完整性 |
 
-#### 和 trading_full 模式的数据对比
+#### 和 trading_full 模式的逐脚本对比
 
-| 维度 | shallow-analyzer（本模块） | trading_full（7 分析师） |
-|------|--------------------------|------------------------|
-| K 线 | 120 日 OHLCV → 5 个统计量 | 120 日 OHLCV + 技术指标 + VPA |
-| 新闻 | 5 条标题 | 个股新闻 + 宏观新闻（CLS/akshare） |
-| 资金 | 5 日净流入 | 北向 + 主力 + 龙虎榜 + 板块资金 |
-| 基本面 | PE/PB/Q1营收/Q1净利 | 7 子源（腾讯估值 + 季度趋势 + 机构预期 + 三大报表） |
-| 政策 | **无** | 东方财富 + CLS + akshare |
-| 情绪 | **无** | 东方财富热门 + akshare 涨停池 |
-| 解禁 | **无** | 东方财富公告 + 减持查询 |
-| 行业 | **无** | 东方财富行业排名 + 概念板块 |
-| LLM 调用 | 2 次/股（analyst + risk） | 7 分析师 + 辩论 + 研究经理 + 交易员 + 风控 |
-| 耗时 | 8-12 分钟 | 30-60 分钟 |
+两个模式**共享同一套 Python 脚本**（`skills/trading-*/scripts/`），但 rebalancer 只用了其中 4 个，trading_full 用了全部 7 个 + sector。
 
-**结论**：shallow-analyzer 是 trading_full 的"轻量版"——用更少的数据（4 维 vs 8 维）和更少的 LLM 调用（2 次 vs 15+ 次）做快速筛选。它的定位是"先粗筛出 fitness 分数，再由 rebalancer 做组合决策"，不需要 trading_full 那种深度分析。
+| 脚本 | trading_full 用？ | rebalancer 用？ | 数据内容 | 数据来源 | 输出字段 | 备注 |
+|------|:-:|:-:|---------|---------|---------|------|
+| `kline.py` | ✅ | ✅ | K 线 OHLCV | mootdx（主）+ akshare（备） | OHLCV 数组 + 技术指标 + VPA | **同一个脚本**，rebalancer 只取 close 数组算统计量 |
+| `fundamentals.py` | ✅ | ✅ | 估值 + 财务 + 行业 | 东方财富 push2/datacenter/f127 | PE/PB/营收/净利/行业 | **同一个脚本**，rebalancer 只取 5 个字段 |
+| `news.py` | ✅ | ✅ | 个股新闻 + 宏观新闻 | 东方财富搜索 + CLS + akshare | stock_news[] + macro_news[] | **同一个脚本**，rebalancer 只取 stock_news 前 5 条标题 |
+| `hot_money.py` | ✅ | ✅ | 资金流向 | 东方财富 push2 + 同花顺 + 龙虎榜 | net_5d + 北向 + 主力 | **同一个脚本**，rebalancer 只取 net_5d |
+| `sentiment.py` | ✅ | ❌ | 情绪 + 涨停池 | 东方财富热门排行 + akshare 涨停池 | 情绪指标 + 涨停池数据 | rebalancer **不用** |
+| `policy.py` | ✅ | ❌ | 政策事件 | 东方财富搜索 + CLS + akshare | 政策事件列表 | rebalancer **不用** |
+| `lockup.py` | ✅ | ❌ | 解禁 + 减持 | 东方财富公告 + 减持查询 + datacenter | 解禁日期 + 减持计划 | rebalancer **不用** |
+| `sector.py` | ✅ | ❌ | 行业排名 + 概念板块 | 东方财富行业排名 + 概念板块 | 行业排名 + 概念关联 | rebalancer **不用** |
+
+#### 同一个脚本，两个模式取的字段不同
+
+以 `kline.py` 为例——trading_full 的技术面分析师拿到的是完整输出（OHLCV + MACD/RSI/均线 + VPA 量价指标），而 rebalancer 的 data-fetcher 只取 `close[]` 数组算 5 个统计量：
+
+```
+kline.py 完整输出（781 行脚本）:
+├─ data[]: OHLCV 数组（120 条）          ← rebalancer 取这个
+├─ indicators: MACD / RSI / KDJ / 布林带  ← rebalancer 不取
+├─ vpa: 量价分析指标                      ← rebalancer 不取
+├─ support_resistance: 支撑阻力位         ← rebalancer 不取
+└─ pattern: K 线形态识别                  ← rebalancer 不取
+
+rebalancer 的 parseKline() 只算:
+├─ pct_5d:  5 日涨跌幅
+├─ pct_20d: 20 日涨跌幅
+├─ support: 最近 5 日最低价
+├─ resistance: 最近 5 日最高价
+└─ volatility_20d: 20 日波动率 ← 唯一用于仓位公式
+```
+
+同理，`news.py` 的完整输出包含 `stock_news[]`（个股）+ `macro_news[]`（宏观），但 rebalancer 只取 `stock_news` 前 5 条标题。
+
+#### trading_full 多出来的 4 个维度
+
+| 脚本 | 人类怎么读 | 对分析的价值 | 为什么 rebalancer 不用 |
+|------|-----------|------------|---------------------|
+| `sentiment.py` | 涨停池热度、市场情绪指标 | 判断短期情绪面（过热/恐慌） | rebalancer 定位是中期组合调仓（7天+），不追短期情绪 |
+| `policy.py` | 近期政策事件（行业政策、监管动态） | 判断政策面风险/机会 | 政策影响已通过 news 间接覆盖（新闻标题会提到政策） |
+| `lockup.py` | 未来解禁日期、大股东减持计划 | 判断抛压风险 | rebalancer 的 anti-churn 机制（7天锁定）已部分覆盖短期抛压 |
+| `sector.py` | 行业排名、概念板块关联 | 判断行业地位和板块共振 | rebalancer 用 fundamentals.industry 做行业约束，不需要排名 |
+
+#### 数据深度对比（同一个维度，两个模式差多少）
+
+| 维度 | shallow-analyzer（rebalancer） | trading_full（7 分析师） | 差距 |
+|------|------------------------------|------------------------|------|
+| **K 线** | close[] → 5 个统计量 | OHLCV + MACD/RSI/KDJ/布林 + VPA 量价 | 技术面分析深度差 10 倍 |
+| **新闻** | 5 条标题 | 个股新闻 + 宏观新闻（CLS/akshare 双源） | 缺宏观视角 |
+| **资金** | 5 日净流入（1 个数字） | 北向 + 主力 + 龙虎榜 + 板块资金（5 子源） | 资金面分析差 5 倍 |
+| **基本面** | PE/PB/Q1 营收/Q1 净利（5 字段） | 腾讯估值 + 季度趋势 + 机构预期 + 三大报表（7 子源） | 基本面分析差 7 倍 |
+| **政策** | **无** | 东方财富 + CLS + akshare（3 子源） | 完全缺失 |
+| **情绪** | **无** | 东方财富热门 + akshare 涨停池（2 子源） | 完全缺失 |
+| **解禁** | **无** | 东方财富公告 + 减持查询（2 子源） | 完全缺失 |
+| **行业** | industry 字段（1 个分类） | 行业排名 + 概念板块（2 子源） | 有行业分类但无排名 |
+
+#### 为什么 rebalancer 故意只用 4 个脚本
+
+| 原因 | 说明 |
+|------|------|
+| **速度优先** | 4 脚本 × 10 股 = 40 次 Python 调用，30 秒内完成；7 脚本 = 70 次，翻倍 |
+| **成本优先** | 2 次 LLM/股 × 10 股 = 20 次调用；trading_full 是 7 分析师 + 辩论 = 15+ 次/股 |
+| **定位不同** | rebalancer 是"粗筛 fitness → 公式算仓位"，不需要深度分析；trading_full 是"深度研究 → 人类决策" |
+| **数据已有冗余** | news 标题已覆盖政策面（标题会提"政策"），fundamentals 已含行业分类 |
+
+**结论**：rebalancer 的 4 个脚本是 trading_full 7 个脚本的**精简子集**——用同一套代码，但只取最核心的字段。这不是"缺数据"，而是"按需取数据"的设计选择。如果你觉得某个缺失维度（如解禁/政策）对调仓决策有实质影响，可以扩展 data-fetcher 加入对应脚本。
 
 ### 3.2 LLM 调用预算
 
