@@ -1,9 +1,10 @@
 # 股票池自动调仓模块设计（portfolio-rebalancer）
 
 > 日期：2026-06-21
-> 状态：设计中
+> 状态：已实现（2026-06-22 重大偏离：仓位改公式驱动，见 §14 实现偏离）
 > 依赖：[`2026-06-17-watchlist-stock-pool-design.md`](./2026-06-17-watchlist-stock-pool-design.md)、[`2026-06-18-llm-ranking-design.md`](./2026-06-18-llm-ranking-design.md)
 > 范围：ranker 输出 → 用户可执行的调仓方案（取代现有 `trading_full` 在股票池场景下的角色）
+> 实现文档：[`../../rebalancer-pipeline.zh.md`](../../rebalancer-pipeline.zh.md)（§5.6 仓位计算器、§11.11 设计权衡）
 
 ## 1. 背景与目标
 
@@ -707,3 +708,33 @@ npm run rebalance -- --top-n 5 --no-anti-churn --max-revise 3 --date 2026-06-18
 - **输出**：调仓方案（plan.json + plan.md）
 - **不动**：现有单股分析管道完全不改，本模块是纯增量
 - **不冲突**：trading_full 仍可单独跑，作为"详情页"补充
+
+## 14. 实现偏离（2026-06-22）
+
+> 本设计 §5.2 原写"LLM 输出含 target_weight/delta/portfolio_after 数字字段"。实现后业务流审查发现"仓位凭 AI 感觉"是核心缺陷（详见 [rebalancer-pipeline.zh.md §11.11](../../rebalancer-pipeline.zh.md#1111-为什么仓位用公式不用-llm)），改为**确定性公式驱动仓位**。
+
+### 偏离 1：仓位改公式驱动（新增 position-calculator 模块）
+
+| 维度 | 原设计（§5.2） | 实现 |
+|------|--------------|------|
+| LLM 输出 | 方向 + target_weight + delta + portfolio_after | **只出方向**（BUY/SELL/ADD/REDUCE/HOLD） |
+| target_weight | LLM 在 prompt 区间内拍 | 公式算：基础仓位(fitness查表) × 波动率折扣 × 风险因子 |
+| portfolio_after | LLM 出 | 代码重算（Σweight + cash_pct = 1） |
+| deal_breaker | 靠 LLM 出 SELL | 代码强制改 SELL（防 AI 漏判致命雷） |
+| 现金排队 | LLM 自己凑 | 代码按 fitness 降序花钱，低分股现金不够降级 HOLD |
+
+**新增文件**：`src/watchlist/position-calculator.ts`（`computePosition` + `applyPositions` + 档位配置）
+
+**接入点**：`runRebalanceWithRevise` 内部，parse 之后、validate 之前。让 revise loop 校验的是公式算的仓位。
+
+### 偏离 2：parseKline bug 修复（阻塞 bug）
+
+实现波动率折扣时发现 `data-fetcher.ts` 的 `parseKline` 读 `raw.closes`（不存在），kline.py 实际输出 `raw.data: [{close}]`。原设计 §5.3 和 rebalancer-pipeline.zh.md:224 都假设 closes 字段，与实际不符——导致线上 `pct_5d/pct_20d/support/resistance` **一直恒为 0**。修复：从 `raw.data` 抽 close + 新增 `volatility_20d`。
+
+### 不变的
+
+- 7 级 pipeline 架构（§2.1）不变
+- 10 条约束规则（§6）不变
+- 反"老好人"硬规则（§5.2）保留——但现在约束的是**方向**不是数字
+- shallow-analyzer 双 call（§4）不变
+- execution-planner（§7）不变（只用 delta，计算器同步重算后照常工作）
