@@ -2,21 +2,40 @@ import { describe, it, expect } from "vitest";
 import { parseKline, parseNews, parseHotMoney, parseFundamentals } from "../../../src/watchlist/data-fetcher";
 
 describe("parseKline", () => {
-  it("解析 closes 数组 → pct_5d/pct_20d/support/resistance", () => {
+  it("解析 data 对象数组（kline.py 真实结构）→ pct_5d/pct_20d/support/resistance/volatility_20d", () => {
     // 25 个收盘价，从 10 到 22（每个 +0.5）
     const closes = Array.from({ length: 25 }, (_, i) => 10 + i * 0.5);
-    const k = parseKline({ closes });
+    const raw = { data: closes.map(c => ({ date: "2026-01-01", open: c, high: c, low: c, close: c, volume: 100 })) };
+    const k = parseKline(raw);
     expect(k.pct_5d).toBeGreaterThan(0);
     expect(k.pct_20d).toBeGreaterThan(k.pct_5d);
     expect(k.support).toBeLessThan(k.resistance);
+    expect(k.volatility_20d).toBeGreaterThan(0);
   });
 
-  it("空 closes → 全 0", () => {
-    expect(parseKline({ closes: [] })).toEqual({ pct_5d: 0, pct_20d: 0, support: 0, resistance: 0 });
+  it("兼容老格式：扁平 closes 数组", () => {
+    const closes = Array.from({ length: 25 }, (_, i) => 10 + i * 0.5);
+    const k = parseKline({ closes });
+    expect(k.pct_5d).toBeGreaterThan(0);
+    expect(k.volatility_20d).toBeGreaterThan(0);
   });
 
-  it("无 closes 字段 → 全 0（防御性）", () => {
-    expect(parseKline({})).toEqual({ pct_5d: 0, pct_20d: 0, support: 0, resistance: 0 });
+  it("空 data → 全 0", () => {
+    expect(parseKline({ data: [] })).toEqual({ pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0 });
+  });
+
+  it("无 data/closes 字段 → 全 0（防御性）", () => {
+    expect(parseKline({})).toEqual({ pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0 });
+  });
+
+  it("波动率：高波动 > 低波动", () => {
+    // 低波动：平稳上涨
+    const lowVol = Array.from({ length: 25 }, (_, i) => 100 + i * 0.1);
+    // 高波动：来回震荡
+    const highVol = Array.from({ length: 25 }, (_, i) => 100 * (1 + (i % 2 === 0 ? 0.05 : -0.05)));
+    const kLow = parseKline({ data: lowVol.map(c => ({ close: c })) });
+    const kHigh = parseKline({ data: highVol.map(c => ({ close: c })) });
+    expect(kHigh.volatility_20d).toBeGreaterThan(kLow.volatility_20d);
   });
 });
 
