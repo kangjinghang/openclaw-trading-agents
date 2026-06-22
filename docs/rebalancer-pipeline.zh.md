@@ -247,7 +247,7 @@ analyst 给的 fitness_score 直接驱动仓位公式：
 
 | 脚本 | trading_full 用？ | rebalancer 用？ | 数据内容 | 数据来源 | 输出字段 | 备注 |
 |------|:-:|:-:|---------|---------|---------|------|
-| `kline.py` | ✅ | ✅ | K 线 OHLCV | mootdx（主）+ akshare（备） | OHLCV 数组 + 技术指标 + VPA | **同一个脚本**，rebalancer 只取 close 数组算统计量 |
+| `kline.py` | ✅ | ✅ | K 线 OHLCV | mootdx（主）+ akshare（备） | OHLCV 数组 + 技术指标 + VPA | **同一个脚本**，rebalancer 取 close+volume 算统计量 + 透传 VPA 结论 |
 | `fundamentals.py` | ✅ | ✅ | 估值 + 财务 + 行业 | 东方财富 push2/datacenter/f127 | PE/PB/营收/净利/行业 | **同一个脚本**，rebalancer 只取 5 个字段 |
 | `news.py` | ✅ | ✅ | 个股新闻 + 宏观新闻 | 东方财富搜索 + CLS + akshare | stock_news[] + macro_news[] | **同一个脚本**，rebalancer 只取 stock_news 前 5 条标题 |
 | `hot_money.py` | ✅ | ✅ | 资金流向 | 东方财富 push2 + 同花顺 + 龙虎榜 | net_5d + 北向 + 主力 | **同一个脚本**，rebalancer 只取 net_5d |
@@ -258,23 +258,29 @@ analyst 给的 fitness_score 直接驱动仓位公式：
 
 #### 同一个脚本，两个模式取的字段不同
 
-以 `kline.py` 为例——trading_full 的技术面分析师拿到的是完整输出（OHLCV + MACD/RSI/均线 + VPA 量价指标），而 rebalancer 的 data-fetcher 只取 `close[]` 数组算 5 个统计量：
+以 `kline.py` 为例——trading_full 的技术面分析师拿到的是完整输出（OHLCV + MACD/RSI/均线 + VPA 量价指标），而 rebalancer 的 data-fetcher 从 `data[].close[]` 算 6 个统计量 + 透传 `vpa` 量价文本：
 
 ```
 kline.py 完整输出（781 行脚本）:
-├─ data[]: OHLCV 数组（120 条）          ← rebalancer 取这个
+├─ data[]: OHLCV 数组（120 条）          ← rebalancer 取 close + volume
 ├─ indicators: MACD / RSI / KDJ / 布林带  ← rebalancer 不取
-├─ vpa: 量价分析指标                      ← rebalancer 不取
+├─ vpa: 量价分析指标（含顶部背离/放量滞涨）← rebalancer 取（透传给 risk-role）
 ├─ support_resistance: 支撑阻力位         ← rebalancer 不取
 └─ pattern: K 线形态识别                  ← rebalancer 不取
 
-rebalancer 的 parseKline() 只算:
+rebalancer 的 parseKline() 算:
 ├─ pct_5d:  5 日涨跌幅
 ├─ pct_20d: 20 日涨跌幅
 ├─ support: 最近 5 日最低价
 ├─ resistance: 最近 5 日最高价
-└─ volatility_20d: 20 日波动率 ← 唯一用于仓位公式
+├─ volatility_20d: 20 日波动率 ← 仓位公式用
+└─ volume_ratio_5_20: 近5日均量/20日均量 ← 量比，risk-role 看缩量/放量
+
+rebalancer 额外透传（不算，原样给 risk-role LLM）:
+└─ vpa_text: kline.py 预计算的量价背离结论（"顶部背离信号"等）← risk-role 据此判技术见顶
 ```
+
+> **2026-06-22 新增**：`volume_ratio_5_20` + `vpa_text` 透传。修复了 rebalancer 完全没有量能信号的盲区——之前 `extractCloses` 只取 `row.close`，把 `row.volume` 和 kline.py 已算好的 VPA 结论全扔了。现在 risk-role LLM 能看到 Python 预计算的"顶部背离/放量滞涨"结论，据此提升 `overall_risk`，经仓位公式风险因子（high→×0.3）落到 target_weight。详见 [§11.14](#1114-为什么复用-klinepy-vpa-而不是-ts-端重算背离)。
 
 同理，`news.py` 的完整输出包含 `stock_news[]`（个股）+ `macro_news[]`（宏观），但 rebalancer 只取 `stock_news` 前 5 条标题。
 
@@ -291,7 +297,7 @@ rebalancer 的 parseKline() 只算:
 
 | 维度 | shallow-analyzer（rebalancer） | trading_full（7 分析师） | 差距 |
 |------|------------------------------|------------------------|------|
-| **K 线** | close[] → 5 个统计量 | OHLCV + MACD/RSI/KDJ/布林 + VPA 量价 | 技术面分析深度差 10 倍 |
+| **K 线** | close[] + volume → 6 个统计量 + VPA 量价结论透传 | OHLCV + MACD/RSI/KDJ/布林 + VPA 量价 | 技术面分析深度差 5 倍（VPA 结论已复用，缩窄差距） |
 | **新闻** | 5 条标题 | 个股新闻 + 宏观新闻（CLS/akshare 双源） | 缺宏观视角 |
 | **资金** | 5 日净流入（1 个数字） | 北向 + 主力 + 龙虎榜 + 板块资金（5 子源） | 资金面分析差 5 倍 |
 | **基本面** | PE/PB/Q1 营收/Q1 净利（5 字段） | 腾讯估值 + 季度趋势 + 机构预期 + 三大报表（7 子源） | 基本面分析差 7 倍 |
@@ -495,7 +501,9 @@ fundamentals.py 的 `stock_info.industry`（东方财富 f127 主路 + datacente
 
 #### Call 2: risk-role（识别风险）
 
-输入：同 Call 1 数据 + Call 1 的 thesis
+输入：K 线统计量（pct_5d/pct_20d/量比 volume_ratio_5_20）+ 资金/基本面 + **VPA 量价预计算文本**（kline.py 已算好的"顶部背离/放量滞涨"结论）+ Call 1 的 thesis
+
+> **2026-06-22 修复**：risk-role prompt 此前 K 线段写的是"（同 analyst-role 输入）"死字符串占位符，risk-role LLM 看不到任何 K 线/基本面数字，只能基于 analyst thesis 文字做风险推理——这是比量能盲区更根本的缺陷。现在 risk-role 独立看到完整数据（含量比 + VPA 结论），能自主判量价背离等技术见顶信号，不再完全依赖 analyst 的文字。
 
 输出 JSON：
 ```typescript
@@ -1089,13 +1097,13 @@ tests/ts/watchlist/
   candidate-selector.test.ts                # 5 tests
   constraint-validator.test.ts              # 16 tests
   execution-planner.test.ts                 # 5 tests
-  shallow-analyzer.test.ts                  # 12 tests
-  rebalancer.test.ts                        # 13 tests（含 integration：deal_breaker 强制 SELL / 现金不足降级）
+  shallow-analyzer.test.ts                  # 24 tests（含 risk prompt 注入 K 线/VPA + 持仓股失败兜底）
+  rebalancer.test.ts                        # 16 tests（含 integration：deal_breaker 强制 SELL / 现金不足降级）
   position-calculator.test.ts               # ⭐ 35 tests（基础查表/波动率/风险/现金排队/deal_breaker）
-  data-fetcher.test.ts                      # 11 tests（含 volatility_20d + data 对象数组真实结构）
+  data-fetcher.test.ts                      # 23 tests（含 volatility_20d + volume_ratio_5_20 + vpa_text 透传）
 ```
 
-**总计**：watchlist 子系统 197 个单测全部通过。整个项目 639 tests。
+**总计**：watchlist 子系统 237 个单测全部通过。整个项目 679 tests。
 
 ## 11. 设计权衡与教训
 
@@ -1275,6 +1283,37 @@ LLM 算错权重和、超单仓上限这种事很常见。直接 abort 体验差
 
 **验证路径**：改完后用真实数据连跑 3 次，对比 fitness 是否稳定。之前 5→7 的漂移应消失（或收敛到 ±0.5 以内）。
 
+### 11.14 为什么复用 kline.py VPA 而不是 TS 端重算背离
+
+**问题**：rebalancer 此前完全没有量能信号——`extractCloses` 只取 `row.close`，把 `row.volume` 和 kline.py 已算好的 `vpa` 量价结论全扔了。一只基本面 fitness=8 但技术面"顶部背离"（价格上涨+缩量衰竭）的股，rebalancer 会照常 BUY，因为 risk-role 既看不到量比数字也看不到 VPA 结论。
+
+**根因（三个堵点）**：
+1. `data-fetcher.ts:safeCall` 只返回 `result.data`，丢弃 `result.vpa`（exec-python.ts:280 已经提到顶层）
+2. `data-fetcher.ts:extractCloses` 只读 `row.close`，丢弃 `row.volume`
+3. `shallow-analyzer.ts:formatRiskPrompt` K 线段写死"（同 analyst-role 输入）"占位符，不注入任何数字——risk-role LLM 只能基于 analyst thesis 文字做风险推理，无法独立判量价背离
+
+**改法**：打通三个堵点，复用 kline.py 已有的 VPA 信号，而不是 TS 端重新发明背离判定：
+- `extractVolumes` + `computeVolumeRatio` 算量比数字（近5日均量/20日均量）
+- `safeCall` 透传 `result.vpa` 到 `StockData.vpa_text`
+- `formatRiskPrompt` 注入 K 线统计量（含量比）+ VPA 文本 + 量价背离判定规则
+
+**为什么复用而不是重算**：
+
+| 维度 | 复用 kline.py VPA | TS 端重算背离 |
+|------|------------------|--------------|
+| 阈值来源 | trading_full 已验证的逻辑（5日 price_up+vol_down → 顶部背离） | 需重新定阈值，无实战验证 |
+| 双模式一致性 | 同一只股 trading_full 和 rebalancer 看到相同结论 | 两套阈值可能给矛盾结论 |
+| 维护成本 | Python 端零改动（VPA 信号已存在） | 需在 TS 端维护第二套量价逻辑 |
+| 工程量 | 3 个堵点打通，纯增量 | 需设计阈值 + 测试 + 校准 |
+
+**信号如何落到仓位**：risk-role LLM 看到 Python 预计算的"顶部背离信号"后，输出 `risk_flag` 并提升 `overall_risk`（如 medium→high）。`overall_risk` 经 `buildStockReport` → `applyPositions` → `riskFactor`（high→×0.3）自动收缩 BUY 仓位。**无需改 position-calculator**——信号通过现有的 risk 因子通道落地。
+
+**为什么同时抽 `volume_ratio_5_20` 数字**：VPA 文字结论给 LLM 看，`volume_ratio_5_20` 数字留作未来代码兜底（方案 B）的接口——本次不接兜底（靠 LLM 消费 Python 结论），但数据通道先打通，避免二次改 data-fetcher。若跑几天发现 LLM 对 VPA 结论判得不稳，再在 position-calculator 加确定性兜底（如量比<0.7 且涨幅大时强制提 overall_risk 一档）。
+
+**代价**：risk-role prompt 变长（多了 K 线统计量 + VPA 文本段，约 +200 tokens/股）。但 risk-role 本就该独立看数据做风险判断，这个 token 成本是必要的——修复前的"占位符"是 bug 不是 feature。
+
+**顺带修复的更根本 bug**：risk-role prompt 的"（同 analyst-role 输入）"占位符意味着 risk-role 完全依赖 analyst 的文字做风险推理，丧失了"analyst 看多 + risk 看空"双 call 分离的设计初衷。本次一并修复——risk-role 现在独立看到完整 K 线/资金/基本面/VPA 数据。
+
 ## 12. 测试策略
 
 沿用 ranker 模式（mock LLM + 假数据 + 不触网）：
@@ -1290,7 +1329,7 @@ LLM 算错权重和、超单仓上限这种事很常见。直接 abort 体验差
 | shallow-analyzer | prompt 渲染、JSON 解析、字段补齐、buildStockReport |
 | rebalancer | prompt 渲染、JSON 解析、幻觉 ticker 过滤、revise loop、空 plan |
 | position-calculator | 基础查表/波动率折扣/风险因子/现金排队/deal_breaker 强制 SELL（共 35 tests） |
-| data-fetcher | 4 个解析器（parseKline 含 volatility_20d / parseNews / parseHotMoney / parseFundamentals） |
+| data-fetcher | 4 个解析器（parseKline 含 volatility_20d + volume_ratio_5_20 / parseNews / parseHotMoney / parseFundamentals）+ computeVolumeRatio + vpa_text 透传 |
 
 ### 12.2 Integration tests
 
