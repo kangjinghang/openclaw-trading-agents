@@ -129,7 +129,7 @@ Options:
             : (0, shallow_analyzer_1.formatRiskPrompt)(data, analyst);
         const result = await (0, llm_client_1.callLLM)(client, {
             model, systemPrompt, userMessage,
-            phase: "rebalance", role: `${role}-shallow`, traceLogger, temperature: 0.3,
+            phase: "rebalance", role: `${role}-shallow`, traceLogger, temperature: 0,
         });
         return result.content;
     };

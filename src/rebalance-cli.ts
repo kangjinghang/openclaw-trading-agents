@@ -103,7 +103,7 @@ Options:
       : formatRiskPrompt(data, analyst!);
     const result = await callLLM(client, {
       model, systemPrompt, userMessage,
-      phase: "rebalance", role: `${role}-shallow`, traceLogger, temperature: 0.3,
+      phase: "rebalance", role: `${role}-shallow`, traceLogger, temperature: 0,
     });
     return result.content;
   };
