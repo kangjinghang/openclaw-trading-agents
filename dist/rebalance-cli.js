@@ -48,6 +48,7 @@ const rebalancer_1 = require("./watchlist/rebalancer");
 const shallow_analyzer_1 = require("./watchlist/shallow-analyzer");
 const atomic_json_1 = require("./watchlist/atomic-json");
 const data_fetcher_1 = require("./watchlist/data-fetcher");
+const plan_formatter_1 = require("./watchlist/plan-formatter");
 const DEFAULT_WATCHLIST_DIR = path.join(os.homedir(), ".openclaw", "watchlist");
 function argValue(args, key) {
     const idx = args.indexOf(key);
@@ -180,9 +181,13 @@ Options:
         constraint_check: result.constraint_check,
         execution_plan: result.execution_plan,
         sector_warnings: result.sector_warnings,
+        position_traces: result.position_traces,
     };
     (0, atomic_json_1.writeAtomicJson)(path.join(rebalanceDir, "plan.json"), planFile);
     (0, atomic_json_1.writeAtomicJson)(path.join(rebalanceDir, "holdings_snapshot.json"), holdings);
+    // 写 plan.md（人类可读）
+    const planMd = (0, plan_formatter_1.formatPlanMarkdown)(planFile);
+    fs.writeFileSync(path.join(rebalanceDir, "plan.md"), planMd, "utf-8");
     // 更新 last_rebalance.json
     if (result.rebalancer_output.actions.length > 0) {
         const newLast = {
@@ -219,6 +224,7 @@ Options:
     }
     console.log(`\n  tokens: ${traceLogger.totalTokens}`);
     console.log(`  输出: ${path.join(rebalanceDir, "plan.json")}`);
+    console.log(`  输出: ${path.join(rebalanceDir, "plan.md")}`);
 }
 if (require.main === module)
     main().catch(e => {

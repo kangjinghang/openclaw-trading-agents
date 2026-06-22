@@ -230,13 +230,14 @@ currentWeights) {
     let lastPlan = null;
     let lastViolations = [];
     let reviseCount = 0;
+    let lastTraces = new Map();
     for (let attempt = 0; attempt <= config.max_revise_retries; attempt++) {
         let content;
         try {
             content = await caller({ systemPrompt: "", userMessage });
         }
         catch {
-            return { plan: lastPlan, reviseCount, status: "llm_failed", finalViolations: lastViolations };
+            return { plan: lastPlan, reviseCount, status: "llm_failed", finalViolations: lastViolations, positionTraces: lastTraces };
         }
         let parsed = parseRebalancePlan(content, ctx.tickersInPool);
         if (!parsed) {
@@ -257,11 +258,12 @@ currentWeights) {
         if (positionCtx) {
             const applied = (0, position_calculator_1.applyPositions)(parsed, positionCtx);
             parsed = applied.plan;
+            lastTraces = applied.traces;
         }
         lastPlan = parsed;
         const result = (0, constraint_validator_1.validateRebalance)(parsed, ctx, config.constraints);
         if (result.passed) {
-            return { plan: lastPlan, reviseCount, status: "ok", finalViolations: [] };
+            return { plan: lastPlan, reviseCount, status: "ok", finalViolations: [], positionTraces: lastTraces };
         }
         lastViolations = result.violations;
         if (attempt >= config.max_revise_retries)
@@ -275,6 +277,7 @@ currentWeights) {
         reviseCount,
         status: "constraint_violation",
         finalViolations: lastViolations,
+        positionTraces: lastTraces,
     };
 }
 /** 完整 pipeline：候选选择 → shallow-analyzer → rebalancer + revise → execution plan。 */
@@ -368,6 +371,7 @@ async function rebalancePipeline(input) {
             execution_plan: { execution_sequence: [], final_state: { positions: [], cash_pct: 0 }, warnings: ["LLM failed"] },
             status: rebalanceResult.status,
             sector_warnings,
+            position_traces: Object.fromEntries(rebalanceResult.positionTraces),
         };
     }
     // 5. execution plan
@@ -383,6 +387,7 @@ async function rebalancePipeline(input) {
         execution_plan,
         status: rebalanceResult.status,
         sector_warnings,
+        position_traces: Object.fromEntries(rebalanceResult.positionTraces),
     };
 }
 //# sourceMappingURL=rebalancer.js.map

@@ -16,6 +16,7 @@ export interface RebalanceResult {
     reviseCount: number;
     status: "ok" | "constraint_violation" | "llm_failed";
     finalViolations: ConstraintViolation[];
+    positionTraces: Map<string, string>;
 }
 /** 跑 rebalancer + revise loop。最多 max_revise_retries 次。
  *
@@ -47,6 +48,8 @@ export interface RebalancePipelineResult {
     status: "ok" | "constraint_violation" | "llm_failed";
     /** 行业拉取相关警告（fundamentals.industry 为空的股按"未分类"累计，规则 3 对它们失效） */
     sector_warnings: string[];
+    /** 仓位计算器溯源（ticker → 可读字符串） */
+    position_traces: Record<string, string>;
 }
 /** 完整 pipeline：候选选择 → shallow-analyzer → rebalancer + revise → execution plan。 */
 export declare function rebalancePipeline(input: RebalancePipelineInput): Promise<RebalancePipelineResult>;

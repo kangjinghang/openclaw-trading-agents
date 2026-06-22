@@ -12,6 +12,7 @@ import { formatAnalystPrompt, formatRiskPrompt } from "./watchlist/shallow-analy
 import type { ShallowLlmCaller, StockData } from "./watchlist/shallow-analyzer";
 import { writeAtomicJson } from "./watchlist/atomic-json";
 import { fetchAllStockData } from "./watchlist/data-fetcher";
+import { formatPlanMarkdown } from "./watchlist/plan-formatter";
 import type { LastRebalance, RebalancePlanFile } from "./watchlist/rebalance-types";
 import type { ScanSummary } from "./watchlist/types";
 
@@ -158,9 +159,14 @@ Options:
     constraint_check: result.constraint_check,
     execution_plan: result.execution_plan,
     sector_warnings: result.sector_warnings,
+    position_traces: result.position_traces,
   };
   writeAtomicJson(path.join(rebalanceDir, "plan.json"), planFile);
   writeAtomicJson(path.join(rebalanceDir, "holdings_snapshot.json"), holdings);
+
+  // 写 plan.md（人类可读）
+  const planMd = formatPlanMarkdown(planFile);
+  fs.writeFileSync(path.join(rebalanceDir, "plan.md"), planMd, "utf-8");
 
   // 更新 last_rebalance.json
   if (result.rebalancer_output.actions.length > 0) {
@@ -197,6 +203,7 @@ Options:
   }
   console.log(`\n  tokens: ${traceLogger.totalTokens}`);
   console.log(`  输出: ${path.join(rebalanceDir, "plan.json")}`);
+  console.log(`  输出: ${path.join(rebalanceDir, "plan.md")}`);
 }
 
 if (require.main === module) main().catch(e => {

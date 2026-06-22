@@ -216,6 +216,7 @@ export interface RebalanceResult {
   reviseCount: number;
   status: "ok" | "constraint_violation" | "llm_failed";
   finalViolations: ConstraintViolation[];
+  positionTraces: Map<string, string>;
 }
 
 /** 跑 rebalancer + revise loop。最多 max_revise_retries 次。
@@ -236,13 +237,14 @@ export async function runRebalanceWithRevise(
   let lastPlan: RebalancePlan | null = null;
   let lastViolations: ConstraintViolation[] = [];
   let reviseCount = 0;
+  let lastTraces = new Map<string, string>();
 
   for (let attempt = 0; attempt <= config.max_revise_retries; attempt++) {
     let content: string;
     try {
       content = await caller({ systemPrompt: "", userMessage });
     } catch {
-      return { plan: lastPlan, reviseCount, status: "llm_failed", finalViolations: lastViolations };
+      return { plan: lastPlan, reviseCount, status: "llm_failed", finalViolations: lastViolations, positionTraces: lastTraces };
     }
 
     let parsed = parseRebalancePlan(content, ctx.tickersInPool);
@@ -266,13 +268,14 @@ export async function runRebalanceWithRevise(
     if (positionCtx) {
       const applied = applyPositions(parsed, positionCtx);
       parsed = applied.plan;
+      lastTraces = applied.traces;
     }
 
     lastPlan = parsed;
 
     const result = validateRebalance(parsed, ctx, config.constraints);
     if (result.passed) {
-      return { plan: lastPlan, reviseCount, status: "ok", finalViolations: [] };
+      return { plan: lastPlan, reviseCount, status: "ok", finalViolations: [], positionTraces: lastTraces };
     }
     lastViolations = result.violations;
     if (attempt >= config.max_revise_retries) break;
@@ -287,6 +290,7 @@ export async function runRebalanceWithRevise(
     reviseCount,
     status: "constraint_violation",
     finalViolations: lastViolations,
+    positionTraces: lastTraces,
   };
 }
 
@@ -309,6 +313,8 @@ export interface RebalancePipelineResult {
   status: "ok" | "constraint_violation" | "llm_failed";
   /** 行业拉取相关警告（fundamentals.industry 为空的股按"未分类"累计，规则 3 对它们失效） */
   sector_warnings: string[];
+  /** 仓位计算器溯源（ticker → 可读字符串） */
+  position_traces: Record<string, string>;
 }
 
 /** 完整 pipeline：候选选择 → shallow-analyzer → rebalancer + revise → execution plan。 */
@@ -406,6 +412,7 @@ export async function rebalancePipeline(input: RebalancePipelineInput): Promise<
       execution_plan: { execution_sequence: [], final_state: { positions: [], cash_pct: 0 }, warnings: ["LLM failed"] },
       status: rebalanceResult.status,
       sector_warnings,
+      position_traces: Object.fromEntries(rebalanceResult.positionTraces),
     };
   }
 
@@ -423,5 +430,6 @@ export async function rebalancePipeline(input: RebalancePipelineInput): Promise<
     execution_plan,
     status: rebalanceResult.status,
     sector_warnings,
+    position_traces: Object.fromEntries(rebalanceResult.positionTraces),
   };
 }
