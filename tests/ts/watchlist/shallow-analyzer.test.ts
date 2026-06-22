@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatAnalystPrompt, parseAnalystReport, formatRiskPrompt, parseRiskReport, buildStockReport, analyzeAll, type ShallowLlmCaller } from "../../../src/watchlist/shallow-analyzer";
+import { formatAnalystPrompt, parseAnalystReport, formatRiskPrompt, parseRiskReport, buildStockReport, buildFallbackReport, analyzeAll, type ShallowLlmCaller, type StockData } from "../../../src/watchlist/shallow-analyzer";
 import type { AnalystReport } from "../../../src/watchlist/rebalance-types";
 import type { CandidateMeta } from "../../../src/watchlist/candidate-selector";
 import type { StockData } from "../../../src/watchlist/shallow-analyzer";
@@ -189,5 +189,120 @@ describe("analyzeAll", () => {
     const mockCaller: ShallowLlmCaller = async () => "x";
     const reports = await analyzeAll(metas, dataByTicker, mockCaller);
     expect(reports).toHaveLength(0);
+  });
+});
+
+describe("buildFallbackReport（持仓股失败兜底）", () => {
+  it("默认值：fitness=5, risk=high, deal_breaker=false", () => {
+    const meta: CandidateMeta = {
+      ticker: "SH600183", name: "生益科技", is_held: true,
+      current_weight: 0.10, days_held: 8, locked: false, ranker_score: 9.0,
+    };
+    const r = buildFallbackReport(meta, "PCB", "LLM 调用异常：timeout");
+    expect(r.ticker).toBe("SH600183");
+    expect(r.fitness_score).toBe(5);
+    expect(r.overall_risk).toBe("high");
+    expect(r.deal_breaker).toBe(false);
+    expect(r.is_held).toBe(true);
+    expect(r.current_weight).toBe(0.10);
+    expect(r.days_held).toBe(8);
+    expect(r.locked).toBe(false);
+    expect(r.ranker_score).toBe(9.0);
+    expect(r.thesis).toContain("shallow-analyzer 失败");
+    expect(r.thesis).toContain("timeout");
+    expect(r.data_gaps[0]).toContain("timeout");
+    expect(r.risk_flags[0].severity).toBe("高");
+  });
+
+  it("保留 locked 状态（不会被乱减锁定股）", () => {
+    const meta: CandidateMeta = {
+      ticker: "SZ300319", name: "麦捷科技", is_held: true,
+      current_weight: 0.10, days_held: 3, locked: true, ranker_score: 9.2,
+    };
+    const r = buildFallbackReport(meta, "电子", "analyst 返回非 JSON");
+    expect(r.locked).toBe(true);
+    expect(r.days_held).toBe(3);
+  });
+});
+
+describe("analyzeAll 持仓股失败兜底", () => {
+  // 复用的假数据构造器
+  function makeData(ticker: string, name: string): StockData {
+    return {
+      ticker, name, sector: "电子",
+      kline: { pct_5d: 1, pct_20d: 2, support: 1, resistance: 2, volatility_20d: 0.02 },
+      news: [], hot_money: { net_5d: 0 },
+      fundamentals: { pe: 1, pb: 1, rev_q1: 1, np_q1: 1, industry: "电子" },
+    };
+  }
+
+  it("持仓股 analyst 失败 → 返回 fallback report（不是消失）", async () => {
+    const metas: CandidateMeta[] = [
+      { ticker: "HELD", name: "持仓股", is_held: true, current_weight: 0.10, days_held: 8, locked: false },
+    ];
+    const dataByTicker = new Map([["HELD", makeData("HELD", "持仓股")]]);
+    // analyst 返回非 JSON
+    const mockCaller: ShallowLlmCaller = async ({ role }) => {
+      if (role === "analyst") return "not json";
+      return JSON.stringify({ risk_flags: [], overall_risk: "low", deal_breaker: false });
+    };
+    const reports = await analyzeAll(metas, dataByTicker, mockCaller);
+    expect(reports).toHaveLength(1);  // 不消失
+    expect(reports[0].fitness_score).toBe(5);  // 默认值
+    expect(reports[0].overall_risk).toBe("high");
+    expect(reports[0].thesis).toContain("shallow-analyzer 失败");
+    expect(reports[0].data_gaps[0]).toContain("analyst-role");
+  });
+
+  it("候选股 analyst 失败 → 仍跳过（行为不变）", async () => {
+    const metas: CandidateMeta[] = [
+      { ticker: "CAND", name: "候选股", is_held: false, current_weight: 0, days_held: 0, locked: false },
+    ];
+    const dataByTicker = new Map([["CAND", makeData("CAND", "候选股")]]);
+    const mockCaller: ShallowLlmCaller = async ({ role }) => {
+      if (role === "analyst") return "not json";
+      return JSON.stringify({ risk_flags: [], overall_risk: "low", deal_breaker: false });
+    };
+    const reports = await analyzeAll(metas, dataByTicker, mockCaller);
+    expect(reports).toHaveLength(0);  // 候选股跳过
+  });
+
+  it("持仓股 LLM 抛异常 → fallback report", async () => {
+    const metas: CandidateMeta[] = [
+      { ticker: "HELD", name: "持仓股", is_held: true, current_weight: 0.10, days_held: 8, locked: false },
+    ];
+    const dataByTicker = new Map([["HELD", makeData("HELD", "持仓股")]]);
+    const mockCaller: ShallowLlmCaller = async () => { throw new Error("429 rate limit"); };
+    const reports = await analyzeAll(metas, dataByTicker, mockCaller);
+    expect(reports).toHaveLength(1);
+    expect(reports[0].fitness_score).toBe(5);
+    expect(reports[0].data_gaps[0]).toContain("429");
+  });
+
+  it("持仓股 dataByTicker 缺失 → fallback report（sector=未分类）", async () => {
+    const metas: CandidateMeta[] = [
+      { ticker: "HELD", name: "持仓股", is_held: true, current_weight: 0.10, days_held: 8, locked: false },
+    ];
+    const dataByTicker = new Map<string, StockData>();  // 空
+    const mockCaller: ShallowLlmCaller = async () => "x";
+    const reports = await analyzeAll(metas, dataByTicker, mockCaller);
+    expect(reports).toHaveLength(1);
+    expect(reports[0].sector).toBe("未分类");
+    expect(reports[0].data_gaps[0]).toContain("数据拉取失败");
+  });
+
+  it("持仓股 risk-role 失败 → fallback report", async () => {
+    const metas: CandidateMeta[] = [
+      { ticker: "HELD", name: "持仓股", is_held: true, current_weight: 0.10, days_held: 8, locked: false },
+    ];
+    const dataByTicker = new Map([["HELD", makeData("HELD", "持仓股")]]);
+    const mockCaller: ShallowLlmCaller = async ({ role }) => {
+      if (role === "analyst") return JSON.stringify({ thesis: "x", fitness_score: 8, data_freshness: "2026-06-21", key_signals: [], data_gaps: [] });
+      return "not json";  // risk 失败
+    };
+    const reports = await analyzeAll(metas, dataByTicker, mockCaller);
+    expect(reports).toHaveLength(1);
+    expect(reports[0].fitness_score).toBe(5);  // fallback，不是 analyst 给的 8
+    expect(reports[0].data_gaps[0]).toContain("risk-role");
   });
 });

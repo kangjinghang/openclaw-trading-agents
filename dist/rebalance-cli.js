@@ -207,6 +207,13 @@ Options:
         for (const w of result.sector_warnings)
             console.log(`    - ${w}`);
     }
+    // 持仓股分析失败兜底提示（fallback report 的 thesis 含 "⚠️ shallow-analyzer 失败"）
+    const fallbackReports = result.reports.filter(r => r.thesis.includes("shallow-analyzer 失败"));
+    if (fallbackReports.length > 0) {
+        console.log(`  ⚠️ ${fallbackReports.length} 只持仓股分析失败，按保守默认处理（fitness=5, risk=high）:`);
+        for (const r of fallbackReports)
+            console.log(`    - ${r.ticker} ${r.name}: ${r.data_gaps[0] ?? "未知原因"}`);
+    }
     console.log(`  actions:`);
     for (const a of result.rebalancer_output.actions) {
         const sign = a.delta > 0 ? "+" : "";
