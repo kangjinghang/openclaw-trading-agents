@@ -167,7 +167,7 @@ describe("rebalancePipeline (integration)", () => {
     const lastRebalance: LastRebalance = { date: "2026-06-14", actions: [] };
 
     const dataByTicker = new Map<string, StockData>([
-      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "电子", kline: { pct_5d: 5, pct_20d: 20, support: 25, resistance: 30, volatility_20d: 0.015 }, news: ["n1"], hot_money: { net_5d: 1e8 }, fundamentals: { pe: 50, pb: 5, rev_q1: 1e9, np_q1: 1e8 } }],
+      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "电子", kline: { pct_5d: 5, pct_20d: 20, support: 25, resistance: 30, volatility_20d: 0.015 }, news: [{ title: "n1" }], hot_money: { net_5d: 1e8 }, fundamentals: { pe: 50, pb: 5, rev_q1: 1e9, np_q1: 1e8 } }],
       ["SH600519", { ticker: "SH600519", name: "贵州茅台", sector: "白酒", kline: { pct_5d: -1, pct_20d: 2, support: 1700, resistance: 1800, volatility_20d: 0.012 }, news: [], hot_money: { net_5d: -5e7 }, fundamentals: { pe: 30, pb: 10, rev_q1: 4e9, np_q1: 2e9 } }],
     ]);
 

@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.computeVolumeRatio = computeVolumeRatio;
 exports.parseKline = parseKline;
 exports.parseNews = parseNews;
+exports.parseNewsLayerStats = parseNewsLayerStats;
 exports.parseHotMoney = parseHotMoney;
 exports.parseFundamentals = parseFundamentals;
 exports.fetchStockData = fetchStockData;
@@ -127,10 +128,50 @@ function parseKline(raw) {
         volume_ratio_5_20: computeVolumeRatio(volumes, 5, 20),
     };
 }
+/** news.py 单条 article 的 content 原始截断 300 字（skills/trading-news/scripts/news.py:57），
+ *  shallow 是 5 条 × N 字，控制 prompt 总量：每条 content 截 120 字（≈60 汉字，够判标题党）。 */
+const NEWS_CONTENT_MAX_CHARS = 120;
 function parseNews(raw) {
-    if (!Array.isArray(raw?.news))
-        return [];
-    return raw.news.slice(0, 5).map((n) => typeof n?.title === "string" ? n.title : "").filter(Boolean);
+    // news.py 输出字段是 stock_news（skills/trading-news/scripts/news.py:220）。
+    // 老实现读 raw.news → 字段名不匹配，恒返回 []。修正为 stock_news，兼容老格式 raw.news。
+    const list = Array.isArray(raw?.stock_news) ? raw.stock_news : (Array.isArray(raw?.news) ? raw.news : []);
+    return list.slice(0, 5).map((n) => {
+        if (!n || typeof n !== "object")
+            return null;
+        const title = typeof n.title === "string" ? n.title.trim() : "";
+        if (!title)
+            return null;
+        const item = { title };
+        if (typeof n.content === "string" && n.content.trim()) {
+            item.content = n.content.slice(0, NEWS_CONTENT_MAX_CHARS);
+        }
+        if (typeof n.time === "string" && n.time.trim())
+            item.time = n.time.trim();
+        if (typeof n.source === "string" && n.source.trim())
+            item.source = n.source.trim();
+        return item;
+    }).filter((x) => x !== null);
+}
+/** 从 news.py 输出解析时间分层数量统计（layer_stats）。
+ *  shallow 用它判断热门/冷门 + 突发：6h 突发提权重，total 低=冷门。
+ *  字段缺失或非数字 → 返回 null（undefined 语义），不阻塞分析。 */
+function parseNewsLayerStats(raw) {
+    const s = raw?.layer_stats;
+    if (!s || typeof s !== "object")
+        return null;
+    const num = (v) => typeof v === "number" && !isNaN(v) ? v : 0;
+    const stats = {
+        realtime_6h_count: num(s.realtime_6h_count),
+        extended_24h_count: num(s.extended_24h_count),
+        history_7d_count: num(s.history_7d_count),
+        total_categorized: num(s.total_categorized),
+    };
+    // 全 0 视为无效（拉取失败或空数据），返回 null 避免误导 LLM
+    if (stats.total_categorized === 0 && stats.realtime_6h_count === 0
+        && stats.extended_24h_count === 0 && stats.history_7d_count === 0) {
+        return null;
+    }
+    return stats;
 }
 function parseHotMoney(raw) {
     return { net_5d: typeof raw?.net_5d === "number" ? raw.net_5d : 0 };
@@ -147,9 +188,15 @@ function parseFundamentals(raw) {
 }
 /** 单股并行跑 4 个 script。失败的 script 返回 null 字段（容忍）。 */
 async function fetchStockData(ticker, name, sector, rankerThesis) {
+    // news.py 的 --ticker/--date 是 required（skills/trading-news/scripts/news.py:262-263），
+    // 老实现只传 [ticker] 位置参数 → argparse 报错 → news 恒为 []。
+    // 用 today 作为分析日期；--lookback-days 7 对齐 trading_full 的 news 角色。
+    // --skip-macro：shallow 不消费宏观新闻（与 ticker 无关、N 股重复拉取纯浪费），
+    // 省掉 CLS+akshare 两路 HTTP（实测单股 1.27s→0.37s，-71%）。
+    const today = new Date().toISOString().slice(0, 10);
     const tasks = [
         safeCall(() => (0, exec_python_1.execSkillScript)("trading-kline", "kline", PROJECT_ROOT, [ticker])),
-        safeCall(() => (0, exec_python_1.execSkillScript)("trading-news", "news", PROJECT_ROOT, [ticker])),
+        safeCall(() => (0, exec_python_1.execSkillScript)("trading-news", "news", PROJECT_ROOT, ["--ticker", ticker, "--date", today, "--lookback-days", "7", "--skip-macro"])),
         safeCall(() => (0, exec_python_1.execSkillScript)("trading-hot-money", "hot_money", PROJECT_ROOT, [ticker])),
         safeCall(() => (0, exec_python_1.execSkillScript)("trading-fundamentals", "fundamentals", PROJECT_ROOT, [ticker])),
     ];
@@ -159,6 +206,7 @@ async function fetchStockData(ticker, name, sector, rankerThesis) {
     const vpaText = klineR?.vpa;
     const kline = klineRaw ? parseKline(klineRaw) : { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 };
     const news = newsR?.data ? parseNews(newsR.data) : [];
+    const newsLayerStats = newsR?.data ? parseNewsLayerStats(newsR.data) ?? undefined : undefined;
     const hot = hotR?.data ? parseHotMoney(hotR.data) : { net_5d: 0 };
     const fund = fundR?.data ? parseFundamentals(fundR.data) : { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "" };
     return {
@@ -168,6 +216,7 @@ async function fetchStockData(ticker, name, sector, rankerThesis) {
         fundamentals: fund,
         ranker_thesis: rankerThesis,
         vpa_text: vpaText, // kline.py 预计算的 VPA 量价背离结论，undefined 则不注入
+        news_layer_stats: newsLayerStats, // news.py layer_stats，undefined 则不注入
     };
 }
 /** 安全调用 execSkillScript，失败返回 null。

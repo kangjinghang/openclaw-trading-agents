@@ -34,8 +34,9 @@ const ANALYST_PROMPT_TEMPLATE = `# 角色
 
 # 数据
 ## K 线（5 日 +{pct_5d}% / 20 日 +{pct_20d}%，支撑 {support} / 压力 {resistance}）
-## 新闻（最近 7 天 top）
-{news_bullets}
+## 新闻（最近 7 天 top，含时间与正文摘要）
+{news_density}{news_bullets}
+（注意时效：最近 1-2 天的突发新闻权重高于一周前的旧闻；标题党风险——标题与正文矛盾时以正文为准）
 ## 资金流向（5 日净流入 {net_5d}）
 ## 基本面（PE {pe} / PB {pb} / Q1 营收 {rev_q1} / Q1 净利 {np_q1}）
 {ranker_section}
@@ -49,7 +50,16 @@ const ANALYST_PROMPT_TEMPLATE = `# 角色
   "data_gaps": ["..."]
 }`;
 function formatAnalystPrompt(d) {
-    const newsBullets = d.news.map(n => `- ${n}`).join("\n") || "- (无)";
+    const newsBullets = d.news.map(n => {
+        const time = n.time ? `[${n.time}] ` : "";
+        const content = n.content ? `：${n.content}` : "";
+        return `- ${time}${n.title}${content}`;
+    }).join("\n") || "- (无)";
+    // 新闻密度统计：news.py layer_stats 的一行渲染。无统计 → 空串（该行省略）。
+    // 让 LLM 判断热门/冷门（total 低=流动性风险）+ 有无突发（realtime_6h>0=提权重）。
+    const newsDensity = d.news_layer_stats
+        ? `新闻密度：6h 内 ${d.news_layer_stats.realtime_6h_count} 条突发 / 24h 内 ${d.news_layer_stats.extended_24h_count} 条 / 7 天共 ${d.news_layer_stats.total_categorized} 条\n`
+        : "";
     const rankerSection = d.ranker_thesis ? `## ranker 评估（ranker 给的 thesis）\n${d.ranker_thesis}` : "";
     return ANALYST_PROMPT_TEMPLATE
         .replace("{ticker}", d.ticker)
@@ -59,6 +69,7 @@ function formatAnalystPrompt(d) {
         .replace("{pct_20d}", String(d.kline.pct_20d))
         .replace("{support}", String(d.kline.support))
         .replace("{resistance}", String(d.kline.resistance))
+        .replace("{news_density}", newsDensity)
         .replace("{news_bullets}", newsBullets)
         .replace("{net_5d}", String(d.hot_money.net_5d))
         .replace("{pe}", String(d.fundamentals.pe))

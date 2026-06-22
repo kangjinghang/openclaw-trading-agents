@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
-from http_helpers import em_get, http_get, output_json, normalize_ticker, record_call
+from http_helpers import em_get, output_json, normalize_ticker, record_call
 
 _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
@@ -65,48 +65,6 @@ def _fetch_news_eastmoney(code, page_size=50):
         record_call("news/stock_em", success=False, error=str(e),
                     duration_ms=(time.monotonic() - start) * 1000)
         return []
-
-
-def _fetch_global_news_cls(limit=10):
-    """Fetch macro/global financial news from CLS (财联社快讯).
-
-    Returns an empty list on any failure — the caller (fetch_news) falls back
-    to _fetch_global_news_akshare when this returns nothing, and records the
-    reason via macro_news_error so a silent source outage is observable
-    downstream instead of masquerading as "no macro news".
-    """
-    import requests
-    start = time.monotonic()
-    articles = []
-    try:
-        url = "https://www.cls.cn/nodeapi/telegraphList"
-        params = {"rn": str(limit), "page": "1"}
-        headers = {"User-Agent": _UA, "Referer": "https://www.cls.cn/"}
-        r = http_get(url, params=params, headers=headers, timeout=10)
-        d = r.json()
-        for item in d.get("data", {}).get("roll_data", []):
-            title = item.get("title", "") or item.get("brief", "")
-            content = item.get("content", "") or item.get("brief", "")
-            ctime = item.get("ctime", "")
-            pub_time = ""
-            if ctime:
-                try:
-                    pub_time = datetime.fromtimestamp(int(ctime)).strftime("%Y-%m-%d %H:%M")
-                except (ValueError, TypeError, OSError):
-                    pub_time = str(ctime)
-            articles.append({
-                "title": title,
-                "content": content[:300],
-                "time": pub_time,
-                "source": "财联社",
-            })
-        record_call("news/macro_cls", success=True,
-                    duration_ms=(time.monotonic() - start) * 1000)
-        return articles
-    except Exception as e:
-        record_call("news/macro_cls", success=False, error=str(e),
-                    duration_ms=(time.monotonic() - start) * 1000)
-        raise RuntimeError(f"CLS macro news unavailable: {type(e).__name__}: {e}") from e
 
 
 def _fetch_global_news_akshare(limit=10):
@@ -210,8 +168,14 @@ def _categorize_news(articles, reference_date_str, lookback_days=7):
     return layers, stats
 
 
-def fetch_news(ticker, date, lookback_days=7):
-    """Fetch individual stock news + macro news with time-layered categorization."""
+def fetch_news(ticker, date, lookback_days=7, skip_macro=False):
+    """Fetch individual stock news + macro news with time-layered categorization.
+
+    skip_macro=True 时跳过宏观新闻拉取（CLS + akshare 两路 HTTP 全省）。
+    适用于 shallow-analyzer 这类快筛场景：候选池 N 股各自调用 news.py，
+    宏观新闻与 ticker 无关、N 次拉取内容相同纯属浪费，且 shallow 不消费宏观。
+    跳过后 macro_news 仍输出空数组 + macro_news_source="skipped"，保持结构稳定。
+    """
     code = normalize_ticker(ticker)
     data = {"ticker": code, "date": date, "lookback_days": lookback_days}
 
@@ -226,30 +190,28 @@ def fetch_news(ticker, date, lookback_days=7):
     except Exception as e:
         data["stock_news_error"] = str(e)
 
-    # Macro news: try CLS first, fall back to akshare (东方财富全球) when CLS
-    # is unavailable. Record which source we actually used (macro_news_source)
-    # and any error (macro_news_error) so a silent outage is observable —
-    # previously a bare except: pass dropped CLS failures and macro_news stayed
-    # empty for days with no signal that a source had died.
+    if skip_macro:
+        # shallow-analyzer 不消费宏观新闻，跳过宏观拉取（省 N×1 请求）
+        data["macro_news"] = []
+        data["macro_news_source"] = "skipped"
+        return data
+
+    # Macro news: 东方财富全球财经快讯（akshare.stock_info_global_em）。
+    # 历史上曾用 CLS 财联社电报作主源 + akshare 兜底，但 CLS 的
+    # nodeapi/telegraphList 接口已稳定 404（2026-06 实测 3/3 失败），
+    # akshare 的 CLS 实现同 URL 同样失效。现简化为 EM 单源——稳定、
+    # 200 条、0.2s。macro_news_source / macro_news_error 保留以维持
+    # 输出结构稳定 + 错误可观测。
     macro_source = "none"
     macro_articles = []
     try:
-        macro_articles = _fetch_global_news_cls()
+        macro_articles = _fetch_global_news_akshare()
         if macro_articles:
-            macro_source = "cls"
+            macro_source = "eastmoney"
+        else:
+            data["macro_news_error"] = "macro source returned empty"
     except Exception as e:
         data["macro_news_error"] = str(e)
-
-    if not macro_articles:
-        try:
-            macro_articles = _fetch_global_news_akshare()
-            if macro_articles:
-                macro_source = "akshare"
-            elif "macro_news_error" not in data:
-                data["macro_news_error"] = "all macro sources returned empty"
-        except Exception as e:
-            existing = data.get("macro_news_error")
-            data["macro_news_error"] = f"{existing}; akshare: {e}" if existing else str(e)
 
     data["macro_news"] = macro_articles
     data["macro_news_source"] = macro_source
@@ -262,11 +224,15 @@ def main():
     parser.add_argument("--ticker", required=True, help="Stock ticker code")
     parser.add_argument("--date", required=True, help="Analysis date YYYY-MM-DD")
     parser.add_argument("--lookback-days", type=int, default=7, help="Days to look back")
+    parser.add_argument("--skip-macro", action="store_true",
+                        help="Skip macro news fetch (CLS+akshare). For shallow-analyzer "
+                             "batch scenarios where macro is unused and per-ticker duplicate.")
     args = parser.parse_args()
 
     try:
-        data = fetch_news(args.ticker, args.date, args.lookback_days)
-        # Reflect the macro source actually used (cls/akshare/none) in the
+        data = fetch_news(args.ticker, args.date, args.lookback_days,
+                          skip_macro=args.skip_macro)
+        # Reflect the macro source actually used (cls/akshare/skipped/none) in the
         # top-level _source so it's visible without drilling into data.
         macro_src = data.get("macro_news_source", "none")
         output_json(True, data=data, source=f"eastmoney+{macro_src}")

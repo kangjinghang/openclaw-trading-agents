@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
-from http_helpers import em_get, http_get, output_json, normalize_ticker, record_call
+from http_helpers import em_get, output_json, normalize_ticker, record_call
 
 _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
@@ -72,47 +72,6 @@ def _fetch_policy_eastmoney(code, lookback_days=30):
         return []
 
 
-def _fetch_macro_policy_cls(limit=20):
-    """Fetch macro policy telegrams from CLS (财联社).
-
-    Raises on failure (instead of the old bare except: pass) so fetch_policy
-    can record the reason and fall back to akshare. A silent CLS outage would
-    otherwise leave macro_policy_news empty for days with no signal.
-    """
-    start = time.monotonic()
-    import requests
-    articles = []
-    try:
-        url = "https://www.cls.cn/nodeapi/telegraphList"
-        params = {"rn": str(limit), "page": "1"}
-        headers = {"User-Agent": _UA, "Referer": "https://www.cls.cn/"}
-        r = http_get(url, params=params, headers=headers, timeout=10)
-        d = r.json()
-        for item in d.get("data", {}).get("roll_data", []):
-            title = item.get("title", "") or item.get("brief", "")
-            content = item.get("content", "") or item.get("brief", "")
-            ctime = item.get("ctime", "")
-            pub_time = ""
-            if ctime:
-                try:
-                    pub_time = datetime.fromtimestamp(int(ctime)).strftime("%Y-%m-%d %H:%M")
-                except (ValueError, TypeError, OSError):
-                    pub_time = str(ctime)
-            articles.append({
-                "date": pub_time[:10] if pub_time else "",
-                "title": title,
-                "content": content[:300],
-                "source": "财联社",
-            })
-        record_call("policy/macro_cls", success=True,
-                    duration_ms=(time.monotonic() - start) * 1000)
-        return articles
-    except Exception as e:
-        record_call("policy/macro_cls", success=False, error=str(e),
-                    duration_ms=(time.monotonic() - start) * 1000)
-        raise RuntimeError(f"CLS macro policy unavailable: {type(e).__name__}: {e}") from e
-
-
 def _fetch_macro_policy_akshare(limit=20):
     """Fetch macro policy telegrams from akshare (东方财富全球财经快讯).
 
@@ -160,28 +119,21 @@ def fetch_policy(ticker, date, lookback_days=30):
     except Exception as e:
         data["stock_policy_error"] = str(e)
 
-    # Macro policy: try CLS first, fall back to akshare. Record which source we
-    # used and any error so a silent CLS outage is observable (it previously
-    # left macro_policy_news empty for days via a bare except: pass).
+    # Macro policy: 东方财富全球财经快讯（akshare.stock_info_global_em）。
+    # 历史上曾用 CLS 财联社电报作主源 + akshare 兜底，但 CLS 的
+    # nodeapi/telegraphList 接口已稳定 404（2026-06 实测 3/3 失败），
+    # akshare 的 CLS 实现同 URL 同样失效。现简化为 EM 单源。
+    # macro_policy_source / macro_policy_error 保留以维持输出结构 + 错误可观测。
     macro_source = "none"
     macro_articles = []
     try:
-        macro_articles = _fetch_macro_policy_cls()
+        macro_articles = _fetch_macro_policy_akshare()
         if macro_articles:
-            macro_source = "cls"
+            macro_source = "eastmoney"
+        else:
+            data["macro_policy_error"] = "macro source returned empty"
     except Exception as e:
         data["macro_policy_error"] = str(e)
-
-    if not macro_articles:
-        try:
-            macro_articles = _fetch_macro_policy_akshare()
-            if macro_articles:
-                macro_source = "akshare"
-            elif "macro_policy_error" not in data:
-                data["macro_policy_error"] = "all macro sources returned empty"
-        except Exception as e:
-            existing = data.get("macro_policy_error")
-            data["macro_policy_error"] = f"{existing}; akshare: {e}" if existing else str(e)
 
     data["macro_policy_news"] = macro_articles
     data["macro_policy_source"] = macro_source

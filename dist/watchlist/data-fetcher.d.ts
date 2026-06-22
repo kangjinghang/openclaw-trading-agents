@@ -1,4 +1,4 @@
-import type { StockData } from "./shallow-analyzer";
+import type { StockData, NewsItem, NewsLayerStats } from "./shallow-analyzer";
 /** 量比：近 recentDays 日均量 / 前 windowDays 日均量。
  *  典型用法：computeVolumeRatio(volumes, 5) = 近5日均量 / 20日均量。
  *  - ratio < 0.8 → 缩量（趋势可能衰竭，量价背离风险）
@@ -16,7 +16,11 @@ export interface KlineSummary {
 }
 /** 从 kline.py 输出解析 K 线摘要。容忍字段缺失。 */
 export declare function parseKline(raw: any): KlineSummary;
-export declare function parseNews(raw: any): string[];
+export declare function parseNews(raw: any): NewsItem[];
+/** 从 news.py 输出解析时间分层数量统计（layer_stats）。
+ *  shallow 用它判断热门/冷门 + 突发：6h 突发提权重，total 低=冷门。
+ *  字段缺失或非数字 → 返回 null（undefined 语义），不阻塞分析。 */
+export declare function parseNewsLayerStats(raw: any): NewsLayerStats | null;
 export declare function parseHotMoney(raw: any): {
     net_5d: number;
 };

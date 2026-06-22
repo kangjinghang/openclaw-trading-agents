@@ -829,7 +829,11 @@ data = json.loads(text)
 | `date` | `time` | 发布时间 |
 | `mediaName` | `source` | 来源媒体（默认"东方财富"） |
 
-### 子源 2: `news/macro_cls`（宏观新闻，主源）
+### 子源 2: `news/macro_cls`（宏观新闻，~~主源~~ **已弃用**）
+
+> ⚠️ **2026-06 起 CLS 接口稳定 404，已从 news.py 移除直连**。下文为历史参考。
+> 宏观新闻现由 `news/macro_akshare`（东方财富全球快讯）单源提供，`macro_news_source = "eastmoney"`。
+> akshare 自己的 `stock_info_global_cls` 用同一失效 URL，无复活价值。
 
 **协议**: HTTP（财联社 `cls.cn`）
 
@@ -1297,7 +1301,10 @@ resp = em_get(url, params=params, headers=headers, timeout=15)
 | `date` | `date` | 截取前 10 字符（`YYYY-MM-DD`） |
 | `mediaName` | `source` | 来源媒体 |
 
-### 子源 2: `policy/macro_cls`（宏观政策电报，主源）
+### 子源 2: `policy/macro_cls`（宏观政策电报，~~主源~~ **已弃用**）
+
+> ⚠️ **2026-06 起 CLS 接口稳定 404，已从 policy.py 移除直连**。下文为历史参考。
+> 宏观政策现由 `policy/macro_akshare` 单源提供，`macro_policy_source = "eastmoney"`。
 
 **协议**: HTTP（财联社 `cls.cn`，同 news/macro_cls）
 

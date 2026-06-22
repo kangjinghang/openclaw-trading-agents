@@ -7,18 +7,43 @@ export type ShallowLlmCaller = (input: {
   analyst?: AnalystReport;
 }) => Promise<string>;
 
+/** 单条新闻。title 必有；content/time/source 可缺（数据源差异或拉取失败）。 */
+export interface NewsItem {
+  title: string;
+  content?: string;
+  time?: string;
+  source?: string;
+}
+
+/** 新闻时间分层数量统计（news.py 的 layer_stats）。
+ *  反映个股的市场关注密度 + 突发性，是 shallow 判断"热门/冷门"和"有无突发"的关键信号。
+ *  - realtime_6h_count：最近 6 小时新闻数（>0 = 有突发，提权重）
+ *  - total_categorized：7 天总条数（低 = 冷门股，流动性风险）
+ *  全部 0 或 undefined = 无统计（拉取失败或字段缺失），不阻塞分析。 */
+export interface NewsLayerStats {
+  realtime_6h_count: number;
+  extended_24h_count: number;
+  history_7d_count: number;
+  total_categorized: number;
+}
+
 export interface StockData {
   ticker: string;
   name: string;
   sector: string;
   kline: { pct_5d: number; pct_20d: number; support: number; resistance: number; volatility_20d: number; volume_ratio_5_20: number };
-  news: string[];
+  /** 个股新闻（最多 5 条，含标题/正文摘要/时间）。
+   *  旧实现是 string[]（只有标题），现升级为 NewsItem[] 让 LLM 判断时效性 + 标题党。 */
+  news: NewsItem[];
   hot_money: { net_5d: number };
   fundamentals: { pe: number; pb: number; rev_q1: number; np_q1: number; industry: string };
   ranker_thesis?: string;
   /** kline.py 预计算的 VPA 量价分析文本（含"顶部背离信号/放量滞涨"等结论）。
    *  undefined = 无 VPA 数据（非 kline 脚本或拉取失败）。 */
   vpa_text?: string;
+  /** 新闻时间分层数量（news.py layer_stats）。undefined = 无统计，不阻塞分析。
+   *  shallow 用它判断热门/冷门 + 有无突发，是一行文本的成本换密度信号。 */
+  news_layer_stats?: NewsLayerStats;
 }
 
 const ANALYST_PROMPT_TEMPLATE = `# 角色
@@ -48,8 +73,9 @@ const ANALYST_PROMPT_TEMPLATE = `# 角色
 
 # 数据
 ## K 线（5 日 +{pct_5d}% / 20 日 +{pct_20d}%，支撑 {support} / 压力 {resistance}）
-## 新闻（最近 7 天 top）
-{news_bullets}
+## 新闻（最近 7 天 top，含时间与正文摘要）
+{news_density}{news_bullets}
+（注意时效：最近 1-2 天的突发新闻权重高于一周前的旧闻；标题党风险——标题与正文矛盾时以正文为准）
 ## 资金流向（5 日净流入 {net_5d}）
 ## 基本面（PE {pe} / PB {pb} / Q1 营收 {rev_q1} / Q1 净利 {np_q1}）
 {ranker_section}
@@ -64,7 +90,16 @@ const ANALYST_PROMPT_TEMPLATE = `# 角色
 }`;
 
 export function formatAnalystPrompt(d: StockData): string {
-  const newsBullets = d.news.map(n => `- ${n}`).join("\n") || "- (无)";
+  const newsBullets = d.news.map(n => {
+    const time = n.time ? `[${n.time}] ` : "";
+    const content = n.content ? `：${n.content}` : "";
+    return `- ${time}${n.title}${content}`;
+  }).join("\n") || "- (无)";
+  // 新闻密度统计：news.py layer_stats 的一行渲染。无统计 → 空串（该行省略）。
+  // 让 LLM 判断热门/冷门（total 低=流动性风险）+ 有无突发（realtime_6h>0=提权重）。
+  const newsDensity = d.news_layer_stats
+    ? `新闻密度：6h 内 ${d.news_layer_stats.realtime_6h_count} 条突发 / 24h 内 ${d.news_layer_stats.extended_24h_count} 条 / 7 天共 ${d.news_layer_stats.total_categorized} 条\n`
+    : "";
   const rankerSection = d.ranker_thesis ? `## ranker 评估（ranker 给的 thesis）\n${d.ranker_thesis}` : "";
   return ANALYST_PROMPT_TEMPLATE
     .replace("{ticker}", d.ticker)
@@ -74,6 +109,7 @@ export function formatAnalystPrompt(d: StockData): string {
     .replace("{pct_20d}", String(d.kline.pct_20d))
     .replace("{support}", String(d.kline.support))
     .replace("{resistance}", String(d.kline.resistance))
+    .replace("{news_density}", newsDensity)
     .replace("{news_bullets}", newsBullets)
     .replace("{net_5d}", String(d.hot_money.net_5d))
     .replace("{pe}", String(d.fundamentals.pe))

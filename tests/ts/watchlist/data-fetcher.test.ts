@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseKline, parseNews, parseHotMoney, parseFundamentals, computeVolumeRatio } from "../../../src/watchlist/data-fetcher";
+import { parseKline, parseNews, parseNewsLayerStats, parseHotMoney, parseFundamentals, computeVolumeRatio } from "../../../src/watchlist/data-fetcher";
 
 describe("parseKline", () => {
   it("解析 data 对象数组（kline.py 真实结构）→ pct_5d/pct_20d/support/resistance/volatility_20d/volume_ratio_5_20", () => {
@@ -89,16 +89,60 @@ describe("computeVolumeRatio", () => {
 });
 
 describe("parseNews", () => {
-  it("提取 news 列表的 title 字段（最多 5 条）", () => {
-    const raw = { news: [
-      { title: "新闻 1", content: "..." },
-      { title: "新闻 2", content: "..." },
+  it("提取 stock_news 的 title/content/time/source（最多 5 条）", () => {
+    const raw = { stock_news: [
+      { title: "新闻 1", content: "正文 1", time: "2026-06-22 10:00", source: "财联社" },
+      { title: "新闻 2", content: "正文 2" },
     ] };
-    expect(parseNews(raw)).toEqual(["新闻 1", "新闻 2"]);
+    expect(parseNews(raw)).toEqual([
+      { title: "新闻 1", content: "正文 1", time: "2026-06-22 10:00", source: "财联社" },
+      { title: "新闻 2", content: "正文 2" },
+    ]);
+  });
+
+  it("content 截断到 120 字（控制 prompt 总量）", () => {
+    const longContent = "字".repeat(300);
+    const result = parseNews({ stock_news: [{ title: "t", content: longContent }] });
+    expect(result[0].content!.length).toBe(120);
+  });
+
+  it("兼容老格式 raw.news（仅 title 时其余字段缺失）", () => {
+    const raw = { news: [{ title: "老格式" }] };
+    expect(parseNews(raw)).toEqual([{ title: "老格式" }]);
   });
 
   it("无 news 字段 → 空数组", () => {
     expect(parseNews({})).toEqual([]);
+  });
+
+  it("title 缺失的条目被过滤", () => {
+    const raw = { stock_news: [{ title: "ok" }, { content: "无标题" }, { title: "" }] };
+    expect(parseNews(raw)).toEqual([{ title: "ok" }]);
+  });
+});
+
+describe("parseNewsLayerStats", () => {
+  it("提取 layer_stats 四个计数", () => {
+    const raw = { layer_stats: { realtime_6h_count: 2, extended_24h_count: 5, history_7d_count: 18, total_categorized: 25 } };
+    expect(parseNewsLayerStats(raw)).toEqual({
+      realtime_6h_count: 2, extended_24h_count: 5, history_7d_count: 18, total_categorized: 25,
+    });
+  });
+
+  it("全 0 → null（拉取失败/空数据，不误导 LLM）", () => {
+    expect(parseNewsLayerStats({ layer_stats: { realtime_6h_count: 0, extended_24h_count: 0, history_7d_count: 0, total_categorized: 0 } })).toBeNull();
+  });
+
+  it("无 layer_stats 字段 → null", () => {
+    expect(parseNewsLayerStats({})).toBeNull();
+    expect(parseNewsLayerStats({ layer_stats: null })).toBeNull();
+  });
+
+  it("非数字字段容错为 0", () => {
+    const raw = { layer_stats: { realtime_6h_count: "x", extended_24h_count: 3, history_7d_count: NaN, total_categorized: 3 } };
+    expect(parseNewsLayerStats(raw)).toEqual({
+      realtime_6h_count: 0, extended_24h_count: 3, history_7d_count: 0, total_categorized: 3,
+    });
   });
 });
 
@@ -153,7 +197,13 @@ function mockBySkill(vpaContent?: string) {
         ...(vpaContent ? { vpa: vpaContent } : {}),
       } as any;
     }
-    if (skillName === "trading-news") return { success: true, data: { news: [{ title: "x" }] } } as any;
+    if (skillName === "trading-news") return {
+      success: true,
+      data: {
+        stock_news: [{ title: "x" }],
+        layer_stats: { realtime_6h_count: 1, extended_24h_count: 2, history_7d_count: 3, total_categorized: 6 },
+      },
+    } as any;
     if (skillName === "trading-hot-money") return { success: true, data: { net_5d: 1e8 } } as any;
     if (skillName === "trading-fundamentals") return { success: true, data: { pe_ttm: 20, pb: 3, stock_info: { industry: "x" } } } as any;
     return { success: false } as any;
@@ -175,3 +225,47 @@ describe("fetchStockData vpa_text 注入", () => {
     expect(data!.vpa_text).toBeUndefined();
   });
 });
+
+describe("fetchStockData news 调用参数 + layer_stats", () => {
+  it("调用 news.py 时传 --skip-macro（省 CLS+akshare 两路 HTTP）", async () => {
+    mockBySkill();
+    await fetchStockData("SH600519", "贵州茅台", "白酒");
+    const mocked = vi.mocked(execSkillScript);
+    const newsCall = mocked.mock.calls.find(c => c[0] === "trading-news");
+    expect(newsCall).toBeDefined();
+    const args = newsCall![3] as string[];
+    expect(args).toContain("--skip-macro");
+    expect(args).toContain("--ticker");
+    expect(args).toContain("--date");
+    expect(args).toContain("--lookback-days");
+    expect(args).toContain("7");
+  });
+
+  it("news.py 返回 layer_stats → StockData.news_layer_stats 被填充", async () => {
+    mockBySkill();
+    const data = await fetchStockData("SH600519", "贵州茅台", "白酒");
+    expect(data).not.toBeNull();
+    expect(data!.news_layer_stats).toEqual({
+      realtime_6h_count: 1, extended_24h_count: 2, history_7d_count: 3, total_categorized: 6,
+    });
+  });
+
+  it("news.py 无 layer_stats → StockData.news_layer_stats undefined", async () => {
+    const mocked = vi.mocked(execSkillScript);
+    mocked.mockImplementation(async (skillName: string) => {
+      if (skillName === "trading-news") return { success: true, data: { stock_news: [] } } as any;
+      return mockBySkillReturnValue(skillName);
+    });
+    const data = await fetchStockData("SH600519", "贵州茅台", "白酒");
+    expect(data).not.toBeNull();
+    expect(data!.news_layer_stats).toBeUndefined();
+  });
+});
+
+/** 辅助：复用 mockBySkill 的返回值逻辑（不重置 mock）。 */
+function mockBySkillReturnValue(skillName: string): any {
+  if (skillName === "trading-kline") return { success: true, data: { data: [{ close: 10, volume: 100 }, { close: 11, volume: 110 }] } };
+  if (skillName === "trading-hot-money") return { success: true, data: { net_5d: 1e8 } };
+  if (skillName === "trading-fundamentals") return { success: true, data: { pe_ttm: 20, pb: 3, stock_info: { industry: "x" } } };
+  return { success: false };
+}

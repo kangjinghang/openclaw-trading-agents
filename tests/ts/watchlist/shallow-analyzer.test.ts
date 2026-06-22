@@ -11,15 +11,24 @@ describe("formatAnalystPrompt", () => {
       name: "麦捷科技",
       sector: "电子",
       kline: { pct_5d: 12.3, pct_20d: 45.6, support: 25.0, resistance: 30.0, volatility_20d: 0.02, volume_ratio_5_20: 1.0 },
-      news: ["新闻 1", "新闻 2"],
+      news: [
+        { title: "新闻 1", content: "正文 1", time: "2026-06-22 10:00", source: "财联社" },
+        { title: "新闻 2" },
+      ],
       hot_money: { net_5d: 1.2e8 },
       fundamentals: { pe: 50, pb: 5, rev_q1: 1e9, np_q1: 1e8, industry: "电子" },
       ranker_thesis: "TLVR 电感获英伟达认证",
+      news_layer_stats: { realtime_6h_count: 1, extended_24h_count: 2, history_7d_count: 3, total_categorized: 6 },
     });
     expect(prompt).toContain("SZ300319 麦捷科技");
     expect(prompt).toContain("电子");
     expect(prompt).toContain("12.3");
     expect(prompt).toContain("新闻 1");
+    expect(prompt).toContain("正文 1");            // content 注入
+    expect(prompt).toContain("2026-06-22 10:00");  // time 注入
+    expect(prompt).toContain("新闻密度");            // layer_stats 注入
+    expect(prompt).toContain("6h 内 1 条突发");      // realtime 突发
+    expect(prompt).toContain("7 天共 6 条");          // total 密度
     expect(prompt).toContain("120000000");
     expect(prompt).toContain("英伟达认证");
   });
@@ -36,6 +45,18 @@ describe("formatAnalystPrompt", () => {
     expect(prompt).toContain("传闻未证实");
     expect(prompt).toContain("零营收");
     expect(prompt).toContain("严格对齐");
+  });
+
+  it("news_layer_stats 缺失 → 不渲染密度行（无残留占位符）", () => {
+    const prompt = formatAnalystPrompt({
+      ticker: "SZ300319", name: "麦捷科技", sector: "电子",
+      kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 },
+      news: [], hot_money: { net_5d: 0 },
+      fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "" },
+      // 无 news_layer_stats
+    });
+    expect(prompt).not.toContain("新闻密度");
+    expect(prompt).not.toContain("{news_density}");  // 占位符不残留
   });
 });
 
@@ -79,7 +100,7 @@ describe("formatRiskPrompt", () => {
     const data: any = {
       ticker: "SZ300319", name: "麦捷科技", sector: "电子",
       kline: { pct_5d: 12, pct_20d: 45, support: 25, resistance: 30, volume_ratio_5_20: 0.6 },
-      news: ["n1"], hot_money: { net_5d: 1 }, fundamentals: { pe: 50, pb: 5, rev_q1: 1, np_q1: 0.1 },
+      news: [{ title: "n1" }], hot_money: { net_5d: 1 }, fundamentals: { pe: 50, pb: 5, rev_q1: 1, np_q1: 0.1 },
     };
     const analyst: AnalystReport = {
       thesis: "TLVR 电感放量", fitness_score: 8.5, data_freshness: "2026-06-21",
@@ -95,7 +116,7 @@ describe("formatRiskPrompt", () => {
     const data: any = {
       ticker: "SZ300319", name: "麦捷科技", sector: "电子",
       kline: { pct_5d: 15.2, pct_20d: 45.6, support: 25, resistance: 30, volume_ratio_5_20: 0.6 },
-      news: ["n1"], hot_money: { net_5d: 1.2e8 }, fundamentals: { pe: 50, pb: 5, rev_q1: 1e9, np_q1: 1e8 },
+      news: [{ title: "n1" }], hot_money: { net_5d: 1.2e8 }, fundamentals: { pe: 50, pb: 5, rev_q1: 1e9, np_q1: 1e8 },
     };
     const analyst: AnalystReport = {
       thesis: "x", fitness_score: 8, data_freshness: "2026-06-21", key_signals: [], data_gaps: [],

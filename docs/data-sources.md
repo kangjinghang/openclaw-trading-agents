@@ -114,8 +114,8 @@ Format: `<role>/<sub_source>` (slash-separated for hierarchical aggregation — 
 |---|---|---|
 | `kline` | `kline/mootdx`, `kline/akshare` | mootdx primary → akshare fallback |
 | `fundamentals` | `fundamentals/tencent`, `fundamentals/mootdx`, `fundamentals/em_push2`, `fundamentals/em_datacenter`, `fundamentals/em_quarterly`, `fundamentals/em_consensus`, `fundamentals/akshare` | Multi-source assembly; `em_push2` ↔ `em_datacenter` is the industry/name fallback pair (datacenter kicks in when push2 is rate-limited) |
-| `news` | `news/stock_em`, `news/macro_cls`, `news/macro_akshare` | macro_cls → macro_akshare chained fallback |
-| `policy` | `policy/stock_em`, `policy/macro_cls`, `policy/macro_akshare` | Same as news |
+| `news` | `news/stock_em`, `news/macro_akshare` | macro: eastmoney global telegrams (akshare) single source; CLS removed (dead endpoint) |
+| `policy` | `policy/stock_em`, `policy/macro_akshare` | Same as news |
 | `sentiment` | `sentiment/hot_rank`, `sentiment/zt_pool` | Both Eastmoney |
 | `hot_money` | `hot_money/northbound`, `hot_money/fund_flow`, `hot_money/hot_stocks`, `hot_money/dragon_tiger`, `hot_money/sector_fund_flow` | All Eastmoney; `fund_flow` and `sector_fund_flow` are most exposed to push2 rate-limiting |
 | `lockup` | `lockup/ann_em`, `lockup/reduce_em` | Both Eastmoney |
@@ -153,7 +153,7 @@ REPORT_DIR=/custom/path npm run source-health    # Custom report path
 
 | Issue | Affected sub-sources (stage names) | Symptoms (observed) | Mitigation |
 |-------|-----------------------------------|---------------------|------------|
-| CLS `cls.cn/nodeapi/telegraphList` endpoint dead | `news/macro_cls`, `policy/macro_cls` | JSON parse failure / 404; 0/2 success rate | Commit `10017ee` added akshare fallback; when akshare is also missing, macro_news stays at 0 |
+| CLS `cls.cn/nodeapi/telegraphList` endpoint dead | `news/macro_cls`, `policy/macro_cls` (removed) | JSON parse failure / 404; stable 3/3 failure (2026-06) | CLS direct-connect removed from news.py/policy.py; macro now single-sourced via `akshare.stock_info_global_em` (eastmoney global telegrams, 200 rows, 0.2s). `macro_news_source` = `eastmoney`. akshare's own CLS impl uses the same dead URL, so no value in keeping it |
 | `akshare` module not installed (some environments) | `news/macro_akshare`, `policy/macro_akshare`, `fundamentals/akshare`, `sentiment/hot_rank`, `sentiment/zt_pool` | "No module named 'akshare'"; multiple sub-sources at 0/N | `pip install akshare>=1.15`; missing module starves downstream analysts of macro/zt_pool data |
 | `push2.eastmoney.com` IP rate-limiting (Connection aborted) | `fundamentals/em_push2`, `hot_money/fund_flow`, `hot_money/sector_fund_flow` | Intermittent failures; same IP banned for ~15min+ | `http_helpers.py` forces IPv4 + ≥1s throttle; fundamentals falls back to `datacenter-web.eastmoney.com` (not subject to push2 rate-limit); scripts degrade gracefully via try/except |
 | `push2.eastmoney.com` IPv6 TLS reset (legacy) | `trading-sector` (separate skill, not yet health-tracked) | Industry ranking may return empty | Same: IPv4 forced |

@@ -132,8 +132,8 @@ def fetch(ticker, **params):
 |---|---|---|
 | `kline` | `kline/mootdx`、`kline/akshare` | mootdx 主 → akshare 备 |
 | `fundamentals` | `fundamentals/tencent`、`fundamentals/mootdx`、`fundamentals/em_push2`、`fundamentals/em_datacenter`、`fundamentals/em_quarterly`、`fundamentals/em_consensus`、`fundamentals/akshare` | 多源拼装；`em_push2` 与 `em_datacenter` 是行业/公司名 fallback 对（前者限流后切后者） |
-| `news` | `news/stock_em`、`news/macro_cls`、`news/macro_akshare` | macro_cls → macro_akshare 链式 fallback |
-| `policy` | `policy/stock_em`、`policy/macro_cls`、`policy/macro_akshare` | 同 news |
+| `news` | `news/stock_em`、`news/macro_akshare` | 宏观：东方财富全球快讯（akshare）单源；CLS 已移除（接口失效） |
+| `policy` | `policy/stock_em`、`policy/macro_akshare` | 同 news |
 | `sentiment` | `sentiment/hot_rank`、`sentiment/zt_pool` | 均东方财富 |
 | `hot_money` | `hot_money/northbound`、`hot_money/fund_flow`、`hot_money/hot_stocks`、`hot_money/dragon_tiger`、`hot_money/sector_fund_flow` | 均东方财富（fund_flow/sector_fund_flow 受 push2 限流影响大） |
 | `lockup` | `lockup/ann_em`、`lockup/reduce_em` | 均东方财富 |
@@ -171,7 +171,7 @@ REPORT_DIR=/custom/path npm run source-health    # 自定义 report 路径
 
 | 问题 | 影响子源（stage 名） | 表现（实测） | 缓解措施 |
 |------|--------------------|------------|---------|
-| 财联社 `cls.cn/nodeapi/telegraphList` 接口失效 | `news/macro_cls`、`policy/macro_cls` | JSON 解析失败 / 404；2/2 失败 | commit `10017ee` 加 akshare 备源 fallback；当 akshare 也缺失时 macro_news 恒为 0 |
+| 财联社 `cls.cn/nodeapi/telegraphList` 接口失效 | `news/macro_cls`、`policy/macro_cls`（已移除） | JSON 解析失败 / 404；稳定 3/3 失败（2026-06 实测） | 已从 news.py/policy.py 移除 CLS 直连；宏观改为 `akshare.stock_info_global_em` 单源（东方财富全球快讯，200 条，0.2s），`macro_news_source` = `eastmoney`。akshare 自己的 CLS 实现用的也是这个失效 URL，保留无意义 |
 | `akshare` 模块未安装（部分环境） | `news/macro_akshare`、`policy/macro_akshare`、`fundamentals/akshare`、`sentiment/hot_rank`、`sentiment/zt_pool` | "No module named 'akshare'"；多个子源 0/N | `pip install akshare>=1.15`；缺失时影响下游分析师缺宏观腿/涨停情绪池 |
 | `push2.eastmoney.com` IP 限流（Connection aborted） | `fundamentals/em_push2`、`hot_money/fund_flow`、`hot_money/sector_fund_flow` | 间歇性失败；同 IP 持续 ~15min+ | `http_helpers.py` 强制 IPv4 + ≥1s 节流；fundamentals 切到 `datacenter-web.eastmoney.com`（不受 push2 限流）；script 内 try/except 优雅降级 |
 | `push2.eastmoney.com` IPv6 TLS 重置（旧问题） | `trading-sector`（独立 skill，未走 health 追踪） | 行业排名可能返回空 | 同上：强制 IPv4 |
