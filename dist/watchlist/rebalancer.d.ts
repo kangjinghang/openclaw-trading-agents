@@ -45,6 +45,8 @@ export interface RebalancePipelineResult {
     };
     execution_plan: ReturnType<typeof buildExecutionPlan>;
     status: "ok" | "constraint_violation" | "llm_failed";
+    /** 行业拉取相关警告（fundamentals.industry 为空的股按"未分类"累计，规则 3 对它们失效） */
+    sector_warnings: string[];
 }
 /** 完整 pipeline：候选选择 → shallow-analyzer → rebalancer + revise → execution plan。 */
 export declare function rebalancePipeline(input: RebalancePipelineInput): Promise<RebalancePipelineResult>;

@@ -179,6 +179,7 @@ Options:
         rebalancer_output: result.rebalancer_output,
         constraint_check: result.constraint_check,
         execution_plan: result.execution_plan,
+        sector_warnings: result.sector_warnings,
     };
     (0, atomic_json_1.writeAtomicJson)(path.join(rebalanceDir, "plan.json"), planFile);
     (0, atomic_json_1.writeAtomicJson)(path.join(rebalanceDir, "holdings_snapshot.json"), holdings);
@@ -196,6 +197,11 @@ Options:
     console.log(`\n=== 调仓结果 ===`);
     console.log(`  status: ${result.status}`);
     console.log(`  reports: ${result.reports.length} / 约束: ${result.constraint_check.passed ? "通过" : "违反"} (revise ${result.constraint_check.revise_count})`);
+    if (result.sector_warnings.length > 0) {
+        console.log(`  ⚠️ 行业警告:`);
+        for (const w of result.sector_warnings)
+            console.log(`    - ${w}`);
+    }
     console.log(`  actions:`);
     for (const a of result.rebalancer_output.actions) {
         const sign = a.delta > 0 ? "+" : "";

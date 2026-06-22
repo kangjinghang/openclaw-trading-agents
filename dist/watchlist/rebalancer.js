@@ -290,13 +290,34 @@ async function rebalancePipeline(input) {
     const dataByTicker = input.dataByTicker ?? new Map();
     const reports = await (0, shallow_analyzer_1.analyzeAll)(metas, dataByTicker, input.shallowCaller);
     // 3. 构造 validation context
+    //    sectors 来源优先级：fundamentals.industry（全市场口径统一）> report.sector（shallow-analyzer
+    //    拿到的，候选股多为"未分类"）> holdings.sector（用户手填，纯持仓股兜底）。
+    //    fundamentals.industry 为空（拉取失败）的股标"未分类" + 记 warning（规则 3 对它们失效）。
     const sectors = new Map();
-    for (const r of reports)
-        sectors.set(r.ticker, r.sector);
-    for (const p of input.holdings.positions) {
-        if (!sectors.has(p.ticker))
-            sectors.set(p.ticker, p.sector);
+    const sectorMissingTickers = [];
+    const allTickers = new Set([
+        ...reports.map(r => r.ticker),
+        ...input.holdings.positions.map(p => p.ticker),
+    ]);
+    for (const ticker of allTickers) {
+        const industry = dataByTicker.get(ticker)?.fundamentals.industry ?? "";
+        if (industry) {
+            sectors.set(ticker, industry);
+        }
+        else {
+            // industry 拉取失败：回退 report.sector / holdings.sector，仍为空则标"未分类"
+            const report = reports.find(r => r.ticker === ticker);
+            const fallback = report?.sector
+                ?? input.holdings.positions.find(p => p.ticker === ticker)?.sector
+                ?? "未分类";
+            sectors.set(ticker, fallback === "未分类" ? "未分类" : fallback);
+            if (fallback === "未分类")
+                sectorMissingTickers.push(ticker);
+        }
     }
+    const sector_warnings = sectorMissingTickers.length > 0
+        ? [`${sectorMissingTickers.length} 只股 industry 拉取失败（${sectorMissingTickers.join(", ")}），规则 3 对它们按"未分类"累计`]
+        : [];
     const held = new Map();
     for (const m of metas) {
         if (m.is_held)
@@ -346,6 +367,7 @@ async function rebalancePipeline(input) {
             constraint_check: { passed: false, violations: [], revise_count: rebalanceResult.reviseCount },
             execution_plan: { execution_sequence: [], final_state: { positions: [], cash_pct: 0 }, warnings: ["LLM failed"] },
             status: rebalanceResult.status,
+            sector_warnings,
         };
     }
     // 5. execution plan
@@ -360,6 +382,7 @@ async function rebalancePipeline(input) {
         },
         execution_plan,
         status: rebalanceResult.status,
+        sector_warnings,
     };
 }
 //# sourceMappingURL=rebalancer.js.map

@@ -25,6 +25,7 @@ export interface StockData {
         pb: number;
         rev_q1: number;
         np_q1: number;
+        industry: string;
     };
     ranker_thesis?: string;
 }

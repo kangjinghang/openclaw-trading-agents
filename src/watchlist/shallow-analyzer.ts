@@ -14,7 +14,7 @@ export interface StockData {
   kline: { pct_5d: number; pct_20d: number; support: number; resistance: number; volatility_20d: number };
   news: string[];
   hot_money: { net_5d: number };
-  fundamentals: { pe: number; pb: number; rev_q1: number; np_q1: number };
+  fundamentals: { pe: number; pb: number; rev_q1: number; np_q1: number; industry: string };
   ranker_thesis?: string;
 }
 

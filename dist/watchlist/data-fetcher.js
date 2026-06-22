@@ -109,6 +109,8 @@ function parseFundamentals(raw) {
         pb: typeof raw?.pb === "number" ? raw.pb : 0,
         rev_q1: typeof raw?.revenue_q1 === "number" ? raw.revenue_q1 : (typeof raw?.rev_q1 === "number" ? raw.rev_q1 : 0),
         np_q1: typeof raw?.net_profit_q1 === "number" ? raw.net_profit_q1 : (typeof raw?.np_q1 === "number" ? raw.np_q1 : 0),
+        // industry 来自 fundamentals.py 的 stock_info.industry（东方财富 f127 / datacenter BOARD_NAME 双路拉取）
+        industry: typeof raw?.stock_info?.industry === "string" && raw.stock_info.industry.trim() ? raw.stock_info.industry.trim() : "",
     };
 }
 /** 单股并行跑 4 个 script。失败的 script 返回 null 字段（容忍）。 */
@@ -123,7 +125,7 @@ async function fetchStockData(ticker, name, sector, rankerThesis) {
     const kline = klineR ? parseKline(klineR) : { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0 };
     const news = newsR ? parseNews(newsR) : [];
     const hot = hotR ? parseHotMoney(hotR) : { net_5d: 0 };
-    const fund = fundR ? parseFundamentals(fundR) : { pe: 0, pb: 0, rev_q1: 0, np_q1: 0 };
+    const fund = fundR ? parseFundamentals(fundR) : { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "" };
     return {
         ticker, name, sector,
         kline, news,

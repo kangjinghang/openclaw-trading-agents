@@ -228,18 +228,22 @@ last_rebalance.json (上次调仓, 防反向)
 
 | Script | 路径 | 输出字段 |
 |---|---|---|
-| kline.py | `skills/trading-kline/kline.py` | `closes` → `pct_5d, pct_20d, support, resistance` |
+| kline.py | `skills/trading-kline/kline.py` | `data[].close` → `pct_5d, pct_20d, support, resistance, volatility_20d` |
 | news.py | `skills/trading-news/news.py` | `news[].title` → top 5 |
 | hot_money.py | `skills/trading-hot-money/hot_money.py` | `net_5d` |
-| fundamentals.py | `skills/trading-fundamentals/fundamentals.py` | `pe_ttm, pb, revenue_q1, net_profit_q1` |
+| fundamentals.py | `skills/trading-fundamentals/fundamentals.py` | `pe_ttm, pb, revenue_q1, net_profit_q1, stock_info.industry` |
 
-**容错**：单 script 失败（任何原因）→ 该字段填 0/[]，**不阻塞该股的 shallow-analyzer**。LLM 会看到 `data_gaps` 标注。
+**容错**：单 script 失败（任何原因）→ 该字段填 0/[]/""，**不阻塞该股的 shallow-analyzer**。LLM 会看到 `data_gaps` 标注。
+
+**parseFundamentals 的 industry 字段**（2026-06-22 新增）：
+fundamentals.py 的 `stock_info.industry`（东方财富 f127 主路 + datacenter BOARD_NAME 备份双路拉取）被 parseFundamentals 保留为 `fundamentals.industry`。这是 rebalancer 构造 `ctx.sectors` 的**首选来源**（见 §5.7 规则 3），让候选股（未持仓）也能有真实行业，而不是统一标"未分类"。拉取失败的股回退"未分类" + console warning。
 
 **parseKline 算法**：
 - `pct_5d` = (last - closes[-6]) / closes[-6] × 100
 - `pct_20d` = (last - closes[-21]) / closes[-21] × 100（不够 21 用 closes[0]）
 - `support` = min(最近 5 日收盘)
 - `resistance` = max(最近 5 日收盘)
+- `volatility_20d` = 最近 21 个收盘价的日收益率标准差（仓位计算器波动率折扣用）
 
 ### 5.4 shallow-analyzer（`src/watchlist/shallow-analyzer.ts`）
 
@@ -486,6 +490,8 @@ last_rebalance.json (上次调仓, 防反向)
 | 1 | 权重和 = 1 | `abs(sum(target_weight) + cash_pct - 1.0) ≤ 0.001`（含 HOLD） | "权重和 0.97，差 0.03" |
 | 2 | 单仓 ≤15% | `max(target_weights) ≤ single_name` | "SZ300319 weight 0.18 超 0.15" |
 | 3 | 单行业 ≤30% | 按 sector 聚合 sum | "PCB 行业 0.35 超 0.30" |
+
+> **规则 3 的 sector 来源**（2026-06-22 修复）：`ctx.sectors` Map 的构造优先级为 `fundamentals.industry`（全市场口径统一）> `report.sector`（shallow-analyzer，候选股多为"未分类"）> `holdings.sector`（用户手填，纯持仓股兜底）。修复前候选股 sector 硬编码"未分类"，导致规则 3 把所有候选股堆进一个桶失效；修复后用 fundamentals.industry 让候选股也有真实行业。拉取失败的股回退"未分类" + console warning。详见 §5.3。
 | 4 | 日换手 ≤30% | `sum(abs(delta)) ≤ daily_turnover` | "换手 0.35 超 0.30" |
 | 5 | 现金 ≥10% | `1 - sum(target_weight) ≥ cash_reserve` | "现金 0.08 不足 0.10" |
 | 6 | Anti-churn 卖锁 | `days_held < 7` 的不能 SELL/REDUCE | "SZ300319 持仓 5 天 locked" |
@@ -998,6 +1004,25 @@ LLM 算错权重和、超单仓上限这种事很常见。直接 abort 体验差
 **ADD 不打折的设计取舍**：ADD 是加仓（已有持仓），波动率/风险在当初 BUY 时已经算过。ADD 只是把仓位加到 fitness 对应的档位为止（max(当前, 基础档)），不重新打折。这避免"加仓时又被砍一刀"的双计问题。
 
 **校准路径**：公式档位（9分→7% / 8分→5% 等）先用经验值。跑一个月后回头看：那些买了的股，事后表现怎么样？分数 9 的普遍比分数 8 的好吗？如果不好，说明分数→仓位映射要调。这才是真正的"复盘"——复盘的对象从"AI 为什么拍 7%"（黑箱，没法复），变成"公式参数对不对"（白盒，能调）。
+
+### 11.12 为什么持仓股也用 fundamentals.industry 覆盖用户 sector
+
+**原设计**：候选股 sector 硬编码"未分类"（rebalance-cli.ts:127），持仓股 sector 用 holdings.json 用户填的。规则 3（单行业 ≤30%）对候选股失效——所有新股堆进"未分类"一个桶。
+
+**问题**：
+1. **候选股无行业**：规则 3 把 10 只不同行业的候选股当同一个"未分类"，要么误触发（sum 超 30%）要么完全失效
+2. **口径不统一**：持仓股用用户认知的分类（可能填"电子"），候选股用"未分类"，两者无法在同一个维度上聚合
+
+**改法**：所有股（持仓 + 候选）的 sector 优先用 `fundamentals.industry`（东方财富 f127 全市场口径），用户填的 sector 仅作首次兜底。
+
+**为什么持仓股也覆盖**（而不是只改候选股）：
+- **口径统一**：规则 3 聚合时，所有股必须在同一个行业分类体系下。如果持仓用用户口径、候选用 fundamentals 口径，"电子"（用户）和"元件"（fundamentals）会被算成两个行业，单行业约束失真
+- **用户手填易错**：用户可能把生益科技填"电子"，但 fundamentals 查到是"元件"——后者是全市场标准分类，更准确
+- **不破坏"系统不动用户数据"契约**：holdings.json 里的 sector 字段**不动**（用户随时可改），只是运行时计算 ctx.sectors 时优先用 fundamentals。下次跑若 fundamentals 拉取失败，自动回退用户填的
+
+**代价**：用户填的 sector 可能和 fundamentals 不一致时，规则 3 按 fundamentals 算。如果用户刻意要用自己的分类（比如自定义"AI 算力链"这种跨行业标准板块的概念），当前实现不支持——需要未来加"用户自定义 sector 覆盖 fundamentals"的开关。
+
+**拉取失败的兜底**：fundamentals.industry 为空 → 回退 report.sector / holdings.sector，仍为空则标"未分类" + console warning（规则 3 对该股按"未分类"累计）。warning 让用户知道哪些股的行业没查到，便于判断规则 3 的可信度。
 
 ## 12. 测试策略
 
