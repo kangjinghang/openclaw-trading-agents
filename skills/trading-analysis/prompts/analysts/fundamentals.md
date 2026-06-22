@@ -19,7 +19,7 @@
 
 数据 JSON 中包含以下字段，请直接引用：
 - `valuation`：实时估值（PE/PB/市值等）
-- `financial_snapshot`：最新财务快照（含 `roe`、`debt_ratio`、`operating_cash_flow`、`gross_margin` 等字段）
+- `financial_snapshot`：最新财务快照（含 `roe`、`operating_cash_flow` 等字段）。注：资产负债率/毛利率不在本子源（实时 TDX 协议无此字段），请分别查 `financial_health.debt_ratio_pct` 与 `quarterly_trends.gross_margin`
 - `quarterly_trends`：最近 4 季度营收/净利/EPS/同比/ROE/毛利率趋势
 - `consensus_eps`：机构一致预期，含 `forecast_years`（4 年 EPS 预测，`type` 标 A=实际/E=预测）、`consensus_eps_current`（当期）、`consensus_eps_next`（次年）、`eps_growth_pct`（预期增速%）、`forward_pe`（远期市盈率=现价/次年 EPS）、`peg`（=PE_TTM/预期增速，仅正增长时给出）、`target_price_min/max`（目标价区间）、`ratings`（评级分布）、`analyst_count`（覆盖机构数）
 - `financial_health`：三大报表派生的财务健康（最近 4 期 `periods[]`，每期含 `goodwill_yi`/`goodwill_to_equity_pct`（商誉占归母权益比，>30% 视为减值风险）、`debt_ratio_pct`（资产负债率）、`current_ratio`/`quick_ratio`（流动/速动比率）、`ocf_yi`/`capex_yi`/`fcf_yi`（经营现金流/资本开支/自由现金流）、`net_profit_parent_yi`（归母净利）、`ocf_to_ni_ratio`（经营现金流/归母净利，盈利质量））；每期 `period_type`（Q1/H1/Q3/FY）标明累计期间长度；顶层 `goodwill_impairment_risk`（bool）、`ocf_quality`（good≥1 / ok≥0.5 / weak<0.5）为预判标记

@@ -62,8 +62,12 @@ def fetch_fundamentals(ticker, date):
                 "zongzichan": "total_assets",
                 "gudongrenshu": "shareholder_count",
                 "jingyingxianjinliu": "operating_cash_flow",
-                "zichanfuzhailv": "debt_ratio",
-                "xishoumaoliv": "gross_margin",
+                # 注意：mootdx 实时 TDX 协议（tdxpy get_finance_info）固定 32 字段，
+                # 不含 zichanfuzhailv/xishoumaoliv（资产负债率/毛利率）——这俩只在
+                # mootdx Affair 历史财报 zip（columns.py:212/204）里。老实现映射它们
+                # 导致 debt_ratio/gross_margin 恒空（tdxpy 源码实证）。
+                # 等价数据已在其他子源：资产负债率见 financial_health.debt_ratio_pct，
+                # 毛利率见 quarterly_trends.gross_margin（东财 datacenter，真实可用）。
             }
             snapshot = {}
             for py_name, en_name in field_map.items():
@@ -88,71 +92,42 @@ def fetch_fundamentals(ticker, date):
                     duration_ms=(time.monotonic() - start) * 1000)
         data["financial_snapshot_error"] = str(e)
 
-    # 3. Eastmoney: basic stock info (industry, company name)
-    #    Primary: push2 API. Fallback: datacenter API (immune to push2 rate-limit).
+    # 3. Eastmoney Datacenter: basic stock info (industry, company name)
+    #    唯一来源。老实现用 push2（push2.eastmoney.com）作主路 + datacenter 兜底，
+    #    但 push2 有严格 per-IP 限流，实测 RemoteDisconnected 频发（_source-health.json
+    #    实证：唯一一次运行就失败，白耗 2.5s）。datacenter-web.eastmoney.com 不受限流，
+    #    直接独占。TS 下游（parseFundamentals + orchestrator）只消费 industry/name，
+    #    datacenter 的 BOARD_NAME/SECURITY_NAME_ABBR 已覆盖。
     info = {}
     start = time.monotonic()
     try:
-        market_code = 1 if code.startswith("6") else 0
-        url = "https://push2.eastmoney.com/api/qt/stock/get"
+        url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
         params = {
-            "fltt": "2", "invt": "2",
-            "fields": "f57,f58,f84,f85,f127,f116,f117,f189,f43",
-            "secid": f"{market_code}.{code}",
+            "reportName": "RPT_LICO_FN_CPD",
+            "columns": "SECURITY_NAME_ABBR,BOARD_NAME,TRADE_MARKET",
+            "filter": f'(SECURITY_CODE="{code}")',
+            "pageSize": "1",
         }
         r = em_get(url, params=params, timeout=10)
-        d = r.json().get("data", {})
-        if d:
-            if d.get("f127"):
-                info["industry"] = d["f127"]
-            if d.get("f58"):
-                info["name"] = d["f58"]
-            if d.get("f84"):
-                info["total_shares"] = d["f84"]
-            if d.get("f85"):
-                info["float_shares"] = d["f85"]
-            if d.get("f116"):
-                info["total_mv"] = d["f116"]
-        record_call("fundamentals/em_push2", success=True,
+        result = r.json().get("result") or {}
+        items = result.get("data") or []
+        if items:
+            item = items[0]
+            if item.get("BOARD_NAME"):
+                info["industry"] = item["BOARD_NAME"]
+            if item.get("SECURITY_NAME_ABBR"):
+                info["name"] = item["SECURITY_NAME_ABBR"]
+        record_call("fundamentals/em_datacenter", success=True,
                     duration_ms=(time.monotonic() - start) * 1000)
     except Exception as e:
-        record_call("fundamentals/em_push2", success=False, error=str(e),
+        record_call("fundamentals/em_datacenter", success=False, error=str(e),
                     duration_ms=(time.monotonic() - start) * 1000)
-        data["stock_info_push2_error"] = str(e)
-
-    # Fallback: datacenter API (uses datacenter-web.eastmoney.com which is
-    # NOT subject to push2's per-IP rate-limiting). Only runs when push2
-    # failed to return industry info.
-    if not info.get("industry"):
-        start = time.monotonic()
-        try:
-            url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
-            params = {
-                "reportName": "RPT_LICO_FN_CPD",
-                "columns": "SECURITY_NAME_ABBR,BOARD_NAME,TRADE_MARKET",
-                "filter": f'(SECURITY_CODE="{code}")',
-                "pageSize": "1",
-            }
-            r = em_get(url, params=params, timeout=10)
-            result = r.json().get("result") or {}
-            items = result.get("data") or []
-            if items:
-                item = items[0]
-                if item.get("BOARD_NAME"):
-                    info["industry"] = item["BOARD_NAME"]
-                if item.get("SECURITY_NAME_ABBR"):
-                    info["name"] = item["SECURITY_NAME_ABBR"]
-            record_call("fundamentals/em_datacenter", success=True,
-                        duration_ms=(time.monotonic() - start) * 1000)
-        except Exception as e2:
-            record_call("fundamentals/em_datacenter", success=False, error=str(e2),
-                        duration_ms=(time.monotonic() - start) * 1000)
-            data["stock_info_datacenter_error"] = str(e2)
+        data["stock_info_error"] = str(e)
 
     if info:
         data["stock_info"] = info
-    elif "stock_info_push2_error" not in data:
-        data["stock_info_error"] = "both push2 and datacenter returned no data"
+    elif "stock_info_error" not in data:
+        data["stock_info_error"] = "datacenter returned no data"
 
     # 4. Eastmoney Datacenter: quarterly financial trends (last 4 quarters)
     start = time.monotonic()
@@ -200,8 +175,14 @@ def fetch_fundamentals(ticker, date):
     #    and saves context vs TradingAgents' raw-table approach.
     start = time.monotonic()
     try:
-        data["financial_health"] = _fetch_financial_health(code)
-        record_call("fundamentals/akshare", success=True,
+        health = _fetch_financial_health(code)
+        # success 标准是"拿到了数据"，不是"没抛异常"。
+        # _fetch_financial_health 在 akshare 缺失/拉取失败/无重叠报告期时返回 None，
+        # 老实现误报 success=True 掩盖了这些情况（_source-health.json 实证：
+        # akshare_internal 失败但外壳 akshare success=True）。
+        data["financial_health"] = health
+        record_call("fundamentals/akshare", success=health is not None,
+                    error=None if health else "no overlapping report periods or akshare unavailable",
                     duration_ms=(time.monotonic() - start) * 1000)
     except Exception as e:
         record_call("fundamentals/akshare", success=False, error=str(e),
