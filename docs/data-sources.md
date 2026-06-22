@@ -10,9 +10,9 @@ A-share market data sources used by OpenClaw Trading Agents. All sources are fre
 |-------|-----------|---------------|----------|-------------------|
 | trading-kline | K-line OHLCV | mootdx (TDX TCP 7709) | akshare (Sina HTTP) | `mootdx`, `akshare` |
 | trading-fundamentals | PE/PB/ROE/Financials | Tencent Finance / Eastmoney | mootdx F10 | `mootdx`, `akshare` |
-| trading-news | Stock news + Macro news | CLS (财联社) / Eastmoney | — | `requests`, `akshare` |
+| trading-news | Stock news + Macro news | Eastmoney / akshare (global telegrams) | — | `requests`, `akshare` |
 | trading-sentiment | Market sentiment | Eastmoney | — | `akshare` |
-| trading-policy | Policy events | Eastmoney search / CLS | — | `requests` |
+| trading-policy | Policy events | Eastmoney search / akshare (global telegrams) | — | `requests` |
 | trading-hot-money | Northbound/Fund flow/Dragon-Tiger | Eastmoney | akshare | `akshare`, `requests` |
 | trading-lockup | Lockup/Insider | Eastmoney / mootdx F10 | akshare | `mootdx`, `akshare` |
 | trading-sector | Industry ranking/Concepts | Eastmoney / Baidu | akshare | `akshare`, `requests` |
@@ -39,7 +39,7 @@ PE(TTM), PB, total market cap, quarterly financials from Tencent Finance and Eas
 ### News (`trading-news`)
 
 - Stock-specific news: Eastmoney search API
-- Macro/global news: CLS (财联社) real-time telegrams + Eastmoney
+- Macro/global news: Eastmoney global telegrams (via akshare `stock_info_global_em`)
 
 ### Sentiment (`trading-sentiment`)
 
@@ -48,7 +48,7 @@ Market sentiment indicators from Eastmoney including fear/greed index, market br
 ### Policy (`trading-policy`)
 
 - Policy events: Eastmoney search API
-- Macro telegrams: CLS (财联社) real-time policy announcements
+- Macro telegrams: Eastmoney global telegrams (via akshare `stock_info_global_em`)
 
 ### Capital Flow (`trading-hot-money`)
 
@@ -113,8 +113,8 @@ Format: `<role>/<sub_source>` (slash-separated for hierarchical aggregation — 
 | Role | Sub-source stages | Primary / Fallback |
 |---|---|---|
 | `kline` | `kline/mootdx`, `kline/akshare` | mootdx primary → akshare fallback |
-| `fundamentals` | `fundamentals/tencent`, `fundamentals/mootdx`, `fundamentals/em_push2`, `fundamentals/em_datacenter`, `fundamentals/em_quarterly`, `fundamentals/em_consensus`, `fundamentals/akshare` | Multi-source assembly; `em_push2` ↔ `em_datacenter` is the industry/name fallback pair (datacenter kicks in when push2 is rate-limited) |
-| `news` | `news/stock_em`, `news/macro_akshare` | macro: eastmoney global telegrams (akshare) single source; CLS removed (dead endpoint) |
+| `fundamentals` | `fundamentals/tencent`, `fundamentals/mootdx`, `fundamentals/em_datacenter`, `fundamentals/em_quarterly`, `fundamentals/em_consensus`, `fundamentals/akshare` | Multi-source assembly; `em_datacenter` is the sole source for industry/name |
+| `news` | `news/stock_em`, `news/macro_akshare` | macro: eastmoney global telegrams (akshare) single source |
 | `policy` | `policy/stock_em`, `policy/macro_akshare` | Same as news |
 | `sentiment` | `sentiment/hot_rank`, `sentiment/zt_pool` | Both Eastmoney |
 | `hot_money` | `hot_money/northbound`, `hot_money/fund_flow`, `hot_money/hot_stocks`, `hot_money/dragon_tiger`, `hot_money/sector_fund_flow` | All Eastmoney; `fund_flow` and `sector_fund_flow` are most exposed to push2 rate-limiting |
@@ -153,11 +153,10 @@ REPORT_DIR=/custom/path npm run source-health    # Custom report path
 
 | Issue | Affected sub-sources (stage names) | Symptoms (observed) | Mitigation |
 |-------|-----------------------------------|---------------------|------------|
-| CLS `cls.cn/nodeapi/telegraphList` endpoint dead | `news/macro_cls`, `policy/macro_cls` (removed) | JSON parse failure / 404; stable 3/3 failure (2026-06) | CLS direct-connect removed from news.py/policy.py; macro now single-sourced via `akshare.stock_info_global_em` (eastmoney global telegrams, 200 rows, 0.2s). `macro_news_source` = `eastmoney`. akshare's own CLS impl uses the same dead URL, so no value in keeping it |
 | `akshare` module not installed (some environments) | `news/macro_akshare`, `policy/macro_akshare`, `fundamentals/akshare`, `sentiment/hot_rank`, `sentiment/zt_pool` | "No module named 'akshare'"; multiple sub-sources at 0/N | `pip install akshare>=1.15`; missing module starves downstream analysts of macro/zt_pool data |
-| `push2.eastmoney.com` IP rate-limiting (Connection aborted) | `fundamentals/em_push2`, `hot_money/fund_flow`, `hot_money/sector_fund_flow` | Intermittent failures; same IP banned for ~15min+ | `http_helpers.py` forces IPv4 + ≥1s throttle; fundamentals falls back to `datacenter-web.eastmoney.com` (not subject to push2 rate-limit); scripts degrade gracefully via try/except |
-| `push2.eastmoney.com` IPv6 TLS reset (legacy) | `trading-sector` (separate skill, not yet health-tracked) | Industry ranking may return empty | Same: IPv4 forced |
-| Baidu Stock `getrelatedblock` API returns 403 (since 2026-06) | `trading-sector` (separate skill) | Concept blocks return `null` | No fallback; data omitted |
+| `push2.eastmoney.com` IP rate-limiting (Connection aborted) | `hot_money/fund_flow`, `hot_money/sector_fund_flow` | Intermittent failures; same IP banned for ~15min+ | `http_helpers.py` forces IPv4 + ≥1s throttle; fundamentals industry now uses `datacenter-web.eastmoney.com` (not subject to push2 rate-limit); hot_money scripts degrade gracefully via try/except |
+| `push2.eastmoney.com` IPv6 TLS reset | `trading-sector` (separate skill, not yet health-tracked) | Industry ranking may return empty | Same: IPv4 forced |
+| Baidu Stock `getrelatedblock` API returns 403 | `trading-sector` (separate skill) | Concept blocks return `null` | No fallback; data omitted |
 | `zt_pool` no data on non-trading days (expected behavior) | `sentiment/zt_pool` | Weekends/holidays 0/N | Auto-falls-back to most recent trading day; if even that data is too stale, the call still fails until next trading day |
 | `financial_health` akshare sub-source unstable | `fundamentals/akshare`, `fundamentals/akshare_internal` | Intermittent failures (depends on akshare financial-report endpoint) | Degrades to None; analyst prompt requires `[数据缺失: financial_health]` sentinel (commit `a8d033b`) |
 
