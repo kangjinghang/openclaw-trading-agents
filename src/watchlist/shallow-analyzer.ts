@@ -11,11 +11,14 @@ export interface StockData {
   ticker: string;
   name: string;
   sector: string;
-  kline: { pct_5d: number; pct_20d: number; support: number; resistance: number; volatility_20d: number };
+  kline: { pct_5d: number; pct_20d: number; support: number; resistance: number; volatility_20d: number; volume_ratio_5_20: number };
   news: string[];
   hot_money: { net_5d: number };
   fundamentals: { pe: number; pb: number; rev_q1: number; np_q1: number; industry: string };
   ranker_thesis?: string;
+  /** kline.py 预计算的 VPA 量价分析文本（含"顶部背离信号/放量滞涨"等结论）。
+   *  undefined = 无 VPA 数据（非 kline 脚本或拉取失败）。 */
+  vpa_text?: string;
 }
 
 const ANALYST_PROMPT_TEMPLATE = `# 角色
@@ -118,17 +121,29 @@ function extractJson(content: string): unknown | null {
 }
 
 const RISK_PROMPT_TEMPLATE = `# 角色
-你是 A 股风险分析师，识别单只股票的关键风险。
+你是 A 股风险分析师，独立识别单只股票的关键风险。
 
 # 任务
 基于以下数据 + analyst 给的 thesis，输出风险清单。不要做 Buy/Sell 判断。
+
+## 量价背离识别规则（重点）
+若以下任一成立，应输出对应 risk_flag 并酌情提升 overall_risk（medium→high，low→medium）：
+- VPA 预计算数据出现"顶部背离信号"（价格上涨但成交量递减，动能衰竭）
+- VPA 预计算数据出现"放量滞涨"（巨量但价格不动，多空分歧大）
+- 5 日涨幅较大（>10%）但量比 volume_ratio_5_20 < 0.8（缩量上涨，资金不认可）
+这些是技术性见顶信号，与基本面好坏无关——业绩再好，技术见顶也是风险。
 
 # 股票
 {ticker} {name}（行业：{sector}）
 
 # 数据
-## K 线 + 资金 + 基本面
-（同 analyst-role 输入）
+## K 线（5 日 +{pct_5d}% / 20 日 +{pct_20d}%，量比 {volume_ratio_5_20}）
+- 量比 < 0.8 = 缩量；> 1.2 = 放量；0.8-1.2 = 正常
+## 资金流向（5 日净流入 {net_5d}）
+## 基本面（PE {pe} / PB {pb} / Q1 营收 {rev_q1} / Q1 净利 {np_q1}）
+
+## VPA 量价预计算
+{vpa_text}
 
 # Analyst thesis
 {analyst_thesis}
@@ -149,6 +164,15 @@ export function formatRiskPrompt(d: StockData, analyst: AnalystReport): string {
     .replace("{ticker}", d.ticker)
     .replace("{name}", d.name)
     .replace("{sector}", d.sector)
+    .replace("{pct_5d}", String(d.kline.pct_5d))
+    .replace("{pct_20d}", String(d.kline.pct_20d))
+    .replace("{volume_ratio_5_20}", String(d.kline.volume_ratio_5_20))
+    .replace("{net_5d}", String(d.hot_money.net_5d))
+    .replace("{pe}", String(d.fundamentals.pe))
+    .replace("{pb}", String(d.fundamentals.pb))
+    .replace("{rev_q1}", String(d.fundamentals.rev_q1))
+    .replace("{np_q1}", String(d.fundamentals.np_q1))
+    .replace("{vpa_text}", d.vpa_text || "(无 VPA 数据)")
     .replace("{analyst_thesis}", `${analyst.thesis}（fitness ${analyst.fitness_score}）`);
 }
 

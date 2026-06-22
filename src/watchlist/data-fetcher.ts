@@ -22,6 +22,18 @@ function extractCloses(raw: any): number[] {
   return [];
 }
 
+/** 从 kline.py 输出抽取成交量数组（与 extractCloses 同源 raw.data，读 row.volume）。
+ *  无 volume 数据（如老格式扁平 closes）返回空数组。 */
+function extractVolumes(raw: any): number[] {
+  if (Array.isArray(raw?.data)) {
+    const fromData = raw.data
+      .map((row: any) => (row && typeof row.volume === "number") ? row.volume : NaN)
+      .filter((v: number) => !isNaN(v));
+    if (fromData.length > 0) return fromData;
+  }
+  return [];  // 扁平 closes 格式无 volume，不设 fallback
+}
+
 /** 计算最近 N 日的日收益率标准差（波动率，单位 %）。
  *  数据不足或价格异常返回 0（容忍）。 */
 function computeVolatility(closes: number[], windowDays: number = 20): number {
@@ -38,18 +50,37 @@ function computeVolatility(closes: number[], windowDays: number = 20): number {
   return Math.sqrt(variance);
 }
 
+/** 量比：近 recentDays 日均量 / 前 windowDays 日均量。
+ *  典型用法：computeVolumeRatio(volumes, 5) = 近5日均量 / 20日均量。
+ *  - ratio < 0.8 → 缩量（趋势可能衰竭，量价背离风险）
+ *  - ratio > 1.2 → 放量（资金关注）
+ *  数据不足（< recentDays + windowDays）或除零 → 0（容忍）。 */
+export function computeVolumeRatio(volumes: number[], recentDays: number = 5, windowDays: number = 20): number {
+  const need = recentDays + windowDays;
+  if (volumes.length < need) return 0;
+  const recent = volumes.slice(-recentDays);
+  const prior = volumes.slice(-need, -recentDays);
+  const recentAvg = recent.reduce((s, v) => s + v, 0) / recentDays;
+  const priorAvg = prior.reduce((s, v) => s + v, 0) / windowDays;
+  if (priorAvg <= 0) return 0;  // 防除零
+  return recentAvg / priorAvg;
+}
+
 export interface KlineSummary {
   pct_5d: number;
   pct_20d: number;
   support: number;
   resistance: number;
   volatility_20d: number;
+  /** 近5日均量 / 20日均量。<0.8 缩量，>1.2 放量。无 volume 数据 → 0 */
+  volume_ratio_5_20: number;
 }
 
 /** 从 kline.py 输出解析 K 线摘要。容忍字段缺失。 */
 export function parseKline(raw: any): KlineSummary {
   const closes = extractCloses(raw);
-  if (closes.length < 2) return { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0 };
+  if (closes.length < 2) return { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 };
+  const volumes = extractVolumes(raw);
   const last = closes[closes.length - 1];
   const ago5 = closes.length > 5 ? closes[closes.length - 6] : closes[0];
   const ago20 = closes.length > 20 ? closes[closes.length - 21] : closes[0];
@@ -60,6 +91,7 @@ export function parseKline(raw: any): KlineSummary {
     support: Math.min(...recent),
     resistance: Math.max(...recent),
     volatility_20d: computeVolatility(closes, 20),
+    volume_ratio_5_20: computeVolumeRatio(volumes, 5, 20),
   };
 }
 
@@ -98,10 +130,13 @@ export async function fetchStockData(
   ];
   const [klineR, newsR, hotR, fundR] = await Promise.all(tasks);
 
-  const kline = klineR ? parseKline(klineR) : { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0 };
-  const news = newsR ? parseNews(newsR) : [];
-  const hot = hotR ? parseHotMoney(hotR) : { net_5d: 0 };
-  const fund = fundR ? parseFundamentals(fundR) : { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "" };
+  // klineR 是 {data, vpa}（safeCall 改造后）；其余只有 data
+  const klineRaw = klineR?.data ?? null;
+  const vpaText = klineR?.vpa;
+  const kline = klineRaw ? parseKline(klineRaw) : { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 };
+  const news = newsR?.data ? parseNews(newsR.data) : [];
+  const hot = hotR?.data ? parseHotMoney(hotR.data) : { net_5d: 0 };
+  const fund = fundR?.data ? parseFundamentals(fundR.data) : { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "" };
 
   return {
     ticker, name, sector,
@@ -109,15 +144,21 @@ export async function fetchStockData(
     hot_money: hot,
     fundamentals: fund,
     ranker_thesis: rankerThesis,
+    vpa_text: vpaText,  // kline.py 预计算的 VPA 量价背离结论，undefined 则不注入
   };
 }
 
-/** 安全调用 execSkillScript，失败返回 null。返回 data 字段（已 JSON 解析）。 */
-async function safeCall(fn: () => Promise<any>): Promise<any | null> {
+/** 安全调用 execSkillScript，失败返回 null。
+ *  返回 {data, vpa?} —— data 是脚本主输出，vpa 是 kline.py 额外的量价预计算文本
+ *  （exec-python.ts:280 提到顶层）。非 kline 脚本无 vpa，该字段 undefined。 */
+async function safeCall(fn: () => Promise<any>): Promise<{ data: any; vpa?: string } | null> {
   try {
     const result = await fn();
     if (!result || !result.success) return null;
-    return result.data;
+    return {
+      data: result.data,
+      vpa: typeof result.vpa === "string" ? result.vpa : undefined,
+    };
   } catch {
     return null;
   }

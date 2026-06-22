@@ -15,6 +15,7 @@ export interface StockData {
         support: number;
         resistance: number;
         volatility_20d: number;
+        volume_ratio_5_20: number;
     };
     news: string[];
     hot_money: {
@@ -28,6 +29,9 @@ export interface StockData {
         industry: string;
     };
     ranker_thesis?: string;
+    /** kline.py 预计算的 VPA 量价分析文本（含"顶部背离信号/放量滞涨"等结论）。
+     *  undefined = 无 VPA 数据（非 kline 脚本或拉取失败）。 */
+    vpa_text?: string;
 }
 export declare function formatAnalystPrompt(d: StockData): string;
 /** 解析 analyst-role 输出。非 JSON / 缺字段返回 null（或填默认值）。 */

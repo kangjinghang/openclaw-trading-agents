@@ -10,7 +10,7 @@ describe("formatAnalystPrompt", () => {
       ticker: "SZ300319",
       name: "麦捷科技",
       sector: "电子",
-      kline: { pct_5d: 12.3, pct_20d: 45.6, support: 25.0, resistance: 30.0, volatility_20d: 0.02 },
+      kline: { pct_5d: 12.3, pct_20d: 45.6, support: 25.0, resistance: 30.0, volatility_20d: 0.02, volume_ratio_5_20: 1.0 },
       news: ["新闻 1", "新闻 2"],
       hot_money: { net_5d: 1.2e8 },
       fundamentals: { pe: 50, pb: 5, rev_q1: 1e9, np_q1: 1e8, industry: "电子" },
@@ -27,7 +27,7 @@ describe("formatAnalystPrompt", () => {
   it("包含评分锚点（5 档标准，对齐下游阈值）", () => {
     const prompt = formatAnalystPrompt({
       ticker: "SZ300319", name: "麦捷科技", sector: "电子",
-      kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0 },
+      kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 },
       news: [], hot_money: { net_5d: 0 },
       fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "" },
     });
@@ -78,7 +78,7 @@ describe("formatRiskPrompt", () => {
   it("包含同 analyst 的数据 + analyst 给的 thesis", () => {
     const data: any = {
       ticker: "SZ300319", name: "麦捷科技", sector: "电子",
-      kline: { pct_5d: 12, pct_20d: 45, support: 25, resistance: 30 },
+      kline: { pct_5d: 12, pct_20d: 45, support: 25, resistance: 30, volume_ratio_5_20: 0.6 },
       news: ["n1"], hot_money: { net_5d: 1 }, fundamentals: { pe: 50, pb: 5, rev_q1: 1, np_q1: 0.1 },
     };
     const analyst: AnalystReport = {
@@ -89,6 +89,65 @@ describe("formatRiskPrompt", () => {
     expect(p).toContain("TLVR 电感放量");
     expect(p).toContain("SZ300319");
     expect(p).toContain("deal_breaker");
+  });
+
+  it("注入 K 线数据（pct/支撑压力/量比）—— 修复占位符 bug", () => {
+    const data: any = {
+      ticker: "SZ300319", name: "麦捷科技", sector: "电子",
+      kline: { pct_5d: 15.2, pct_20d: 45.6, support: 25, resistance: 30, volume_ratio_5_20: 0.6 },
+      news: ["n1"], hot_money: { net_5d: 1.2e8 }, fundamentals: { pe: 50, pb: 5, rev_q1: 1e9, np_q1: 1e8 },
+    };
+    const analyst: AnalystReport = {
+      thesis: "x", fitness_score: 8, data_freshness: "2026-06-21", key_signals: [], data_gaps: [],
+    };
+    const p = formatRiskPrompt(data, analyst);
+    // 修复前 risk prompt 的 K 线段写"（同 analyst-role 输入）"占位符，看不到任何数字
+    expect(p).toContain("15.2");          // pct_5d
+    expect(p).toContain("45.6");          // pct_20d
+    expect(p).toContain("0.6");           // volume_ratio_5_20（量比）
+    expect(p).not.toContain("同 analyst"); // 占位符已移除
+  });
+
+  it("注入 VPA 量价预计算结论（含顶部背离信号）", () => {
+    const data: any = {
+      ticker: "SZ300319", name: "麦捷科技", sector: "电子",
+      kline: { pct_5d: 12, pct_20d: 45, support: 25, resistance: 30, volume_ratio_5_20: 0.6 },
+      news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0 },
+      vpa_text: "## VPA\n- **顶部背离信号**: 近5日价格上涨但成交量递减，上涨动能可能衰竭",
+    };
+    const analyst: AnalystReport = {
+      thesis: "x", fitness_score: 8, data_freshness: "2026-06-21", key_signals: [], data_gaps: [],
+    };
+    const p = formatRiskPrompt(data, analyst);
+    expect(p).toContain("顶部背离信号");
+    expect(p).toContain("VPA");
+  });
+
+  it("无 vpa_text → 标注（无 VPA 数据），不报错", () => {
+    const data: any = {
+      ticker: "SZ300319", name: "麦捷科技", sector: "电子",
+      kline: { pct_5d: 12, pct_20d: 45, support: 25, resistance: 30, volume_ratio_5_20: 0.6 },
+      news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0 },
+      // 无 vpa_text
+    };
+    const analyst: AnalystReport = {
+      thesis: "x", fitness_score: 8, data_freshness: "2026-06-21", key_signals: [], data_gaps: [],
+    };
+    const p = formatRiskPrompt(data, analyst);
+    expect(p).toContain("无 VPA 数据");
+  });
+
+  it("注入基本面数据（PE/净利）—— risk-role 独立看数据做风险判断", () => {
+    const data: any = {
+      ticker: "SZ300319", name: "麦捷科技", sector: "电子",
+      kline: { pct_5d: 12, pct_20d: 45, support: 25, resistance: 30, volume_ratio_5_20: 0.6 },
+      news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 85, pb: 5, rev_q1: 1e9, np_q1: 1e8 },
+    };
+    const analyst: AnalystReport = {
+      thesis: "x", fitness_score: 8, data_freshness: "2026-06-21", key_signals: [], data_gaps: [],
+    };
+    const p = formatRiskPrompt(data, analyst);
+    expect(p).toContain("85");  // PE（偏高，risk-role 应能看到）
   });
 });
 
@@ -147,8 +206,8 @@ describe("analyzeAll", () => {
       { ticker: "SH600183", name: "生益科技", is_held: false, current_weight: 0, days_held: 0, locked: false, ranker_score: 9.0 },
     ];
     const dataByTicker = new Map<string, StockData>([
-      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "电子", kline: { pct_5d: 1, pct_20d: 2, support: 1, resistance: 2 }, news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 1, pb: 1, rev_q1: 1, np_q1: 1 } }],
-      ["SH600183", { ticker: "SH600183", name: "生益科技", sector: "PCB", kline: { pct_5d: 1, pct_20d: 2, support: 1, resistance: 2 }, news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 1, pb: 1, rev_q1: 1, np_q1: 1 } }],
+      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "电子", kline: { pct_5d: 1, pct_20d: 2, support: 1, resistance: 2, volatility_20d: 0.02, volume_ratio_5_20: 1.0 }, news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 1, pb: 1, rev_q1: 1, np_q1: 1, industry: "电子" } }],
+      ["SH600183", { ticker: "SH600183", name: "生益科技", sector: "PCB", kline: { pct_5d: 1, pct_20d: 2, support: 1, resistance: 2, volatility_20d: 0.02, volume_ratio_5_20: 1.0 }, news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 1, pb: 1, rev_q1: 1, np_q1: 1, industry: "PCB" } }],
     ]);
     const mockCaller: ShallowLlmCaller = async ({ role }) => {
       if (role === "analyst") {
@@ -169,7 +228,7 @@ describe("analyzeAll", () => {
     ];
     const dataByTicker = new Map<string, StockData>();
     for (const m of metas) {
-      dataByTicker.set(m.ticker, { ticker: m.ticker, name: m.name, sector: "x", kline: { pct_5d: 1, pct_20d: 1, support: 1, resistance: 2 }, news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 1, pb: 1, rev_q1: 1, np_q1: 1 } });
+      dataByTicker.set(m.ticker, { ticker: m.ticker, name: m.name, sector: "x", kline: { pct_5d: 1, pct_20d: 1, support: 1, resistance: 2, volatility_20d: 0.02, volume_ratio_5_20: 1.0 }, news: [], hot_money: { net_5d: 0 }, fundamentals: { pe: 1, pb: 1, rev_q1: 1, np_q1: 1, industry: "x" } });
     }
     const mockCaller: ShallowLlmCaller = async ({ role, data }) => {
       if (data.ticker === "FAIL") throw new Error("network");
@@ -230,7 +289,7 @@ describe("analyzeAll 持仓股失败兜底", () => {
   function makeData(ticker: string, name: string): StockData {
     return {
       ticker, name, sector: "电子",
-      kline: { pct_5d: 1, pct_20d: 2, support: 1, resistance: 2, volatility_20d: 0.02 },
+      kline: { pct_5d: 1, pct_20d: 2, support: 1, resistance: 2, volatility_20d: 0.02, volume_ratio_5_20: 1.0 },
       news: [], hot_money: { net_5d: 0 },
       fundamentals: { pe: 1, pb: 1, rev_q1: 1, np_q1: 1, industry: "电子" },
     };
