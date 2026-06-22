@@ -63,11 +63,21 @@ describe("parseHotMoney", () => {
 });
 
 describe("parseFundamentals", () => {
-  it("提取 pe/pb/rev_q1/np_q1（支持 pe_ttm 别名）", () => {
-    const raw = { pe_ttm: 35.2, pb: 4.5, revenue_q1: 1.2e9, net_profit_q1: 1.3e8 };
-    expect(parseFundamentals(raw)).toEqual({ pe: 35.2, pb: 4.5, rev_q1: 1.2e9, np_q1: 1.3e8 });
+  it("提取 pe/pb/rev_q1/np_q1 + industry（来自 stock_info）", () => {
+    const raw = {
+      pe_ttm: 35.2, pb: 4.5, revenue_q1: 1.2e9, net_profit_q1: 1.3e8,
+      stock_info: { industry: "白酒", name: "贵州茅台", total_mv: 2.1e12 },
+    };
+    expect(parseFundamentals(raw)).toEqual({ pe: 35.2, pb: 4.5, rev_q1: 1.2e9, np_q1: 1.3e8, industry: "白酒" });
   });
-  it("缺字段 → 0", () => {
-    expect(parseFundamentals({})).toEqual({ pe: 0, pb: 0, rev_q1: 0, np_q1: 0 });
+  it("支持 pe_ttm 别名 + industry 缺失 → 空字符串", () => {
+    const raw = { pe: 20, pb: 3, rev_q1: 5e8, np_q1: 6e7 };
+    expect(parseFundamentals(raw)).toEqual({ pe: 20, pb: 3, rev_q1: 5e8, np_q1: 6e7, industry: "" });
+  });
+  it("缺字段 → 0 + industry 空字符串", () => {
+    expect(parseFundamentals({})).toEqual({ pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "" });
+  });
+  it("industry 空白字符串 → trim 为空", () => {
+    expect(parseFundamentals({ stock_info: { industry: "   " } }).industry).toBe("");
   });
 });

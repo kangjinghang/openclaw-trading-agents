@@ -731,6 +731,18 @@ npm run rebalance -- --top-n 5 --no-anti-churn --max-revise 3 --date 2026-06-18
 
 实现波动率折扣时发现 `data-fetcher.ts` 的 `parseKline` 读 `raw.closes`（不存在），kline.py 实际输出 `raw.data: [{close}]`。原设计 §5.3 和 rebalancer-pipeline.zh.md:224 都假设 closes 字段，与实际不符——导致线上 `pct_5d/pct_20d/support/resistance` **一直恒为 0**。修复：从 `raw.data` 抽 close + 新增 `volatility_20d`。
 
+### 偏离 3：候选股 sector 改用 fundamentals.industry（修复规则 3 失效）
+
+本设计 §5.2 假设"holdings.json 的 sector 字段"是 sector 唯一来源，但候选股（未持仓）不在这个来源里，`rebalance-cli.ts:127` 把它们硬编码为 `"未分类"`。这导致规则 3（单行业 ≤30%）对候选股失效——所有新股堆进"未分类"一个桶。
+
+**修复**：发现 `fundamentals.py:91-155` 已经用东方财富 f127 + datacenter BOARD_NAME 双路拉取了 `stock_info.industry`，只是 `parseFundamentals` 把它丢弃了。修复 = 把已有数据接通：
+- `parseFundamentals` 保留 `industry` 字段（从 `raw.stock_info.industry`）
+- `StockData.fundamentals` 类型加 `industry: string`
+- `rebalancer.ts` 构造 `ctx.sectors` 时优先用 `fundamentals.industry`（持仓股也覆盖用户填的 sector，保证全市场口径统一）
+- 拉取失败回退"未分类" + console warning（避免逃过规则 3）
+
+详见 [rebalancer-pipeline.zh.md §5.3 + §11.12](../../rebalancer-pipeline.zh.md)。零新脚本、零新网络请求。
+
 ### 不变的
 
 - 7 级 pipeline 架构（§2.1）不变

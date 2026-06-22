@@ -17,6 +17,7 @@ export declare function parseFundamentals(raw: any): {
     pb: number;
     rev_q1: number;
     np_q1: number;
+    industry: string;
 };
 /** 单股并行跑 4 个 script。失败的 script 返回 null 字段（容忍）。 */
 export declare function fetchStockData(ticker: string, name: string, sector: string, rankerThesis?: string): Promise<StockData | null>;

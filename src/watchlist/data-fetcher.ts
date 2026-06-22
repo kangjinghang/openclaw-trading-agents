@@ -72,12 +72,14 @@ export function parseHotMoney(raw: any): { net_5d: number } {
   return { net_5d: typeof raw?.net_5d === "number" ? raw.net_5d : 0 };
 }
 
-export function parseFundamentals(raw: any): { pe: number; pb: number; rev_q1: number; np_q1: number } {
+export function parseFundamentals(raw: any): { pe: number; pb: number; rev_q1: number; np_q1: number; industry: string } {
   return {
     pe: typeof raw?.pe_ttm === "number" ? raw.pe_ttm : (typeof raw?.pe === "number" ? raw.pe : 0),
     pb: typeof raw?.pb === "number" ? raw.pb : 0,
     rev_q1: typeof raw?.revenue_q1 === "number" ? raw.revenue_q1 : (typeof raw?.rev_q1 === "number" ? raw.rev_q1 : 0),
     np_q1: typeof raw?.net_profit_q1 === "number" ? raw.net_profit_q1 : (typeof raw?.np_q1 === "number" ? raw.np_q1 : 0),
+    // industry 来自 fundamentals.py 的 stock_info.industry（东方财富 f127 / datacenter BOARD_NAME 双路拉取）
+    industry: typeof raw?.stock_info?.industry === "string" && raw.stock_info.industry.trim() ? raw.stock_info.industry.trim() : "",
   };
 }
 
@@ -99,7 +101,7 @@ export async function fetchStockData(
   const kline = klineR ? parseKline(klineR) : { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0 };
   const news = newsR ? parseNews(newsR) : [];
   const hot = hotR ? parseHotMoney(hotR) : { net_5d: 0 };
-  const fund = fundR ? parseFundamentals(fundR) : { pe: 0, pb: 0, rev_q1: 0, np_q1: 0 };
+  const fund = fundR ? parseFundamentals(fundR) : { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "" };
 
   return {
     ticker, name, sector,

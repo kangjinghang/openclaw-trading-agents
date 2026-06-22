@@ -151,6 +151,8 @@ export interface RebalancePlanFile {
     revise_count: number;
   };
   execution_plan: ExecutionPlan;
+  /** 行业拉取相关警告（fundamentals.industry 为空的股按"未分类"累计，规则 3 对它们失效） */
+  sector_warnings?: string[];
 }
 
 // ═══ 配置 ═══
