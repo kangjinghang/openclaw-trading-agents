@@ -197,8 +197,48 @@ export function buildStockReport(
   };
 }
 
+/** 持仓股 shallow-analyzer 失败时的保守默认 report。
+ *
+ *  为什么持仓股不能像候选股一样"失败就消失"：
+ *  - 候选股失败 = 少一个机会（损失小）
+ *  - 持仓股失败 = 漏看一个风险（损失大）—— rebalancer 既不 HOLD 也不 REDUCE，
+ *    一个用户实际持有的、可能需要止损的股被静默忽略
+ *
+ *  默认值设计（逼 rebalancer 面对，但不乱下结论）：
+ *  - fitness=5：触发"持仓 fitness≤5 必须 REDUCE/SELL"硬规则，rebalancer 必须提它
+ *  - risk=high：数据缺失=未知风险，仓位公式会打折
+ *  - deal_breaker=false：无证据不清仓（清仓是重大决策）
+ *  - locked 保留：anti-churn 卖锁仍生效，不会乱减锁定股 */
+export function buildFallbackReport(
+  meta: CandidateMeta,
+  sector: string,
+  reason: string,
+): StockReport {
+  return {
+    ticker: meta.ticker,
+    name: meta.name,
+    sector,
+    thesis: `⚠️ shallow-analyzer 失败，无法评估（${reason}）`,
+    fitness_score: 5,
+    key_signals: [],
+    data_gaps: [`shallow-analyzer 失败：${reason}`],
+    risk_flags: [{ flag: "分析失败", severity: "高", detail: reason }],
+    overall_risk: "high",
+    deal_breaker: false,
+    is_held: meta.is_held,
+    current_weight: meta.current_weight,
+    days_held: meta.days_held,
+    locked: meta.locked,
+    ranker_score: meta.ranker_score,
+  };
+}
+
 /** 对所有候选/持仓股跑 analyst + risk 双 call（单股内串行，跨股并发限制）。
- *  单股失败（LLM 异常或数据缺失）跳过，rebalancer 看不到该股。
+ *
+ *  失败处理（风控关键）：
+ *  - 候选股失败 → 跳过（少一个机会，无伤大雅）
+ *  - 持仓股失败 → 保守默认 report（fitness=5, risk=high），不消失
+ *    否则 rebalancer 看不到它，一个可能需要止损的持仓股被静默忽略
  *
  *  concurrency 默认 3 —— zhipu glm-5.1 free tier 在并发 ≥5 时触发 429。
  *  跨股 worker pool + 单股内 analyst→risk 串行 = 任意时刻最多 concurrency 个 LLM call。 */
@@ -217,25 +257,27 @@ export async function analyzeAll(
         const meta = queue.shift()!;
         const data = dataByTicker.get(meta.ticker);
         if (!data) {
-          results.push(null);
+          // 持仓股无数据 → fallback（候选股跳过）
+          results.push(meta.is_held ? buildFallbackReport(meta, "未分类", "数据拉取失败（dataByTicker 无此股）") : null);
           continue;
         }
         try {
           const analystContent = await caller({ role: "analyst", data });
           const analyst = parseAnalystReport(analystContent);
           if (!analyst) {
-            results.push(null);
+            results.push(meta.is_held ? buildFallbackReport(meta, data.sector, "analyst-role 返回非 JSON") : null);
             continue;
           }
           const riskContent = await caller({ role: "risk", data, analyst });
           const risk = parseRiskReport(riskContent);
           if (!risk) {
-            results.push(null);
+            results.push(meta.is_held ? buildFallbackReport(meta, data.sector, "risk-role 返回非 JSON") : null);
             continue;
           }
           results.push(buildStockReport(meta, data.sector, analyst, risk));
-        } catch {
-          results.push(null);
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          results.push(meta.is_held ? buildFallbackReport(meta, data.sector, `LLM 调用异常：${reason}`) : null);
         }
       }
     })());
