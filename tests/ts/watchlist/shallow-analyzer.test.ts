@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatAnalystPrompt, parseAnalystReport, formatRiskPrompt, parseRiskReport, buildStockReport, buildFallbackReport, analyzeAll, type ShallowLlmCaller, type StockData } from "../../../src/watchlist/shallow-analyzer";
+import { formatAnalystPrompt, parseAnalystReport, formatRiskPrompt, parseRiskReport, buildStockReport, buildFallbackReport, analyzeAll, renderQuarterlyTrends, renderConsensus, type ShallowLlmCaller, type StockData, type ConsensusEps } from "../../../src/watchlist/shallow-analyzer";
 import type { AnalystReport } from "../../../src/watchlist/rebalance-types";
 import type { CandidateMeta } from "../../../src/watchlist/candidate-selector";
 import type { StockData } from "../../../src/watchlist/shallow-analyzer";
@@ -384,5 +384,170 @@ describe("analyzeAll 持仓股失败兜底", () => {
     expect(reports).toHaveLength(1);
     expect(reports[0].fitness_score).toBe(5);  // fallback，不是 analyst 给的 8
     expect(reports[0].data_gaps[0]).toContain("risk-role");
+  });
+});
+
+// ── renderQuarterlyTrends：4 季度趋势预压缩（对齐 renderHotMoneySummary 范式）──
+describe("renderQuarterlyTrends", () => {
+  it("完整 4 季度 → 营收/净利/ROE 三段管道分隔（含同比）", () => {
+    const trends = [
+      { report_date: "2025-03-31", revenue_yi: 285, net_profit_yi: 32, revenue_yoy: 10.5, net_profit_yoy: 12.3, roe: 4.2 },
+      { report_date: "2024-12-31", revenue_yi: 1200, net_profit_yi: 130, revenue_yoy: 8.2, net_profit_yoy: 9.1, roe: 15.6 },
+      { report_date: "2024-09-30", revenue_yi: 880, net_profit_yi: 95, revenue_yoy: 7.1, net_profit_yoy: 8.0, roe: 11.5 },
+      { report_date: "2024-06-30", revenue_yi: 560, net_profit_yi: 60, revenue_yoy: 6.0, net_profit_yoy: 7.0, roe: 7.8 },
+    ];
+    const out = renderQuarterlyTrends(trends);
+    // 含营收趋势 + 净利趋势（LLM 判断业绩连续性的核心）
+    expect(out).toContain("营收");
+    expect(out).toContain("285");  // 最近季度营收
+    expect(out).toContain("+10.5%");  // 同比带正号
+    expect(out).toContain("净利");
+    expect(out).toContain("32");
+    expect(out).toContain("ROE");
+    // 管道分隔（一行文本，对齐 renderHotMoneySummary）
+    expect(out).toContain("|");
+  });
+
+  it("只有 1-2 个季度 → 仍渲染（数据稀疏不阻塞）", () => {
+    const out = renderQuarterlyTrends([
+      { report_date: "2025-03-31", revenue_yi: 285, net_profit_yi: 32 },
+    ]);
+    expect(out).toContain("285");
+    expect(out).toContain("32");
+  });
+
+  it("部分字段缺失（无同比）→ 省略同比，只渲染有值的字段", () => {
+    const out = renderQuarterlyTrends([
+      { report_date: "2025-03-31", revenue_yi: 285, net_profit_yi: 32 },  // 无 yoy/roe
+    ]);
+    expect(out).toContain("285");
+    expect(out).not.toContain("%");  // 无同比则不出 % 号
+  });
+
+  it("负同比（业绩下滑）→ 带负号，让 LLM 识别风险", () => {
+    const out = renderQuarterlyTrends([
+      { report_date: "2025-03-31", revenue_yi: 200, revenue_yoy: -15.3 },
+    ]);
+    expect(out).toContain("-15.3%");
+  });
+
+  it("空数组 / undefined → 空串（prompt 该行省略，不污染）", () => {
+    expect(renderQuarterlyTrends([])).toBe("");
+    expect(renderQuarterlyTrends(undefined)).toBe("");
+  });
+});
+
+// ── renderConsensus：机构一致预期预压缩（对齐 renderHotMoneySummary 范式）──
+describe("renderConsensus", () => {
+  it("完整字段 → 机构数/EPS趋势/目标价/评级/远期PE/PEG 一行管道分隔", () => {
+    const c: ConsensusEps = {
+      analyst_count: 26,
+      consensus_eps_current: 45, consensus_eps_next: 52, eps_growth_pct: 15.6,
+      target_price_min: 1800, target_price_max: 2000,
+      ratings: { buy: 18, overweight: 5, neutral: 3 },
+      forward_pe: 34.6, peg: 2.2,
+    };
+    const out = renderConsensus(c);
+    expect(out).toContain("26家");
+    expect(out).toContain("EPS");
+    expect(out).toContain("45");
+    expect(out).toContain("52");
+    expect(out).toContain("+15.6%");  // 增速带正号
+    expect(out).toContain("目标价");
+    expect(out).toContain("1800");
+    expect(out).toContain("2000");
+    expect(out).toContain("买18");   // 评级分布
+    expect(out).toContain("远期PE");
+    expect(out).toContain("34.6");
+    expect(out).toContain("PEG");
+    expect(out).toContain("2.2");
+    expect(out).toContain("|");
+  });
+
+  it("无机构覆盖（analyst_count 缺失）→ 仍渲染 EPS/目标价等有的字段", () => {
+    const out = renderConsensus({ consensus_eps_current: 45, consensus_eps_next: 52 });
+    expect(out).toContain("45");
+    expect(out).toContain("52");
+    expect(out).not.toContain("家");  // 无机构数
+  });
+
+  it("负增速（业绩预期下滑）→ 带负号，让 LLM 识别风险", () => {
+    const out = renderConsensus({ consensus_eps_current: 52, consensus_eps_next: 45, eps_growth_pct: -13.5 });
+    expect(out).toContain("-13.5%");
+  });
+
+  it("只有目标价无 EPS → 渲染目标价段", () => {
+    const out = renderConsensus({ target_price_min: 1800, target_price_max: 2000, analyst_count: 5 });
+    expect(out).toContain("目标价");
+    expect(out).toContain("1800-2000");
+    expect(out).toContain("5家");
+  });
+
+  it("undefined / 空对象 → 空串（很多小盘股无机构覆盖，prompt 该行省略）", () => {
+    expect(renderConsensus(undefined)).toBe("");
+    expect(renderConsensus({})).toBe("");
+  });
+
+  it("PEG 缺失（非正增长场景）→ 不输出 PEG 段（fundamentals.py 仅正增长时算 PEG）", () => {
+    const out = renderConsensus({ consensus_eps_current: 45, consensus_eps_next: 52, eps_growth_pct: 15.6, forward_pe: 34.6 });
+    expect(out).toContain("远期PE");
+    expect(out).not.toContain("PEG");
+  });
+});
+
+// ── formatAnalystPrompt / formatRiskPrompt：新基本面数据接入 ──
+// 验证 renderQuarterlyTrends / renderConsensus 真的注入 prompt，
+// 且无数据时整段省略（不污染、不留空占位符）。
+describe("formatAnalystPrompt 基本面深度数据注入", () => {
+  const baseData = (): StockData => ({
+    ticker: "SH600519", name: "贵州茅台", sector: "白酒",
+    kline: { pct_5d: 1, pct_20d: 2, support: 100, resistance: 200, volatility_20d: 0.02, volume_ratio_5_20: 1.0 },
+    news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" },
+    fundamentals: { pe: 30, pb: 10, rev_q1: 4e9, np_q1: 2e9, industry: "白酒" },
+  });
+
+  it("有季度趋势 + 机构预期 → prompt 含两段渲染文本", () => {
+    const d = baseData();
+    d.fundamentals.quarterly_trends = [
+      { report_date: "2025-03-31", revenue_yi: 285, net_profit_yi: 32, revenue_yoy: 10.5 },
+    ];
+    d.fundamentals.consensus_eps = {
+      analyst_count: 26, consensus_eps_current: 45, consensus_eps_next: 52, eps_growth_pct: 15.6,
+      target_price_min: 1800, target_price_max: 2000, ratings: { buy: 18 }, forward_pe: 34.6,
+    };
+    const prompt = formatAnalystPrompt(d);
+    expect(prompt).toContain("285亿");          // 季度营收
+    expect(prompt).toContain("26家覆盖");        // 机构数
+    expect(prompt).toContain("1800-2000");       // 目标价
+  });
+
+  it("无季度趋势 + 无机构预期 → prompt 不含对应段（不留空占位符）", () => {
+    const prompt = formatAnalystPrompt(baseData());
+    // 渲染函数返回空串时，模板里占位符被替换为空，整段标题行可能保留但内容为空。
+    // 关键：不能出现孤立的占位符字面量 {quarterly_trends}，也不能出现误导性的空括号。
+    expect(prompt).not.toContain("{quarterly_trends}");
+    expect(prompt).not.toContain("{consensus_eps}");
+  });
+
+  it("评分原则含「季度业绩连续增长」硬证据条款（让新数据影响 fitness）", () => {
+    const prompt = formatAnalystPrompt(baseData());
+    expect(prompt).toMatch(/季度.*连续.*增长|连续.*增长.*季度|quarterly.*trend/i);
+  });
+});
+
+describe("formatRiskPrompt 基本面深度数据注入", () => {
+  it("有季度趋势 → risk prompt 也含（风险分析需要业绩拐点）", () => {
+    const d: StockData = {
+      ticker: "SZ300319", name: "麦捷科技", sector: "电子",
+      kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 },
+      news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" },
+      fundamentals: {
+        pe: 50, pb: 5, rev_q1: 1e9, np_q1: 1e8, industry: "电子",
+        quarterly_trends: [{ report_date: "2025-03-31", revenue_yi: 200, revenue_yoy: -15.3 }],
+      },
+    };
+    const prompt = formatRiskPrompt(d, { thesis: "x", fitness_score: 7, data_freshness: "", key_signals: [], data_gaps: [] });
+    expect(prompt).toContain("200亿");
+    expect(prompt).toContain("-15.3%");  // 负同比让 risk LLM 识别业绩下滑
   });
 });

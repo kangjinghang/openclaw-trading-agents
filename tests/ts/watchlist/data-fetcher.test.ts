@@ -270,6 +270,38 @@ describe("parseFundamentals", () => {
     const raw = { valuation: { pe_ttm: NaN, pb: "高" }, financial_snapshot: { revenue: null } };
     expect(parseFundamentals(raw)).toEqual({ pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "" });
   });
+  it("透传 quarterly_trends / consensus_eps 原样对象（对齐 fundamentals.py）", () => {
+    const trends = [
+      { report_date: "2025-03-31", revenue_yi: 285, net_profit_yi: 32, revenue_yoy: 10.5 },
+      { report_date: "2024-12-31", revenue_yi: 1200, net_profit_yi: 130, revenue_yoy: 8.2 },
+    ];
+    const consensus = {
+      consensus_eps_current: 45, consensus_eps_next: 52, eps_growth_pct: 15.6,
+      analyst_count: 26, ratings: { buy: 18, overweight: 5 },
+      target_price_min: 1800, target_price_max: 2000,
+    };
+    const raw = {
+      valuation: { pe_ttm: 35.2, pb: 4.5 },
+      financial_snapshot: { revenue: 1.2e9, net_profit: 1.3e8 },
+      stock_info: { industry: "白酒" },
+      quarterly_trends: trends,
+      consensus_eps: consensus,
+    };
+    const r = parseFundamentals(raw);
+    expect(r.quarterly_trends).toEqual(trends);
+    expect(r.consensus_eps).toEqual(consensus);
+  });
+  it("无 quarterly_trends / consensus_eps → 两个字段 undefined（不阻塞 render）", () => {
+    const raw = { valuation: { pe_ttm: 20 }, financial_snapshot: { revenue: 1e8 } };
+    const r = parseFundamentals(raw);
+    expect(r.quarterly_trends).toBeUndefined();
+    expect(r.consensus_eps).toBeUndefined();
+  });
+  it("quarterly_trends 非数组 / consensus_eps 非对象 → undefined（防御 fundamentals.py 异常输出）", () => {
+    const r = parseFundamentals({ quarterly_trends: "oops", consensus_eps: 42 });
+    expect(r.quarterly_trends).toBeUndefined();
+    expect(r.consensus_eps).toBeUndefined();
+  });
 });
 
 // ── fetchStockData: vpa_text 注入（mock execSkillScript）────────────

@@ -53,6 +53,35 @@ export interface HotMoneyData {
   hot_stocks_top?: string;       // 当日热门股 top3 预压缩文本
 }
 
+/** 最近 4 季度财务趋势（fundamentals.py 的 quarterly_trends 子源，datacenter RPT_LICO_FN_CPD）。
+ *  字段对齐 fundamentals.py:243-261 的输出，字段全部可选（脚本按报告披露情况逐字段填）。 */
+export interface QuarterlyTrend {
+  report_date?: string;       // 报告期 YYYY-MM-DD
+  revenue_yi?: number;        // 营收（亿元）
+  net_profit_yi?: number;     // 净利润（亿元）
+  eps?: number;               // 每股收益
+  revenue_yoy?: number;       // 营收同比 %
+  net_profit_yoy?: number;    // 净利同比 %
+  roe?: number;               // 加权 ROE %
+  gross_margin?: number;      // 毛利率 %
+}
+
+/** 机构一致预期（fundamentals.py 的 consensus_eps 子源，datacenter RPT_WEB_RESPREDICT）。
+ *  字段对齐 fundamentals.py:306-355；forward_pe/peg 在脚本侧预计算（fundamentals.py:182-193），
+ *  LLM 只引用不算，避免算术错误。很多小盘股无机构覆盖 → 整个对象 undefined。 */
+export interface ConsensusEps {
+  forecast_years?: { year: number; type: string; eps: number }[]; // 4 年 EPS（A=实际/E=预测）
+  consensus_eps_current?: number;  // 当期一致 EPS
+  consensus_eps_next?: number;     // 次年一致 EPS
+  eps_growth_pct?: number;         // 预期增速 %
+  forward_pe?: number;             // 远期 PE = 现价 / 次年 EPS（脚本预计算）
+  peg?: number;                    // PE_TTM / 预期增速（仅正增长时给，脚本预计算）
+  target_price_min?: number;       // 目标价下限
+  target_price_max?: number;       // 目标价上限
+  ratings?: { buy?: number; overweight?: number; neutral?: number; underweight?: number; sell?: number };
+  analyst_count?: number;          // 覆盖机构数
+}
+
 export interface StockData {
   ticker: string;
   name: string;
@@ -62,7 +91,7 @@ export interface StockData {
    *  旧实现是 string[]（只有标题），现升级为 NewsItem[] 让 LLM 判断时效性 + 标题党。 */
   news: NewsItem[];
   hot_money: HotMoneyData;
-  fundamentals: { pe: number; pb: number; rev_q1: number; np_q1: number; industry: string };
+  fundamentals: { pe: number; pb: number; rev_q1: number; np_q1: number; industry: string; quarterly_trends?: QuarterlyTrend[]; consensus_eps?: ConsensusEps };
   ranker_thesis?: string;
   /** kline.py 预计算的 VPA 量价分析文本（含"顶部背离信号/放量滞涨"等结论）。
    *  undefined = 无 VPA 数据（非 kline 脚本或拉取失败）。 */
@@ -91,6 +120,8 @@ const ANALYST_PROMPT_TEMPLATE = `# 角色
 
 评分原则：
 - 有具体数据支撑（净利数字、订单金额、产能吨数）才能给 8 分以上
+- 季度营收/净利连续正增长（quarterly_trends 可见同比）是业绩兑现的硬证据，可支撑 8 分以上；反之连续下滑应在 thesis 标注并压低 fitness
+- 机构一致预期（consensus_eps）正向 + 目标价高于现价 = 卖方认可，可作为加分项；但预期本身不算业绩兑现
 - "传闻""预计""市场传言"类未经证实的信息，最多 6 分
 - 数据缺失（PE/净利为 0）应在 data_gaps 标注，fitness 不超过 6（无法证实业绩）
 
@@ -105,6 +136,10 @@ const ANALYST_PROMPT_TEMPLATE = `# 角色
 ## 资金流向
 {hot_money_summary}
 ## 基本面（PE {pe} / PB {pb} / Q1 营收 {rev_q1} / Q1 净利 {np_q1}）
+## 季度业绩趋势（近 4 季度营收/净利/ROE + 同比，判断业绩连续性）
+{quarterly_trends}
+## 机构一致预期（卖方覆盖数 / EPS 预期 / 目标价 / 评级）
+{consensus_eps}
 {ranker_section}
 
 # 输出格式（严格 JSON）
@@ -177,6 +212,87 @@ export function renderHotMoneySummary(h: HotMoneyData): string {
   return parts.join(" | ");
 }
 
+/** 把 4 季度财务趋势压成一行（对齐 renderHotMoneySummary 范式）。
+ *
+ *  格式：「营收 285/1200/880/560亿(同比+10.5/+8.2/+7.1/+6.0%) | 净利 32/130/95/60亿(同比...) | ROE 4.2/15.6/11.5/7.8%」
+ *  - 按报告期降序（最近在前，对齐 fundamentals.py quarterly_trends 的排序）
+ *  - 每段只在该段有数据时输出；缺同比 → 省略括号；无任何数据 → 空串（prompt 该行省略）
+ *  - 负同比带负号（业绩下滑是风险信号，LLM 需识别）
+ *  季度顺序由 fundamentals.py 的 sortColumns=REPORTDATE desc 保证，这里原样按数组顺序渲染。 */
+export function renderQuarterlyTrends(trends?: QuarterlyTrend[]): string {
+  if (!trends || trends.length === 0) return "";
+  const sign = (n: number): string => n > 0 ? `+${n}` : `${n}`;
+  // 营收段：有 revenue_yi 的季度才进；同比仅当该季度有 revenue_yoy 时拼
+  const revVals: string[] = [];
+  const revYoy: string[] = [];
+  trends.forEach(t => {
+    if (typeof t.revenue_yi === "number") revVals.push(`${t.revenue_yi}亿`);
+    if (typeof t.revenue_yoy === "number") revYoy.push(`${sign(t.revenue_yoy)}%`);
+  });
+  const npVals: string[] = [];
+  const npYoy: string[] = [];
+  trends.forEach(t => {
+    if (typeof t.net_profit_yi === "number") npVals.push(`${t.net_profit_yi}亿`);
+    if (typeof t.net_profit_yoy === "number") npYoy.push(`${sign(t.net_profit_yoy)}%`);
+  });
+  const roeVals: string[] = trends
+    .filter(t => typeof t.roe === "number")
+    .map(t => `${t.roe}%`);
+
+  const segs: string[] = [];
+  if (revVals.length) {
+    const yoy = revYoy.length ? `(同比${revYoy.join("/")})` : "";
+    segs.push(`营收 ${revVals.join("/")}${yoy}`);
+  }
+  if (npVals.length) {
+    const yoy = npYoy.length ? `(同比${npYoy.join("/")})` : "";
+    segs.push(`净利 ${npVals.join("/")}${yoy}`);
+  }
+  if (roeVals.length) segs.push(`ROE ${roeVals.join("/")}`);
+  return segs.join(" | ");
+}
+
+/** 把机构一致预期压成一行（对齐 renderHotMoneySummary 范式）。
+ *
+ *  格式：「26家覆盖 | EPS 45→52(+15.6%) | 目标价 1800-2000 | 评级 买18/增5/中性3 | 远期PE 34.6 | PEG 2.2」
+ *  - 每段只在该字段有值时输出；无任何数据 → 空串（很多小盘股无机构覆盖，prompt 该行省略）
+ *  - 负增速带负号（预期下滑是风险信号）
+ *  - PEG 仅当脚本预计算给出时输出（fundamentals.py 仅正增长时算 PEG，故缺 PEG 不代表数据错）
+ *  - 评级分布只列非零项，避免「买0/增0/中性0」噪音
+ *  forward_pe/peg 由 fundamentals.py 预计算，LLM 只引用不算（避免算术错误）。 */
+export function renderConsensus(c?: ConsensusEps): string {
+  if (!c) return "";
+  const sign = (n: number): string => n > 0 ? `+${n}` : `${n}`;
+  const segs: string[] = [];
+
+  if (typeof c.analyst_count === "number" && c.analyst_count > 0) {
+    segs.push(`${c.analyst_count}家覆盖`);
+  }
+  // EPS 趋势：current → next，有增速则带括号
+  if (typeof c.consensus_eps_current === "number" || typeof c.consensus_eps_next === "number") {
+    const cur = typeof c.consensus_eps_current === "number" ? c.consensus_eps_current : "?";
+    const nxt = typeof c.consensus_eps_next === "number" ? c.consensus_eps_next : "?";
+    const growth = typeof c.eps_growth_pct === "number" ? `(${sign(c.eps_growth_pct)}%)` : "";
+    segs.push(`EPS ${cur}→${nxt}${growth}`);
+  }
+  if (typeof c.target_price_min === "number" && typeof c.target_price_max === "number") {
+    segs.push(`目标价 ${c.target_price_min}-${c.target_price_max}`);
+  }
+  if (c.ratings) {
+    const r = c.ratings;
+    const label: Array<[string, number | undefined]> = [
+      ["买", r.buy], ["增", r.overweight], ["中性", r.neutral], ["减", r.underweight], ["卖", r.sell],
+    ];
+    const parts = label.filter(([, n]) => typeof n === "number" && n > 0)
+      .map(([lab, n]) => `${lab}${n}`);
+    if (parts.length) segs.push(`评级 ${parts.join("/")}`);
+  }
+  if (typeof c.forward_pe === "number") segs.push(`远期PE ${c.forward_pe}`);
+  if (typeof c.peg === "number") segs.push(`PEG ${c.peg}`);
+
+  return segs.join(" | ");
+}
+
 export function formatAnalystPrompt(d: StockData): string {
   const newsBullets = d.news.map(n => {
     const time = n.time ? `[${n.time}] ` : "";
@@ -204,6 +320,9 @@ export function formatAnalystPrompt(d: StockData): string {
     .replace("{pb}", String(d.fundamentals.pb))
     .replace("{rev_q1}", String(d.fundamentals.rev_q1))
     .replace("{np_q1}", String(d.fundamentals.np_q1))
+    // 季度趋势/机构预期：render 返回空串 → 整段标题下内容空白，LLM 理解为"无此数据"。
+    .replace("{quarterly_trends}", renderQuarterlyTrends(d.fundamentals.quarterly_trends) || "(无季度趋势数据)")
+    .replace("{consensus_eps}", renderConsensus(d.fundamentals.consensus_eps) || "(无机构覆盖)")
     .replace("{ranker_section}", rankerSection);
 }
 
@@ -266,6 +385,8 @@ const RISK_PROMPT_TEMPLATE = `# 角色
 ## 资金流向
 {hot_money_summary}
 ## 基本面（PE {pe} / PB {pb} / Q1 营收 {rev_q1} / Q1 净利 {np_q1}）
+## 季度业绩趋势（营收/净利同比连续下滑 = 业绩拐点风险，应输出 risk_flag）
+{quarterly_trends}
 
 ## VPA 量价预计算
 {vpa_text}
@@ -297,6 +418,7 @@ export function formatRiskPrompt(d: StockData, analyst: AnalystReport): string {
     .replace("{pb}", String(d.fundamentals.pb))
     .replace("{rev_q1}", String(d.fundamentals.rev_q1))
     .replace("{np_q1}", String(d.fundamentals.np_q1))
+    .replace("{quarterly_trends}", renderQuarterlyTrends(d.fundamentals.quarterly_trends) || "(无季度趋势数据)")
     .replace("{vpa_text}", d.vpa_text || "(无 VPA 数据)")
     .replace("{analyst_thesis}", `${analyst.thesis}（fitness ${analyst.fitness_score}）`);
 }

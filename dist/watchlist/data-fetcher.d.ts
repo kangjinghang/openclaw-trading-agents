@@ -1,4 +1,4 @@
-import type { StockData, NewsItem, NewsLayerStats, HotMoneyData } from "./shallow-analyzer";
+import type { StockData, NewsItem, NewsLayerStats, HotMoneyData, QuarterlyTrend, ConsensusEps } from "./shallow-analyzer";
 /** 量比：近 recentDays 日均量 / 前 windowDays 日均量。
  *  典型用法：computeVolumeRatio(volumes, 5) = 近5日均量 / 20日均量。
  *  - ratio < 0.8 → 缩量（趋势可能衰竭，量价背离风险）
@@ -45,6 +45,8 @@ export declare function parseFundamentals(raw: any): {
     rev_q1: number;
     np_q1: number;
     industry: string;
+    quarterly_trends?: QuarterlyTrend[];
+    consensus_eps?: ConsensusEps;
 };
 /** 单股并行跑 4 个 script。失败的 script 返回 null 字段（容忍）。 */
 export declare function fetchStockData(ticker: string, name: string, sector: string, rankerThesis?: string): Promise<StockData | null>;

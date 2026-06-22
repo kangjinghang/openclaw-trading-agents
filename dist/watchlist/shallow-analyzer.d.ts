@@ -48,6 +48,43 @@ export interface HotMoneyData {
     sector_in_industry_tag: string;
     hot_stocks_top?: string;
 }
+/** 最近 4 季度财务趋势（fundamentals.py 的 quarterly_trends 子源，datacenter RPT_LICO_FN_CPD）。
+ *  字段对齐 fundamentals.py:243-261 的输出，字段全部可选（脚本按报告披露情况逐字段填）。 */
+export interface QuarterlyTrend {
+    report_date?: string;
+    revenue_yi?: number;
+    net_profit_yi?: number;
+    eps?: number;
+    revenue_yoy?: number;
+    net_profit_yoy?: number;
+    roe?: number;
+    gross_margin?: number;
+}
+/** 机构一致预期（fundamentals.py 的 consensus_eps 子源，datacenter RPT_WEB_RESPREDICT）。
+ *  字段对齐 fundamentals.py:306-355；forward_pe/peg 在脚本侧预计算（fundamentals.py:182-193），
+ *  LLM 只引用不算，避免算术错误。很多小盘股无机构覆盖 → 整个对象 undefined。 */
+export interface ConsensusEps {
+    forecast_years?: {
+        year: number;
+        type: string;
+        eps: number;
+    }[];
+    consensus_eps_current?: number;
+    consensus_eps_next?: number;
+    eps_growth_pct?: number;
+    forward_pe?: number;
+    peg?: number;
+    target_price_min?: number;
+    target_price_max?: number;
+    ratings?: {
+        buy?: number;
+        overweight?: number;
+        neutral?: number;
+        underweight?: number;
+        sell?: number;
+    };
+    analyst_count?: number;
+}
 export interface StockData {
     ticker: string;
     name: string;
@@ -70,6 +107,8 @@ export interface StockData {
         rev_q1: number;
         np_q1: number;
         industry: string;
+        quarterly_trends?: QuarterlyTrend[];
+        consensus_eps?: ConsensusEps;
     };
     ranker_thesis?: string;
     /** kline.py 预计算的 VPA 量价分析文本（含"顶部背离信号/放量滞涨"等结论）。
@@ -80,6 +119,23 @@ export interface StockData {
     news_layer_stats?: NewsLayerStats;
 }
 export declare function renderHotMoneySummary(h: HotMoneyData): string;
+/** 把 4 季度财务趋势压成一行（对齐 renderHotMoneySummary 范式）。
+ *
+ *  格式：「营收 285/1200/880/560亿(同比+10.5/+8.2/+7.1/+6.0%) | 净利 32/130/95/60亿(同比...) | ROE 4.2/15.6/11.5/7.8%」
+ *  - 按报告期降序（最近在前，对齐 fundamentals.py quarterly_trends 的排序）
+ *  - 每段只在该段有数据时输出；缺同比 → 省略括号；无任何数据 → 空串（prompt 该行省略）
+ *  - 负同比带负号（业绩下滑是风险信号，LLM 需识别）
+ *  季度顺序由 fundamentals.py 的 sortColumns=REPORTDATE desc 保证，这里原样按数组顺序渲染。 */
+export declare function renderQuarterlyTrends(trends?: QuarterlyTrend[]): string;
+/** 把机构一致预期压成一行（对齐 renderHotMoneySummary 范式）。
+ *
+ *  格式：「26家覆盖 | EPS 45→52(+15.6%) | 目标价 1800-2000 | 评级 买18/增5/中性3 | 远期PE 34.6 | PEG 2.2」
+ *  - 每段只在该字段有值时输出；无任何数据 → 空串（很多小盘股无机构覆盖，prompt 该行省略）
+ *  - 负增速带负号（预期下滑是风险信号）
+ *  - PEG 仅当脚本预计算给出时输出（fundamentals.py 仅正增长时算 PEG，故缺 PEG 不代表数据错）
+ *  - 评级分布只列非零项，避免「买0/增0/中性0」噪音
+ *  forward_pe/peg 由 fundamentals.py 预计算，LLM 只引用不算（避免算术错误）。 */
+export declare function renderConsensus(c?: ConsensusEps): string;
 export declare function formatAnalystPrompt(d: StockData): string;
 /** 解析 analyst-role 输出。非 JSON / 缺字段返回 null（或填默认值）。 */
 export declare function parseAnalystReport(content: string): AnalystReport | null;

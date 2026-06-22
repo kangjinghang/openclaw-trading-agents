@@ -278,6 +278,7 @@ function parseFundamentals(raw) {
     //   valuation.pe_ttm / valuation.pb          （腾讯实时估值）
     //   financial_snapshot.revenue / .net_profit （mootdx 财务快照）
     //   stock_info.industry                       （东方财富 f127 / datacenter BOARD_NAME 双路）
+    //   quarterly_trends / consensus_eps          （datacenter 季度趋势 / 机构预期）
     // 老实现误读顶层 pe_ttm/pb/revenue_q1/net_profit_q1 → 恒 0，导致 shallow-analyzer
     // 的 PE/PB/营收/净利全盲，fitness 被评分规则压制到 ≤6（无法证实业绩）。
     // 主路读嵌套字段；保留顶层/别名作为容错（兼容可能的旧扁平格式或其他调用方）。
@@ -291,6 +292,11 @@ function parseFundamentals(raw) {
         rev_q1: num(snap.revenue) || num(snap.revenue_q1) || num(raw?.revenue_q1) || num(raw?.rev_q1),
         np_q1: num(snap.net_profit) || num(snap.net_profit_q1) || num(raw?.net_profit_q1) || num(raw?.np_q1),
         industry: typeof raw?.stock_info?.industry === "string" && raw.stock_info.industry.trim() ? raw.stock_info.industry.trim() : "",
+        // quarterly_trends / consensus_eps 原样透传（压缩逻辑放 render 函数，保持解析层薄）。
+        // 防御 fundamentals.py 异常输出：非数组/非对象 → undefined，render 据此省略整行。
+        quarterly_trends: Array.isArray(raw?.quarterly_trends) ? raw.quarterly_trends : undefined,
+        consensus_eps: raw?.consensus_eps && typeof raw.consensus_eps === "object" && !Array.isArray(raw.consensus_eps)
+            ? raw.consensus_eps : undefined,
     };
 }
 /** 单股并行跑 4 个 script。失败的 script 返回 null 字段（容忍）。 */
@@ -314,7 +320,7 @@ async function fetchStockData(ticker, name, sector, rankerThesis) {
     const kline = klineRaw ? parseKline(klineRaw) : { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 };
     const news = newsR?.data ? parseNews(newsR.data) : [];
     const newsLayerStats = newsR?.data ? parseNewsLayerStats(newsR.data) ?? undefined : undefined;
-    const fund = fundR?.data ? parseFundamentals(fundR.data) : { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "" };
+    const fund = fundR?.data ? parseFundamentals(fundR.data) : { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "", quarterly_trends: undefined, consensus_eps: undefined };
     // fund 先于 hot 解析：parseHotMoney 需要 industry 判板块轮动归属（主线/弱势/未上榜）
     const hot = hotR?.data ? parseHotMoney(hotR.data, fund.industry) : { ...exports.EMPTY_HOT_MONEY };
     return {
