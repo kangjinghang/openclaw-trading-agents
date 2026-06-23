@@ -302,3 +302,45 @@ class TestIntegration:
         assert isinstance(SOURCES, list)
         assert "mootdx" in SOURCES
         assert "akshare" in SOURCES
+
+
+class TestComputeMacd:
+    """Tests for compute_macd structured output."""
+
+    def test_returns_none_for_empty_data(self):
+        from kline import compute_macd
+        assert compute_macd([]) is None
+        assert compute_macd(None) is None
+
+    def test_returns_none_for_insufficient_data(self):
+        from kline import compute_macd
+        assert compute_macd([10, 11, 12]) is None  # < 36 bars
+
+    def test_returns_structured_dict(self):
+        from kline import compute_macd
+        # 40 bars of rising prices → DIF > DEA → direction=看多
+        closes = [100 + i * 0.5 for i in range(40)]
+        result = compute_macd(closes)
+        assert result is not None
+        assert "dif" in result
+        assert "dea" in result
+        assert "histogram" in result
+        assert "direction" in result
+        assert "crossover" in result
+        assert result["direction"] in ("看多", "看空", "中性")
+        assert result["crossover"] in ("golden", "death", "none")
+
+    def test_accepts_bar_dicts(self):
+        from kline import compute_macd
+        bars = [{"close": 100 + i * 0.5, "open": 99 + i * 0.5} for i in range(40)]
+        result = compute_macd(bars)
+        assert result is not None
+        assert isinstance(result["dif"], float)
+
+    def test_accelerating_prices_gives_bullish(self):
+        from kline import compute_macd
+        # Exponential rise → momentum accelerates → DIF > DEA
+        closes = [100 * (1.02 ** i) for i in range(50)]
+        result = compute_macd(closes)
+        assert result["direction"] == "看多"
+        assert result["dif"] > result["dea"]

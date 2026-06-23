@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatAnalystPrompt, parseAnalystReport, formatRiskPrompt, parseRiskReport, buildStockReport, buildFallbackReport, analyzeAll, renderQuarterlyTrends, renderConsensus, renderLockup, renderPercentileLabel, type ShallowLlmCaller, type StockData, type ConsensusEps } from "../../../src/watchlist/shallow-analyzer";
+import { formatAnalystPrompt, parseAnalystReport, formatRiskPrompt, parseRiskReport, buildStockReport, buildFallbackReport, analyzeAll, renderQuarterlyTrends, renderConsensus, renderLockup, renderPercentileLabel, renderMacd, type ShallowLlmCaller, type StockData, type ConsensusEps, type MacdData } from "../../../src/watchlist/shallow-analyzer";
 import type { AnalystReport } from "../../../src/watchlist/rebalance-types";
 import type { CandidateMeta } from "../../../src/watchlist/candidate-selector";
 import type { StockData } from "../../../src/watchlist/shallow-analyzer";
@@ -749,5 +749,28 @@ describe("formatRiskPrompt 分位标注注入", () => {
     };
     const prompt = formatRiskPrompt(d, { thesis: "x", fitness_score: 8, data_freshness: "", key_signals: [], data_gaps: [] });
     expect(prompt).toContain("PE 85[近5年95%分位]");  // 高分位让 risk LLM 识别估值高位
+  });
+});
+
+// ── renderMacd：MACD 动量信号预压缩 ──
+describe("renderMacd", () => {
+  it("undefined → 空串", () => expect(renderMacd(undefined)).toBe(""));
+  it("看多 + 金叉", () => {
+    const m: MacdData = { dif: 0.5, dea: 0.3, histogram: 0.4, direction: "看多", crossover: "golden" };
+    expect(renderMacd(m)).toContain("看多");
+    expect(renderMacd(m)).toContain("金叉");
+    expect(renderMacd(m)).toContain("DIF=0.5");
+  });
+  it("看空 + 死叉", () => {
+    const m: MacdData = { dif: -0.2, dea: 0.1, histogram: -0.6, direction: "看空", crossover: "death" };
+    expect(renderMacd(m)).toContain("看空");
+    expect(renderMacd(m)).toContain("死叉");
+  });
+  it("中性 + 无交叉", () => {
+    const m: MacdData = { dif: 0.1, dea: 0.1, histogram: 0, direction: "中性", crossover: "none" };
+    const out = renderMacd(m);
+    expect(out).toContain("中性");
+    expect(out).not.toContain("金叉");
+    expect(out).not.toContain("死叉");
   });
 });

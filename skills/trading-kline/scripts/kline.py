@@ -381,6 +381,58 @@ def compute_vpa(data: list) -> str:
     return "\n".join(lines)
 
 
+# ── MACD structured output ────────────────────────────────────
+
+def compute_macd(data_or_closes):
+    """Compute MACD (12, 26, 9) and return structured dict for TypeScript consumption.
+
+    Accepts either a list of close prices or a list of bar dicts (with 'close' key).
+    Returns dict with dif, dea, histogram, direction, crossover — or None if data insufficient.
+    """
+    if not data_or_closes:
+        return None
+    if isinstance(data_or_closes[0], dict):
+        closes = [b.get("close", 0) for b in data_or_closes if isinstance(b.get("close"), (int, float))]
+    else:
+        closes = [c for c in data_or_closes if isinstance(c, (int, float))]
+    if len(closes) < 36:  # need 26 for EMA26 + 9 for DEA + 1 margin
+        return None
+
+    def _ema_series(arr, period):
+        k = 2.0 / (period + 1)
+        series = [sum(arr[:period]) / period]
+        for price in arr[period:]:
+            series.append(price * k + series[-1] * (1 - k))
+        return series
+
+    ema12 = _ema_series(closes, 12)
+    ema26 = _ema_series(closes, 26)
+    if len(ema12) < len(ema26) or len(ema26) < 10:
+        return None
+
+    offset = len(ema12) - len(ema26)
+    dif_series = [ema12[i + offset] - ema26[i] for i in range(len(ema26))]
+    dea_series = _ema_series(dif_series, 9) if len(dif_series) >= 9 else []
+    if not dif_series or not dea_series:
+        return None
+
+    dif = round(dif_series[-1], 4)
+    dea = round(dea_series[-1], 4)
+    histogram = round(2 * (dif - dea), 4)
+    direction = "看多" if dif > dea else "看空" if dif < dea else "中性"
+
+    crossover = "none"
+    if len(dif_series) >= 2 and len(dea_series) >= 2:
+        prev_dif, prev_dea = dif_series[-2], dea_series[-2]
+        if prev_dif <= prev_dea and dif > dea:
+            crossover = "golden"
+        elif prev_dif >= prev_dea and dif < dea:
+            crossover = "death"
+
+    return {"dif": dif, "dea": dea, "histogram": histogram,
+            "direction": direction, "crossover": crossover}
+
+
 # ── Technical Indicators pre-computation ────────────────────────
 
 def compute_technical_indicators(data: list) -> str:
@@ -458,55 +510,25 @@ def compute_technical_indicators(data: list) -> str:
     lines.append("")
 
     # ── MACD (12, 26, 9) ──
-    def ema(arr, period):
-        if len(arr) < period:
-            return None
-        k = 2.0 / (period + 1)
-        val = sum(arr[:period]) / period
-        for price in arr[period:]:
-            val = price * k + val * (1 - k)
-        return val
+    macd_data = compute_macd(closes)
+    if macd_data:
+        dif, dea, macd_hist = macd_data["dif"], macd_data["dea"], macd_data["histogram"]
+        lines.append("### MACD (12, 26, 9)")
+        lines.append(f"- DIF (快线): {dif:.4f}")
+        lines.append(f"- DEA (慢线): {dea:.4f}")
+        lines.append(f"- MACD 柱状图: {macd_hist:.4f}")
 
-    def ema_series(arr, period):
-        """Return full EMA series."""
-        if len(arr) < period:
-            return []
-        k = 2.0 / (period + 1)
-        series = [sum(arr[:period]) / period]
-        for price in arr[period:]:
-            series.append(price * k + series[-1] * (1 - k))
-        return series
-
-    ema12 = ema_series(closes, 12)
-    ema26 = ema_series(closes, 26)
-
-    if len(ema12) >= len(ema26) and len(ema26) >= 10:
-        offset = len(ema12) - len(ema26)
-        dif_series = [ema12[i + offset] - ema26[i] for i in range(len(ema26))]
-        dea_series = ema_series(dif_series, 9) if len(dif_series) >= 9 else []
-
-        if dif_series and dea_series:
-            dif = dif_series[-1]
-            dea = dea_series[-1]
-            macd_hist = 2 * (dif - dea)
-
-            lines.append("### MACD (12, 26, 9)")
-            lines.append(f"- DIF (快线): {dif:.4f}")
-            lines.append(f"- DEA (慢线): {dea:.4f}")
-            lines.append(f"- MACD 柱状图: {macd_hist:.4f}")
-
-            if len(dif_series) >= 2 and len(dea_series) >= 2:
-                prev_dif = dif_series[-2]
-                prev_dea = dea_series[-2]
-                if prev_dif <= prev_dea and dif > dea:
-                    lines.append("- **金叉信号**: DIF 上穿 DEA（看多）")
-                elif prev_dif >= prev_dea and dif < dea:
-                    lines.append("- **死叉信号**: DIF 下穿 DEA（看空）")
-                elif dif > dea and macd_hist > 0:
-                    lines.append("- MACD 多头运行（DIF > DEA，柱状图为正）")
-                elif dif < dea and macd_hist < 0:
-                    lines.append("- MACD 空头运行（DIF < DEA，柱状图为负）")
-            lines.append("")
+        crossover = macd_data["crossover"]
+        direction = macd_data["direction"]
+        if crossover == "golden":
+            lines.append("- **金叉信号**: DIF 上穿 DEA（看多）")
+        elif crossover == "death":
+            lines.append("- **死叉信号**: DIF 下穿 DEA（看空）")
+        elif direction == "看多":
+            lines.append("- MACD 多头运行（DIF > DEA，柱状图为正）")
+        elif direction == "看空":
+            lines.append("- MACD 空头运行（DIF < DEA，柱状图为负）")
+        lines.append("")
 
     # ── RSI (14) ──
     period = 14
@@ -699,11 +721,18 @@ def fetch(ticker: str, count: int = 120) -> Dict[str, Any]:
             except Exception:
                 ti_report = "技术指标计算失败"
 
+            # Pre-compute MACD structured data (for TypeScript extraction)
+            try:
+                macd_structured = compute_macd(data.get("data", []))
+            except Exception:
+                macd_structured = None
+
             return {
                 "success": True,
                 "data": data,
                 "vpa": vpa_report,
                 "technical_indicators": ti_report,
+                "macd": macd_structured,
                 "_source": source
             }
         except DataFetchError as e:

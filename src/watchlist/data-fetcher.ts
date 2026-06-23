@@ -1,5 +1,5 @@
 import * as path from "path";
-import type { StockData, NewsItem, NewsLayerStats, HotMoneyData, QuarterlyTrend, ConsensusEps, LockupData, LockupItem, ReduceHolding } from "./shallow-analyzer";
+import type { StockData, MacdData, NewsItem, NewsLayerStats, HotMoneyData, QuarterlyTrend, ConsensusEps, LockupData, LockupItem, ReduceHolding } from "./shallow-analyzer";
 import type { SourceCall } from "../types";
 import { execSkillScript } from "../exec-python";
 
@@ -347,9 +347,10 @@ export async function fetchStockData(
   ];
   const [klineR, newsR, hotR, fundR, lockupR] = await Promise.all(tasks);
 
-  // klineR 是 {data, vpa}（safeCall 改造后）；其余只有 data
+  // klineR 是 {data, vpa, macd}（safeCall 改造后）；其余只有 data
   const klineRaw = klineR?.data ?? null;
   const vpaText = klineR?.vpa;
+  const macdData = klineR?.macd;
   const kline = klineRaw ? parseKline(klineRaw) : { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 };
   const news = newsR?.data ? parseNews(newsR.data) : [];
   const newsLayerStats = newsR?.data ? parseNewsLayerStats(newsR.data) ?? undefined : undefined;
@@ -373,6 +374,7 @@ export async function fetchStockData(
     fundamentals: fund,
     ranker_thesis: rankerThesis,
     vpa_text: vpaText,  // kline.py 预计算的 VPA 量价背离结论，undefined 则不注入
+    macd: macdData,  // kline.py 预计算的 MACD 结构化数据，undefined 则不注入
     news_layer_stats: newsLayerStats,  // news.py layer_stats，undefined 则不注入
     lockup,  // lockup.py 解禁+减持，undefined（拉取失败/无数据）则 risk prompt 省略解禁段
     calls: allCalls.length > 0 ? allCalls : undefined,
@@ -383,13 +385,14 @@ export async function fetchStockData(
  *  返回 {data, vpa?, calls?} —— data 是脚本主输出，vpa 是 kline.py 额外的量价预计算文本
  *  （exec-python.ts:280 提到顶层），calls 是子源级调用记录。
  *  非 kline 脚本无 vpa，该字段 undefined。 */
-async function safeCall(fn: () => Promise<any>): Promise<{ data: any; vpa?: string; calls?: SourceCall[] } | null> {
+async function safeCall(fn: () => Promise<any>): Promise<{ data: any; vpa?: string; macd?: MacdData; calls?: SourceCall[] } | null> {
   try {
     const result = await fn();
     if (!result || !result.success) return null;
     return {
       data: result.data,
       vpa: typeof result.vpa === "string" ? result.vpa : undefined,
+      macd: (result.macd && typeof result.macd === "object" && typeof result.macd.dif === "number") ? result.macd as MacdData : undefined,
       calls: Array.isArray(result.calls) ? result.calls as SourceCall[] : undefined,
     };
   } catch {
