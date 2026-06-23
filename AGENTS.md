@@ -97,8 +97,8 @@ LLM outputs embed structured verdicts as HTML comments:
 ## Config
 
 `TradingAgentsConfig` fields (`src/types.ts`, defaults in `src/index.ts`):
-- `models.analyst/debater/decision/risk` — model per role (default: `glm-4.7-flash`/`glm-4.7`)
-- `models.decision_deep` — optional stronger model for research manager + risk manager gatekeepers (falls back to `decision`/`risk`)
+- `models.analyst/debater/decision/risk` — model per role (default: `glm-5-turbo`/`glm-5.2`)
+- `models.decision_deep` — stronger model for research manager + risk manager gatekeepers (default: `glm-5.2`, falls back to `decision`/`risk`)
 - `debate_rounds` (2), `risk_debate_rounds` (1), `max_risk_retries` (1)
 - `report_dir` (`~/.openclaw/trading-reports`), `llm_concurrency` (3)
 

@@ -52,10 +52,13 @@
 |------|------|------|
 | 第一期 | 分层管道（universe/raw/diff/derived）+ 雪球异动全扫 + diff + 候选排序 | ✅ 已完成 |
 | 交易日处理 | data_date 驱动（解决节假日/盘中跑错数据）+ 幂等 + raw 不可变 | ✅ 已完成（2026-06-18） |
+| 第二期-L4 | LLM 精排 ranker（LONG/SHORT 双组 + 强制分布 + 反模糊词），178 候选→top-15 | ✅ 已完成（2026-06-21） |
+| 第二期-L5 | Portfolio Rebalancer（ranker top-N + 持仓 → BUY/SELL/ADD/REDUCE/HOLD，11 条硬约束 + revise loop + 公式驱动仓位） | ✅ 已完成（2026-06-23，见 [`rebalancer-pipeline.zh.md`](rebalancer-pipeline.zh.md)） |
+| Fitness 回测 | 决策快照采集 + 懒结算事后收益，验证 fitness 预测力 | ✅ 已完成（2026-06-23，铺路阶段，1 个月后出统计） |
+| 第二期-其他 | LLM 行业归类、板块共振聚合、全自动 cron 调度 | ⏳ 待规划 |
 | 保留策略 | raw 膨胀（32M/天≈8GB/年）→ 留 N 天 + gzip | ⏳ 未来（暂不处理，当前 64M） |
-| 第二期 | LLM 行业归类、板块共振聚合、全自动 cron 调度 | ⏳ 待规划 |
 
-设计：[`superpowers/specs/2026-06-17-watchlist-stock-pool-design.md`](superpowers/specs/2026-06-17-watchlist-stock-pool-design.md) + [`superpowers/specs/2026-06-18-trading-day-handling-design.md`](superpowers/specs/2026-06-18-trading-day-handling-design.md)
+设计：[`superpowers/specs/2026-06-17-watchlist-stock-pool-design.md`](superpowers/specs/2026-06-17-watchlist-stock-pool-design.md) + [`superpowers/specs/2026-06-18-trading-day-handling-design.md`](superpowers/specs/2026-06-18-trading-day-handling-design.md) + [`superpowers/specs/2026-06-18-llm-ranking-design.md`](superpowers/specs/2026-06-18-llm-ranking-design.md) + [`superpowers/specs/2026-06-21-stockpool-rebalancer-design.md`](superpowers/specs/2026-06-21-stockpool-rebalancer-design.md)
 
 ---
 
@@ -63,11 +66,11 @@
 
 | # | 方向 | 说明 |
 |---|------|------|
-| 1 | 多标的组合分析 | 同时分析多只股票，输出组合配置建议 |
-| 2 | 历史回测 | 用历史数据验证分析质量，优化参数 |
+| 1 | 多标的组合分析 | ✅ 已落地为 watchlist 子系统 L4-5（ranker + rebalancer），见上方"股票池自动维护" |
+| 2 | 历史回测 | 🟡 基础已铺（fitness-backtest 决策快照 + 懒结算事后收益），全量参数回测仍待做 |
 | 3 | OpenClaw 集成增强 | 定时任务、通知推送、对话式交互 |
 | 4 | 数据源增强 | Level2 行情、融资融券、ETF 资金流 |
-| 5 | 多模型策略 | 不同阶段用不同质量模型，优化成本 |
+| 5 | 多模型策略 | ✅ 已落地（analyst 用 glm-5-turbo，决策/风控/复核用 glm-5.2），见 [`architecture.zh.md`](architecture.zh.md) §配置 |
 
 ---
 
