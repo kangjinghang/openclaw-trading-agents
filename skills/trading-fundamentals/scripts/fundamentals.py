@@ -9,9 +9,62 @@ import os
 
 # Add parent skills dir to path for shared imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
-from http_helpers import tencent_quote, em_get, output_json, normalize_ticker, record_error, record_call
+from http_helpers import tencent_quote, em_get, output_json, normalize_ticker, record_error, record_call, pywencai_query
 import time
 from datetime import datetime, timedelta
+
+
+# ── 同花顺问财 8 项能力评分 ──────────────────────────────────────────
+# Borrowed from aiagents-stock main_force_selector.py — these are 同花顺 iFinD
+# exclusive scores that akshare/tushare don't expose. 8 dimensions cover the
+# full fundamental quality picture (盈利/成长/营运/偿债/现金流/资产质量/流动性/
+# 资本充足性). Query is single-stock oriented (aiagents-stock batches 100 stocks;
+# we analyze one). pywencai is an optional dependency → graceful degrade.
+
+# 中文列名 → 结构化 key 映射（问财返回的列名带"评分"后缀，且可能带日期戳）
+_CAPABILITY_FIELDS = {
+    "盈利能力": "profitability",
+    "成长能力": "growth",
+    "营运能力": "operation",
+    "偿债能力": "solvency",
+    "现金流": "cash_flow",
+    "资产质量": "asset_quality",
+    "流动性": "liquidity",
+    "资本充足性": "capital_adequacy",
+}
+
+
+def _fetch_capability_scores(code):
+    """Fetch 8-dimension capability scores from 同花顺问财 (pywencai).
+
+    Returns a dict {english_key: {"score": float|str, "label": 中文}} on success,
+    None when pywencai is unavailable / query fails / returns nothing. Scores
+    are 同花顺 0-100 ratings; non-numeric values are kept as-is (问财 sometimes
+    returns letter grades for uncovered stocks).
+    """
+    rows = pywencai_query(
+        f"{code} 盈利能力评分，成长能力评分，营运能力评分，偿债能力评分，"
+        f"现金流评分，资产质量评分，流动性评分，资本充足性评分"
+    )
+    if not rows:
+        return None
+
+    row = rows[0]
+    result = {}
+    for cn_prefix, en_key in _CAPABILITY_FIELDS.items():
+        # 问财列名形如 "盈利能力评分" 或 "盈利能力评分[20241231]"，前缀匹配
+        matched_col = next((col for col in row if cn_prefix in str(col)), None)
+        if matched_col is not None:
+            val = row[matched_col]
+            # 尝试转 float（多数是数值评分），失败则保留原值（字母评级/空）
+            try:
+                val = float(val)
+            except (TypeError, ValueError):
+                val = str(val) if val is not None and str(val) != "nan" else None
+            if val is not None:
+                result[en_key] = {"score": val, "label": cn_prefix}
+
+    return result if result else None
 
 
 def fetch_fundamentals(ticker, date):
@@ -234,6 +287,22 @@ def fetch_fundamentals(ticker, date):
         record_call("fundamentals/market_sentiment", success=False, error=str(e),
                     duration_ms=(time.monotonic() - start) * 1000)
         data["market_sentiment_extra_error"] = str(e)
+
+    # 10. 同花顺问财 8 项能力评分（盈利/成长/营运/偿债/现金流/资产质量/流动性/资本充足性）。
+    #    同花顺 iFinD 独家评分，akshare/tushare 均不提供，补基本面"综合质地"盲区——
+    #    与前 9 块的绝对财务指标互补（8 项评分是相对同业百分位）。pywencai 是可选依赖，
+    #    未装/查询失败 graceful degrade（不阻塞其他 9 块）。
+    start = time.monotonic()
+    try:
+        cap = _fetch_capability_scores(code)
+        data["capability_scores"] = cap
+        record_call("fundamentals/pywencai_capability", success=cap is not None,
+                    error=None if cap else "pywencai unavailable or no scores",
+                    duration_ms=(time.monotonic() - start) * 1000)
+    except Exception as e:
+        record_call("fundamentals/pywencai_capability", success=False, error=str(e),
+                    duration_ms=(time.monotonic() - start) * 1000)
+        data["capability_scores_error"] = str(e)
 
     return data
 

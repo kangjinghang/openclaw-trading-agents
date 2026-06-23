@@ -11,6 +11,11 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
 from http_helpers import em_get, output_json, normalize_ticker, record_call
 
+# news.py lives in a sibling skill dir; import it to reuse _fetch_macro_nbs /
+# _build_macro_sector_view (single source of truth for the macro→sector engine).
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "trading-news", "scripts"))
+from news import _fetch_macro_nbs, _build_macro_sector_view  # noqa: E402
+
 _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
 
@@ -142,6 +147,18 @@ def fetch_policy(ticker, date, lookback_days=30):
 
     data["macro_policy_news"] = macro_articles
     data["macro_policy_source"] = macro_source
+
+    # NBS 宏观指标 + 板块映射：lookback_days >= 14 时触发（policy 默认 30）。
+    # 复用 news.py 的引擎（单一真相源），政策分析师据此判断宏观环境对板块的
+    # 结构性影响。拉取失败 graceful degrade（不输出 macro_indicators/sector_view）。
+    if lookback_days >= 14:
+        try:
+            indicators = _fetch_macro_nbs()
+            if indicators:
+                data["macro_indicators"] = indicators
+                data["sector_view"] = _build_macro_sector_view(indicators)
+        except Exception as e:
+            data["macro_indicators_error"] = str(e)
 
     return data
 

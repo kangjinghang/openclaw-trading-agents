@@ -30,6 +30,13 @@
 
 {{macro_news}}
 
+## 宏观指标与板块视图（如可用）
+
+> 仅在 `lookback_days >= 14` 时由 news.py 输出（默认 news 角色 lookback=7 不输出）；以下字段缺省即视为未触发，无需标注缺失。
+
+- `macro_indicators`：国家统计局核心宏观指标（akshare 获取），每项为 `{latest, label}`，常见 key：`gdp_yoy`/`cpi_yoy`/`ppi_yoy`/`manufacturing_pmi`/`non_manufacturing_pmi`/`m2_yoy`（部分指标 akshare 未覆盖时缺省）
+- `sector_view`：宏观→板块规则映射引擎输出，含 `total_score`（板块总分，正=偏多）/`market_view`（震荡偏多/结构性机会为主/震荡偏谨慎）/`bullish_sectors`（受益板块列表）/`bearish_sectors`（承压板块列表）/`indicators_used`（实际命中的指标）/`sector_scores`（top10 板块得分）
+
 ## 数据质量
 
 {{data_quality}}

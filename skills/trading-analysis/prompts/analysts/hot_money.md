@@ -23,6 +23,7 @@
 - `sector_fund_flow`：行业板块主力资金流排名（板块轮动信号），含 `inflow_top`（净流入 top8，当日主线）、`outflow_top`（净流出 top8，弱势区）、`total_boards`（板块总数）；每项含 `name` / `main_net_yi`（亿元）/ `super_net_yi`（超大单亿元）/ `main_net_pct`（主力净流入占比%）/ `change_pct`（板块涨跌幅%）
 - `hot_stocks`：当日热门股（同花顺）
 - `dragon_tiger`：龙虎榜（30 天内）
+- `dragon_tiger_score`：龙虎榜五维评分（如 `dragon_tiger` 非空时计算，否则为 `null`），每条上榜记录含 `composite_score`（综合分 0-100，封顶）+ 5 个子维度：`capital_quality`（资金含金量 0-30，知名游资如赵老哥/章盟主=10，机构=5，普通=1.5）、`net_inflow`（净买入额 0-25，按万元分段）、`sell_pressure`（卖出压力 0-20，卖压越小分越高）、`institution_resonance`（机构共振 0-15，机构+游资同现=15 最高）、`bonus`（加分项 0-10，热门概念/买卖比优秀/大额买入）。注：评分基于龙虎榜 `reason` 文本做游资/机构/概念关键词匹配，是辅助量化信号而非绝对排名
 
 {{hot_money}}
 
@@ -52,6 +53,7 @@
 - 上榜原因（如：日涨幅偏离值达 7%、日换手率达 20% 等）
 - 龙虎榜净买入金额、买入额、卖出额
 - 上榜日涨跌幅与换手率
+- **五维评分解读**（引用 `dragon_tiger_score`，如非空）：综合分 `composite_score` 高低 + 亮点维度（如 `capital_quality` 高=知名游资介入、`institution_resonance` 高=机构游资共振、`bonus` 高=踩中热门概念）；若综合分低但某维度突出（如卖压极低），须分别说明
 - 若无上榜记录，明确说明"近 30 日无龙虎榜数据"（非异动日属正常）
 
 ### 5. 热门题材

@@ -200,6 +200,129 @@ def _fetch_dragon_tiger(code, date, lookback=30):
         return []
 
 
+# ── Dragon-tiger 5-dimension scoring ────────────────────────────────
+# Borrowed from aiagents-stock's LonghubangScoring. The upstream version keys
+# off dedicated 游资名称/营业部/概念 columns, but our dragon-tiger records (see
+# _fetch_dragon_tiger) carry a single free-text `reason` field that folds seat
+# names and concepts together (e.g. "赵老哥买入AI芯片"). So scoring matches
+# keyword lists against that text. 5 dimensions, composite capped at 100.
+
+_KNOWN_HOT_MONEY = frozenset({
+    "赵老哥", "章盟主", "92科比", "瑞鹤仙", "小鳄鱼", "养家心法", "欢乐海岸",
+    "古北路", "成都系", "佛山系", "方新侠", "乔帮主", "淮海路",
+    "国信深圳", "华泰深圳", "中信杭州", "招商深圳",
+})
+
+_INSTITUTION_KEYWORDS = frozenset({
+    "机构专用", "机构", "基金", "保险", "社保", "QFII", "RQFII", "券商", "信托",
+})
+
+_HOT_CONCEPTS = frozenset({
+    "人工智能", "AI", "ChatGPT", "算力", "新能源", "芯片", "半导体",
+    "军工", "医药", "消费", "5G", "新材料", "量子", "光伏", "储能",
+    "锂电池", "汽车", "游戏", "传媒", "元宇宙", "数据要素", "低空经济",
+    "机器人", "华为", "卫星", "光刻",
+})
+
+
+def _score_dragon_tiger(records):
+    """Score dragon-tiger records on 5 dimensions (0-100, composite capped).
+
+    Each record carries a free-text ``reason`` (seat names + concepts), plus
+    ``net_buy``/``buy_amt``/``sell_amt`` in 万元. Returns a list of scored
+    dicts sorted by composite_score descending, or None when records is empty.
+
+    Dimensions (mirroring aiagents-stock LonghubangScoring):
+      1. 资金含金量 (capital_quality, 30pts): known hot-money +10, institution +5, else +1.5
+      2. 净买入额 (net_inflow, 25pts): tiered by 万元 magnitude
+      3. 卖出压力 (sell_pressure, 20pts): inverse of sell/buy ratio
+      4. 机构共振 (institution_resonance, 15pts): institution+hot-money > institution > hot-money
+      5. 加分项 (bonus, 10pts): hot concepts + net-buy ratio + large buy
+    """
+    if not records:
+        return None
+
+    scored = []
+    for rec in records:
+        net_buy = rec.get("net_buy", 0) or 0
+        buy_amt = rec.get("buy_amt", 0) or 0
+        sell_amt = rec.get("sell_amt", 0) or 0
+        reason = str(rec.get("reason", ""))
+
+        scores = {}
+
+        # 1. 资金含金量 (0-30): text-scan reason for known names
+        quality = 1.5  # ordinary baseline
+        for name in _KNOWN_HOT_MONEY:
+            if name in reason:
+                quality = max(quality, 10.0)
+        for kw in _INSTITUTION_KEYWORDS:
+            if kw in reason:
+                quality = max(quality, 5.0)
+        scores["capital_quality"] = round(min(quality, 30), 1)
+
+        # 2. 净买入额 (0-25): tiered by 万元 (net_buy is already in 万元)
+        if net_buy < 1000:
+            inflow_pts = net_buy / 1000 * 10
+        elif net_buy < 5000:
+            inflow_pts = 10 + (net_buy - 1000) / 4000 * 8
+        elif net_buy < 10000:
+            inflow_pts = 18 + (net_buy - 5000) / 5000 * 4
+        else:
+            inflow_pts = 22 + min((net_buy - 10000) / 10000 * 3, 3)
+        scores["net_inflow"] = round(max(0.0, min(inflow_pts, 25)), 1)
+
+        # 3. 卖出压力 (0-20): inverse of sell/buy ratio
+        if buy_amt > 0:
+            sell_ratio = sell_amt / buy_amt
+            if sell_ratio < 0.1:
+                pressure_pts = 20.0
+            elif sell_ratio < 0.3:
+                pressure_pts = 20.0 - (sell_ratio - 0.1) / 0.2 * 5
+            elif sell_ratio < 0.5:
+                pressure_pts = 15.0 - (sell_ratio - 0.3) / 0.2 * 5
+            elif sell_ratio < 0.8:
+                pressure_pts = 10.0 - (sell_ratio - 0.5) / 0.3 * 5
+            else:
+                pressure_pts = 5.0 - min(sell_ratio - 0.8, 0.2) / 0.2 * 5
+        else:
+            pressure_pts = 0.0
+        scores["sell_pressure"] = round(max(0.0, min(pressure_pts, 20)), 1)
+
+        # 4. 机构共振 (0-15)
+        has_institution = any(kw in reason for kw in _INSTITUTION_KEYWORDS)
+        has_hot_money = any(name in reason for name in _KNOWN_HOT_MONEY)
+        if has_institution and has_hot_money:
+            resonance = 15.0
+        elif has_institution:
+            resonance = 10.0
+        elif has_hot_money:
+            resonance = 7.0
+        else:
+            resonance = 3.0
+        scores["institution_resonance"] = round(resonance, 1)
+
+        # 5. 加分项 (0-10): hot concepts + net-buy ratio + large buy
+        bonus = 0.0
+        bonus += min(sum(1 for c in _HOT_CONCEPTS if c in reason) * 0.3, 3.0)
+        if net_buy > 0 and buy_amt > 0:
+            ratio = net_buy / buy_amt
+            if ratio > 0.8:
+                bonus += 2.0
+            elif ratio > 0.5:
+                bonus += 1.0
+        if buy_amt > 5000:  # 单席买入 > 5000万
+            bonus += 1.0
+        scores["bonus"] = round(min(bonus, 10), 1)
+
+        composite = round(min(sum(scores.values()), 100), 1)
+        scores["composite_score"] = composite
+        scored.append(scores)
+
+    scored.sort(key=lambda x: x["composite_score"], reverse=True)
+    return scored
+
+
 def _fetch_sector_fund_flow(top_n=8):
     """Fetch industry board fund-flow ranking (主力净流入) from 东财 push2.
 
@@ -264,6 +387,9 @@ def fetch_hot_money(ticker, date):
     data["sector_fund_flow"] = _fetch_sector_fund_flow()
     data["hot_stocks"] = _fetch_hot_stocks(date)
     data["dragon_tiger"] = _fetch_dragon_tiger(code, date)
+    # 5-dimension quality scoring of dragon-tiger appearances (None when no
+    # appearances — downstream should treat absence as "no signal", not an error).
+    data["dragon_tiger_score"] = _score_dragon_tiger(data.get("dragon_tiger") or [])
 
     return data
 

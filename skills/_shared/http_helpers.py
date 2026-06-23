@@ -278,3 +278,81 @@ def normalize_ticker(symbol):
             s = s[len(prefix):]
             break
     return re.sub(r"[^0-9]", "", s)
+
+
+# ── pywencai natural language query ─────────────────────────────────
+def pywencai_query(query, loop=True):
+    """Natural language query via pywencai (同花顺问财).
+
+    pywencai is an OPTIONAL dependency — when not installed this returns None
+    so callers can graceful-degrade (the rest of the script's data sources keep
+    working). Returns list[dict] on success, [] on an empty result, or None on
+    import failure / exception (so callers can distinguish "no pywencai" from
+    "query returned nothing").
+
+    pywencai.get returns several shapes depending on the query; this normalizes
+    DataFrame / list / nested-dict (tableV1|data|result) / None all into a flat
+    list[dict].
+    """
+    start = time.monotonic()
+    try:
+        import pywencai
+    except ImportError:
+        record_call("pywencai", success=False, error="pywencai not installed",
+                    duration_ms=(time.monotonic() - start) * 1000)
+        return None
+
+    try:
+        # NOTE: pywencai.get signature is (loop=False, **kwargs) — the query
+        # goes through **kwargs as `query=`, NOT as the first positional arg
+        # (which would bind to `loop`). aiagents-stock uses get(query=q, loop=True).
+        raw = pywencai.get(query=query, loop=loop)
+    except Exception as e:
+        record_call("pywencai", success=False, error=str(e),
+                    duration_ms=(time.monotonic() - start) * 1000)
+        return None
+
+    # Unwrap nested dict carriers (pywencai wraps the table under varying keys:
+    # tableV1 for tabular queries, news_list1 for news, etc.). Prefer the
+    # known keys, then fall back to the first list/DataFrame value found.
+    # Carrier value is typically a DataFrame (real usage) but tests stub a list.
+    if isinstance(raw, dict):
+        unwrapped = False
+        for key in ("tableV1", "data", "result"):
+            inner = raw.get(key)
+            if isinstance(inner, list) or hasattr(inner, "to_dict"):
+                raw = inner
+                unwrapped = True
+                break
+        if not unwrapped:
+            # Generic fallback: first list/DataFrame value (e.g. news_list1)
+            for v in raw.values():
+                if isinstance(v, list) and v:
+                    raw = v
+                    unwrapped = True
+                    break
+                if hasattr(v, "to_dict"):
+                    raw = v
+                    unwrapped = True
+                    break
+
+    # Empty DataFrame / None → empty list (a valid "no rows" result, not an error)
+    if raw is None:
+        record_call("pywencai", success=True, error="empty result",
+                    duration_ms=(time.monotonic() - start) * 1000)
+        return []
+    if hasattr(raw, "empty") and raw.empty:
+        record_call("pywencai", success=True, error="empty result",
+                    duration_ms=(time.monotonic() - start) * 1000)
+        return []
+
+    if hasattr(raw, "to_dict"):
+        result = raw.to_dict("records")
+    elif isinstance(raw, list):
+        result = raw
+    else:
+        result = [raw]
+
+    record_call("pywencai", success=True,
+                duration_ms=(time.monotonic() - start) * 1000)
+    return result

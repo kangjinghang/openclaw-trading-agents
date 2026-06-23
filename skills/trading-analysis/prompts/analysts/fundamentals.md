@@ -23,6 +23,8 @@
 - `quarterly_trends`：最近 4 季度营收/净利/EPS/同比/ROE/毛利率趋势
 - `consensus_eps`：机构一致预期，含 `forecast_years`（4 年 EPS 预测，`type` 标 A=实际/E=预测）、`consensus_eps_current`（当期）、`consensus_eps_next`（次年）、`eps_growth_pct`（预期增速%）、`forward_pe`（远期市盈率=现价/次年 EPS）、`peg`（=PE_TTM/预期增速，仅正增长时给出）、`target_price_min/max`（目标价区间）、`ratings`（评级分布）、`analyst_count`（覆盖机构数）
 - `financial_health`：三大报表派生的财务健康（最近 4 期 `periods[]`，每期含 `goodwill_yi`/`goodwill_to_equity_pct`（商誉占归母权益比，>30% 视为减值风险）、`debt_ratio_pct`（资产负债率）、`current_ratio`/`quick_ratio`（流动/速动比率）、`ocf_yi`/`capex_yi`/`fcf_yi`（经营现金流/资本开支/自由现金流）、`net_profit_parent_yi`（归母净利）、`ocf_to_ni_ratio`（经营现金流/归母净利，盈利质量））；每期 `period_type`（Q1/H1/Q3/FY）标明累计期间长度；顶层 `goodwill_impairment_risk`（bool）、`ocf_quality`（good≥1 / ok≥0.5 / weak<0.5）为预判标记
+- `market_sentiment_extra`：市场情绪辅助指标（如可用），含 `arbr`（AR/BR 值及买卖信号 AR>150 超买/AR<70 超卖/BR>300 超买/BR<50 超卖）和 `turnover`（换手率及解读区间 低迷/正常/活跃/高度活跃/异常活跃）。注：此数据仅供交叉验证，不作为估值判断主依据
+- `capability_scores`：同花顺问财能力评分（如可用，iFinD 独家数据），含 `profitability`（盈利能力）、`growth`（成长能力）、`operation`（营运能力）、`solvency`（偿债能力）、`cash_flow`（现金流）、`asset_quality`（资产质量），部分股票另有 `liquidity`（流动性）、`capital_adequacy`（资本充足性）。每项 `score` 为 **0-5 星制**的相对同业评分（5=优秀，4.5=良好，4=中上，3=中等，<3=偏弱）。注：这是**相对评分**（同业星级）而非绝对财务指标，与 PE/ROE 等绝对值互补——高星 = 在同业中质地优秀。问财按查询时点返回，项数因股票而异
 
 {{fundamentals}}
 
@@ -67,6 +69,14 @@
 ### 5. 估值评价
 - 当前估值处于历史分位（高估/合理/低估）
 - 与同行业可比公司对比
+
+### 6. 综合能力评分（引用 `capability_scores`，如可用）
+
+> **若 `capability_scores` 为 `null`（pywencai 未安装或查询失败）**：跳过本节即可，无需标注缺失——这是增强数据，非核心必采项。
+
+- 列出问财返回的各项评分（0-5 星制，项数因股票而异，常见 6 项：盈利/成长/营运/偿债/现金流/资产质量），标注相对同业水平（5 星=优秀，4.5=良好，4=中上，<4=偏弱）
+- 识别短板（星数最低的 1-2 项）与亮点（最高的 1-2 项），并说明对投资判断的影响
+- 与前述绝对财务指标交叉验证（如 `solvency` 低星应与 `debt_ratio_pct` 偏高一致；`growth` 高星应与 `eps_growth_pct` 正增长一致）；若相对评分与绝对指标矛盾，须指出并分析原因
 
 ## 输出格式
 
