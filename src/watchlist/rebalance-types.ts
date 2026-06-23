@@ -67,6 +67,10 @@ export interface StockReport {
   days_held: number;               // is_held=false → 0
   locked: boolean;                 // is_held=false → false
   ranker_score?: number;
+  /** 确定性质量门控标注（applyQualityGate 产物，空则不输出）。
+   *  例：["fitness 8→6（PE=0 数据缺失封顶）"]。和 position_traces 同源，
+   *  让 fitness 也可溯源（"为什么这只股从 8 分变 6 分"）。 */
+  quality_notes?: string[];
 }
 
 // ═══ rebalancer 产物 ═══

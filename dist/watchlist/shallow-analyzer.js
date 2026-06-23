@@ -10,6 +10,7 @@ exports.parseRiskReport = parseRiskReport;
 exports.buildStockReport = buildStockReport;
 exports.buildFallbackReport = buildFallbackReport;
 exports.analyzeAll = analyzeAll;
+const quality_gate_1 = require("./quality-gate");
 const ANALYST_PROMPT_TEMPLATE = `# 角色
 你是 A 股证券分析师，对单只股票做综合评估。
 
@@ -372,9 +373,13 @@ function parseRiskReport(content) {
         deal_breaker: o.deal_breaker === true,
     };
 }
-/** 合并 candidate meta + analyst report + risk report → 完整 StockReport。 */
-function buildStockReport(meta, sector, analyst, risk) {
-    return {
+/** 合并 candidate meta + analyst report + risk report → 完整 StockReport。
+ *
+ *  qualityNotes（可选）：确定性质量门控 applyQualityGate 的产物。传入则落
+ *  StockReport.quality_notes，便于复盘"为什么这只股 fitness 从 8 变 6"。
+ *  空数组或 undefined → 不写该字段（保持 plan.json 简洁）。 */
+function buildStockReport(meta, sector, analyst, risk, qualityNotes) {
+    const report = {
         ticker: meta.ticker,
         name: meta.name,
         sector,
@@ -391,6 +396,10 @@ function buildStockReport(meta, sector, analyst, risk) {
         locked: meta.locked,
         ranker_score: meta.ranker_score,
     };
+    if (qualityNotes && qualityNotes.length > 0) {
+        report.quality_notes = qualityNotes;
+    }
+    return report;
 }
 /** 持仓股 shallow-analyzer 失败时的保守默认 report。
  *
@@ -459,7 +468,10 @@ async function analyzeAll(metas, dataByTicker, caller, concurrency = 3) {
                         results.push(meta.is_held ? buildFallbackReport(meta, data.sector, "risk-role 返回非 JSON") : null);
                         continue;
                     }
-                    results.push(buildStockReport(meta, data.sector, analyst, risk));
+                    // 确定性质量门控（内联守卫，非新阶段）：钳制 fitness/risk + 标注 issue。
+                    // 必须在 buildStockReport 前，让 clamp 后的值进 position-calculator 公式。
+                    const gated = (0, quality_gate_1.applyQualityGate)(analyst, risk, data);
+                    results.push(buildStockReport(meta, data.sector, gated.analyst, gated.risk, gated.issues));
                 }
                 catch (e) {
                     const reason = e instanceof Error ? e.message : String(e);

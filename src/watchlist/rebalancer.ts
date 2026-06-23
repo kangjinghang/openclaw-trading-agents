@@ -131,6 +131,9 @@ function formatReportLine(r: StockReport): string {
     `风险: ${flagStr}`,
     `关键信号: ${r.key_signals.join("; ") || "无"}`,
     r.ranker_score !== undefined ? `ranker_score: ${r.ranker_score}` : "",
+    // 质量门控标注：让 rebalancer LLM 知道 fitness 被代码钳制过（避免困惑/二次质疑）。
+    // 与 position_traces 的溯源精神一致——可解释性贯穿全链路。
+    r.quality_notes && r.quality_notes.length > 0 ? `质量门控: ${r.quality_notes.join("; ")}` : "",
   ].filter(Boolean).join("\n");
 }
 

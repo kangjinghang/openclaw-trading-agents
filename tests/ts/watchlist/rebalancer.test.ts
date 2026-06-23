@@ -269,7 +269,8 @@ describe("rebalancePipeline (integration)", () => {
     const holdings: Holdings = { updated_at: "x", cash_pct: 0.10, positions: [] };
 
     const dataByTicker = new Map<string, StockData>([
-      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "电子", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01 }, news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0 } }],
+      // PE/净利 非零：让 fitness=9 不被质量门控钳制，纯测现金排队降级路径
+      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "电子", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01 }, news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 30, pb: 5, rev_q1: 1e9, np_q1: 1e8 } }],
     ]);
 
     const shallowCaller: ShallowLlmCaller = async ({ role }) => {

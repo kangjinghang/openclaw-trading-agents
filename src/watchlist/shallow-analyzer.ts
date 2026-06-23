@@ -1,5 +1,6 @@
 import type { AnalystReport, RiskFlag, RiskReport, StockReport } from "./rebalance-types";
 import type { CandidateMeta } from "./candidate-selector";
+import { applyQualityGate } from "./quality-gate";
 
 export type ShallowLlmCaller = (input: {
   role: "analyst" | "risk";
@@ -442,14 +443,19 @@ export function parseRiskReport(content: string): RiskReport | null {
   };
 }
 
-/** 合并 candidate meta + analyst report + risk report → 完整 StockReport。 */
+/** 合并 candidate meta + analyst report + risk report → 完整 StockReport。
+ *
+ *  qualityNotes（可选）：确定性质量门控 applyQualityGate 的产物。传入则落
+ *  StockReport.quality_notes，便于复盘"为什么这只股 fitness 从 8 变 6"。
+ *  空数组或 undefined → 不写该字段（保持 plan.json 简洁）。 */
 export function buildStockReport(
   meta: CandidateMeta,
   sector: string,
   analyst: AnalystReport,
   risk: RiskReport,
+  qualityNotes?: string[],
 ): StockReport {
-  return {
+  const report: StockReport = {
     ticker: meta.ticker,
     name: meta.name,
     sector,
@@ -466,6 +472,10 @@ export function buildStockReport(
     locked: meta.locked,
     ranker_score: meta.ranker_score,
   };
+  if (qualityNotes && qualityNotes.length > 0) {
+    report.quality_notes = qualityNotes;
+  }
+  return report;
 }
 
 /** 持仓股 shallow-analyzer 失败时的保守默认 report。
@@ -545,7 +555,10 @@ export async function analyzeAll(
             results.push(meta.is_held ? buildFallbackReport(meta, data.sector, "risk-role 返回非 JSON") : null);
             continue;
           }
-          results.push(buildStockReport(meta, data.sector, analyst, risk));
+          // 确定性质量门控（内联守卫，非新阶段）：钳制 fitness/risk + 标注 issue。
+          // 必须在 buildStockReport 前，让 clamp 后的值进 position-calculator 公式。
+          const gated = applyQualityGate(analyst, risk, data);
+          results.push(buildStockReport(meta, data.sector, gated.analyst, gated.risk, gated.issues));
         } catch (e) {
           const reason = e instanceof Error ? e.message : String(e);
           results.push(meta.is_held ? buildFallbackReport(meta, data.sector, `LLM 调用异常：${reason}`) : null);

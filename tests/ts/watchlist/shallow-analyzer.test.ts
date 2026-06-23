@@ -218,6 +218,84 @@ describe("buildStockReport", () => {
       overall_risk: "medium",
     });
   });
+
+  it("qualityNotes 参数 → 落 StockReport.quality_notes", () => {
+    const report = buildStockReport(
+      { ticker: "X", name: "x", is_held: false, current_weight: 0, days_held: 0, locked: false },
+      "x",
+      { thesis: "x", fitness_score: 6, data_freshness: "", key_signals: [], data_gaps: [] },
+      { risk_flags: [], overall_risk: "low", deal_breaker: false },
+      ["fitness 8→6（PE=0 数据缺失封顶）"],
+    );
+    expect(report.quality_notes).toEqual(["fitness 8→6（PE=0 数据缺失封顶）"]);
+  });
+
+  it("不传 qualityNotes 或空数组 → 不写 quality_notes（向后兼容）", () => {
+    const base = {
+      ticker: "X", name: "x", is_held: false, current_weight: 0, days_held: 0, locked: false,
+    };
+    const analyst = { thesis: "x", fitness_score: 8, data_freshness: "", key_signals: [], data_gaps: [] };
+    const risk = { risk_flags: [], overall_risk: "low", deal_breaker: false };
+    expect(buildStockReport(base, "x", analyst, risk).quality_notes).toBeUndefined();
+    expect(buildStockReport(base, "x", analyst, risk, []).quality_notes).toBeUndefined();
+  });
+});
+
+// ── 确定性质量门控集成（analyzeAll 端到端）──────────────────
+// 核心价值点：LLM 编造数据给高 fitness，gate 基于真实 StockData 钳制，
+// 切断「幻觉数据 → 错误 fitness → 错误仓位」链路。
+describe("analyzeAll 确定性质量门控集成", () => {
+  it("LLM 给 fitness=8 但 StockData PE=0 → 产出 fitness=6 + quality_notes 非空", async () => {
+    const metas: CandidateMeta[] = [
+      { ticker: "HALL", name: "幻觉股", is_held: false, current_weight: 0, days_held: 0, locked: false },
+    ];
+    const dataByTicker = new Map<string, StockData>([
+      // PE=0（数据缺失），但 LLM 仍给 fitness=8
+      ["HALL", {
+        ticker: "HALL", name: "幻觉股", sector: "电子",
+        kline: { pct_5d: 1, pct_20d: 2, support: 1, resistance: 2, volatility_20d: 0.02, volume_ratio_5_20: 1.0 },
+        news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" },
+        fundamentals: { pe: 0, pb: 5, rev_q1: 1e9, np_q1: 1e8, industry: "电子" },
+      }],
+    ]);
+    const mockCaller: ShallowLlmCaller = async ({ role }) => {
+      if (role === "analyst") {
+        return JSON.stringify({ thesis: "业绩大增订单饱满", fitness_score: 8, data_freshness: "2026-06-21", key_signals: [], data_gaps: [] });
+      }
+      return JSON.stringify({ risk_flags: [], overall_risk: "low", deal_breaker: false });
+    };
+    const reports = await analyzeAll(metas, dataByTicker, mockCaller);
+    expect(reports).toHaveLength(1);
+    // 幻觉链断点：fitness 被代码从 8 钳到 6（position-calculator 查表 ≤6→0%，不会建仓）
+    expect(reports[0].fitness_score).toBe(6);
+    expect(reports[0].quality_notes).toBeDefined();
+    expect(reports[0].quality_notes!.length).toBeGreaterThan(0);
+    expect(reports[0].quality_notes![0]).toContain("数据缺失");
+  });
+
+  it("数据完备 + fitness=8 → gate 不介入，quality_notes 不写", async () => {
+    const metas: CandidateMeta[] = [
+      { ticker: "OK", name: "正常股", is_held: false, current_weight: 0, days_held: 0, locked: false },
+    ];
+    const dataByTicker = new Map<string, StockData>([
+      ["OK", {
+        ticker: "OK", name: "正常股", sector: "电子",
+        kline: { pct_5d: 1, pct_20d: 2, support: 1, resistance: 2, volatility_20d: 0.02, volume_ratio_5_20: 1.0 },
+        news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" },
+        fundamentals: { pe: 30, pb: 5, rev_q1: 1e9, np_q1: 1e8, industry: "电子" },
+      }],
+    ]);
+    const mockCaller: ShallowLlmCaller = async ({ role }) => {
+      if (role === "analyst") {
+        // thesis ≥20 字，避免触发规则 6（过短）；不含传闻词，避免触发规则 2
+        return JSON.stringify({ thesis: "TLVR 电感已批量供货英伟达，订单排至 2027 年", fitness_score: 8, data_freshness: "2026-06-21", key_signals: [], data_gaps: [] });
+      }
+      return JSON.stringify({ risk_flags: [], overall_risk: "low", deal_breaker: false });
+    };
+    const reports = await analyzeAll(metas, dataByTicker, mockCaller);
+    expect(reports[0].fitness_score).toBe(8);  // 不动
+    expect(reports[0].quality_notes).toBeUndefined();
+  });
 });
 
 describe("analyzeAll", () => {

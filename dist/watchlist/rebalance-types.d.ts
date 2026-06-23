@@ -54,6 +54,10 @@ export interface StockReport {
     days_held: number;
     locked: boolean;
     ranker_score?: number;
+    /** 确定性质量门控标注（applyQualityGate 产物，空则不输出）。
+     *  例：["fitness 8→6（PE=0 数据缺失封顶）"]。和 position_traces 同源，
+     *  让 fitness 也可溯源（"为什么这只股从 8 分变 6 分"）。 */
+    quality_notes?: string[];
 }
 export type ActionType = "BUY" | "SELL" | "ADD" | "REDUCE" | "HOLD";
 export interface Evaluation {
