@@ -75,6 +75,7 @@ describe("volatilityFactor 波动率折扣", () => {
   it(">4% → ×0.6（题材/次新）", () => expect(volatilityFactor(0.05)).toBe(0.6));
   it("边界 2% → ×0.8", () => expect(volatilityFactor(0.02)).toBe(0.8));
   it("边界 4% → ×0.6", () => expect(volatilityFactor(0.04)).toBe(0.6));
+  it("0（未知波动率）→ ×0.6（最保守折扣，kline 失败兜底）", () => expect(volatilityFactor(0)).toBe(0.6));
 });
 
 // ── 风险因子 ────────────────────────────────────────────────────────────────
@@ -154,6 +155,15 @@ describe("computePosition HOLD/SELL/REDUCE/ADD", () => {
       currentWeight: 0.10, volatility: 0.02, singleNameCap: 0.15,
     });
     expect(r.targetWeight).toBeCloseTo(0.05, 5);
+  });
+
+  it("REDUCE 小仓位 → 直接清仓（3% → 0%，不浪费换手槽位）", () => {
+    const r = computePosition({
+      action: "REDUCE", report: makeReport(),
+      currentWeight: 0.03, volatility: 0.02, singleNameCap: 0.15,
+    });
+    expect(r.targetWeight).toBe(0);
+    expect(r.trace).toContain("≤3%");
   });
 
   it("ADD：当前 3% < 基础 7%（9分）→ 加到 7%", () => {

@@ -27,6 +27,9 @@ export interface LastRebalanceAction {
 export interface LastRebalance {
   date: string;
   actions: LastRebalanceAction[];
+  /** ticker → 最近卖出日期（YYYY-MM-DD）。跨多次 rebalance 累积，用于 anti-churn 买锁。
+   *  旧版 last_rebalance.json 无此字段（向后兼容：undefined 视为空）。 */
+  recent_sells?: Record<string, string>;
 }
 
 // ═══ shallow-analyzer 产物 ═══
