@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 
 XUEQIU_URL = "https://xueqiu.com/rainbow/ai/abnormal/reasons.json"
-XUEQIU_COOKIE_TOKEN = "XqTestc79726cc9517198fb708bef5c76a6e65c02dfccc"
+XUEQIU_COOKIE_TOKEN = os.environ.get("XUEQIU_TOKEN", "XqTestc79726cc9517198fb708bef5c76a6e65c02dfccc")
 XUEQIU_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 BEIJING_TZ = timezone(timedelta(hours=8))
 WINDOW_MONTHS = 14

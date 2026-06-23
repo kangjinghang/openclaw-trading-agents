@@ -756,7 +756,7 @@ async function runAnalystPhase(
         );
 
         // CP2: Template render gate — detect un-replaced placeholders
-        const remainingPlaceholders = userMessage.match(/\{\{(\w+)\}\}/g);
+        const remainingPlaceholders = userMessage.match(/\{\{([\w.-]+)\}\}/g);
         if (remainingPlaceholders) {
           health.add({
             stage: "template_render",

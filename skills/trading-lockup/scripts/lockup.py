@@ -167,13 +167,14 @@ def _fetch_announcements(code, date, lookback_days=60):
     return events[:8]
 
 
-def _fetch_reduce_em(code):
+def _fetch_reduce_em(code, date=None):
     """Fetch Eastmoney reduce holdings information."""
     start = time.monotonic()
+    filter_date = date or datetime.now().strftime("%Y-%m-%d")
     try:
         data = eastmoney_datacenter(
             "RPT_REDUCED_HOLDINGS",
-            filter_str=f'(SECURITY_CODE="{code}")(REDUCE_DATE>={datetime.now().strftime("%Y-%m-%d")})',
+            filter_str=f'(SECURITY_CODE="{code}")(REDUCE_DATE>={filter_date})',
             page_size=10,
             sort_columns="REDUCE_DATE",
             sort_types="-1",
@@ -204,7 +205,7 @@ def fetch_lockup(ticker, date):
     data["lockup_upcoming"] = _fetch_lockup_upcoming(code, date)
     data["insider_transactions"] = _fetch_insider_transactions(code)
     data["announcements"] = _fetch_announcements(code, date)
-    data["reduce_holdings"] = _fetch_reduce_em(code)
+    data["reduce_holdings"] = _fetch_reduce_em(code, date)
 
     # Compute pressure rating
     upcoming = data.get("lockup_upcoming", [])

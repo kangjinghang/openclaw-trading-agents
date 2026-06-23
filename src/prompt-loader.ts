@@ -6,7 +6,7 @@ import * as path from "path";
  * Missing keys are left as-is.
  */
 export function renderTemplate(template: string, vars: Record<string, string>): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (match, key) => {
+  return template.replace(/\{\{([\w.-]+)\}\}/g, (match, key) => {
     return vars.hasOwnProperty(key) ? vars[key] : match;
   });
 }

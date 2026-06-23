@@ -138,7 +138,7 @@ Options:
   console.log(`  持仓: ${holdings.positions.length} 支 / cash ${(holdings.cash_pct * 100).toFixed(1)}%`);
 
   // 拉 data（4 Python scripts 并行）
-  const topN = parseInt(argValue(args, "--top-n") ?? "10", 10);
+  const topN = Math.max(1, parseInt(argValue(args, "--top-n") ?? "10", 10) || 10);
   const metasForFetch = [
     ...scan.top_picks.slice(0, topN).map(p => ({
       ticker: p.ticker, name: p.name,

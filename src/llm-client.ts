@@ -393,17 +393,39 @@ function classifyDirection(text: string): string | null {
   const holdKeywords = [
     "HOLD", "持有", "观望", "中性", "谨慎",
   ];
+  const negations = ["不", "非", "无", "没", "NOT", "NO", "NEITHER", "WITHOUT"];
 
-  // Score each category by counting keyword hits
+  // Score each category, skipping negated keywords ("不买入" → skip 买入)
   let buyScore = 0, sellScore = 0, holdScore = 0;
   for (const kw of buyKeywords) {
-    if (upper.includes(kw.toUpperCase())) buyScore++;
+    const upperKw = kw.toUpperCase();
+    let idx = upper.indexOf(upperKw);
+    while (idx !== -1) {
+      const prefix = upper.slice(Math.max(0, idx - 3), idx);
+      const negated = negations.some(n => prefix.includes(n.toUpperCase()));
+      if (!negated) buyScore++;
+      idx = upper.indexOf(upperKw, idx + upperKw.length);
+    }
   }
   for (const kw of sellKeywords) {
-    if (upper.includes(kw.toUpperCase())) sellScore++;
+    const upperKw = kw.toUpperCase();
+    let idx = upper.indexOf(upperKw);
+    while (idx !== -1) {
+      const prefix = upper.slice(Math.max(0, idx - 3), idx);
+      const negated = negations.some(n => prefix.includes(n.toUpperCase()));
+      if (!negated) sellScore++;
+      idx = upper.indexOf(upperKw, idx + upperKw.length);
+    }
   }
   for (const kw of holdKeywords) {
-    if (upper.includes(kw.toUpperCase())) holdScore++;
+    const upperKw = kw.toUpperCase();
+    let idx = upper.indexOf(upperKw);
+    while (idx !== -1) {
+      const prefix = upper.slice(Math.max(0, idx - 3), idx);
+      const negated = negations.some(n => prefix.includes(n.toUpperCase()));
+      if (!negated) holdScore++;
+      idx = upper.indexOf(upperKw, idx + upperKw.length);
+    }
   }
 
   // Return the highest-scoring category; ties broken by priority: Sell > Buy > Hold

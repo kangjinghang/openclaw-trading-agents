@@ -47,7 +47,7 @@ function computeVolatility(closes: number[], windowDays: number = 20): number {
   }
   if (returns.length < 2) return 0;
   const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
-  const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / returns.length;
+  const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (returns.length - 1);
   return Math.sqrt(variance);
 }
 
