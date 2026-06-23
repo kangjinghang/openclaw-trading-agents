@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.renderHotMoneySummary = renderHotMoneySummary;
 exports.renderQuarterlyTrends = renderQuarterlyTrends;
 exports.renderConsensus = renderConsensus;
+exports.renderLockup = renderLockup;
 exports.formatAnalystPrompt = formatAnalystPrompt;
 exports.parseAnalystReport = parseAnalystReport;
 exports.formatRiskPrompt = formatRiskPrompt;
@@ -200,6 +201,40 @@ function renderConsensus(c) {
         segs.push(`PEG ${c.peg}`);
     return segs.join(" | ");
 }
+/** 把解禁+减持压成一行（对齐 renderHotMoneySummary/renderQuarterlyTrends 范式）。
+ *
+ *  格式：「解禁压力：重大压力 | 未来90天2笔(最近 07-15 定增 0.4%；09-20 首发 1.2%) | 近期减持1笔(大股东 2.1%，个人资金需求)」
+ *  - 压力评级（lockup.py pressure_rating，按 upcoming 数量给的档）
+ *  - upcoming 取最近 3 笔（脚本已按日期升序），每笔：MM-DD 类型 ratio
+ *  - reduce_holdings 取最近 2 笔（脚本按日期倒序），每笔：股东 ratio 原因
+ *  每段只在该段有数据时输出；无 upcoming 且无减持 → 只输出压力评级行（让 LLM 知道无压力）。
+ *  ratio 字段是字符串（如"0.4%"），原样透传让 LLM 读，避免 parse 失败丢信息。 */
+function renderLockup(l) {
+    const segs = [];
+    // 压力评级（lockup.py 按 upcoming 数量分档，重大压力 = ≥3 笔）
+    segs.push(`解禁压力：${l.pressure_rating || "未知"}`);
+    // 未来解禁：取前 3 笔（最近在前，upcoming 已按日期升序）
+    if (l.upcoming && l.upcoming.length > 0) {
+        const items = l.upcoming.slice(0, 3).map(it => {
+            const d = it.date ? it.date.slice(5) : "?"; // MM-DD
+            const t = it.type || "解禁";
+            const r = it.ratio ? ` ${it.ratio}` : "";
+            return `${d} ${t}${r}`;
+        });
+        segs.push(`未来90天${l.upcoming.length}笔(${items.join("；")})`);
+    }
+    // 近期减持：取前 2 笔（已按日期倒序）
+    if (l.reduce_holdings && l.reduce_holdings.length > 0) {
+        const items = l.reduce_holdings.slice(0, 2).map(rd => {
+            const who = rd.reducing_shareholder ? rd.reducing_shareholder.slice(0, 8) : "股东";
+            const r = rd.reducing_ratio ? ` ${rd.reducing_ratio}` : "";
+            const reason = rd.reduce_reason ? `，${rd.reduce_reason.slice(0, 12)}` : "";
+            return `${who}${r}${reason}`;
+        });
+        segs.push(`近期减持${l.reduce_holdings.length}笔(${items.join("；")})`);
+    }
+    return segs.join(" | ");
+}
 function formatAnalystPrompt(d) {
     const newsBullets = d.news.map(n => {
         const time = n.time ? `[${n.time}] ` : "";
@@ -309,6 +344,13 @@ const RISK_PROMPT_TEMPLATE = `# 角色
 - 5 日涨幅较大（>10%）但量比 volume_ratio_5_20 < 0.8（缩量上涨，资金不认可）
 这些是技术性见顶信号，与基本面好坏无关——业绩再好，技术见顶也是风险。
 
+## 解禁与减持识别规则（重点）
+若以下任一成立，应输出对应 risk_flag 并提升 overall_risk（重大解禁→high）：
+- 解禁压力评级为"重大压力"（未来 90 天 ≥3 笔解禁）
+- 未来 90 天有单笔解禁比例 ≥5%（流通市值，供给冲击大）
+- 近期有大股东减持记录（减持动力强，后续可能持续减持）
+这些是供给端压力，与公司好坏无关——业绩再好，解禁抛压也是风险。
+
 # 股票
 {ticker} {name}（行业：{sector}）
 
@@ -323,6 +365,9 @@ const RISK_PROMPT_TEMPLATE = `# 角色
 
 ## VPA 量价预计算
 {vpa_text}
+
+## 解禁与减持（未来 90 天解禁 + 近期减持；未来大额解禁或减持 = 供给压力）
+{lockup_summary}
 
 # Analyst thesis
 {analyst_thesis}
@@ -352,6 +397,7 @@ function formatRiskPrompt(d, analyst) {
         .replace("{np_q1}", String(d.fundamentals.np_q1))
         .replace("{quarterly_trends}", renderQuarterlyTrends(d.fundamentals.quarterly_trends) || "(无季度趋势数据)")
         .replace("{vpa_text}", d.vpa_text || "(无 VPA 数据)")
+        .replace("{lockup_summary}", d.lockup ? renderLockup(d.lockup) : "(无解禁数据)")
         .replace("{analyst_thesis}", `${analyst.thesis}（fitness ${analyst.fitness_score}）`);
 }
 function parseRiskReport(content) {
@@ -468,7 +514,7 @@ async function analyzeAll(metas, dataByTicker, caller, concurrency = 3) {
                         results.push(meta.is_held ? buildFallbackReport(meta, data.sector, "risk-role 返回非 JSON") : null);
                         continue;
                     }
-                    // 确定性质量门控（内联守卫，非新阶段）：钳制 fitness/risk + 标注 issue。
+                    // 确定性质量门控（内联守卫，非新阶段）：钳制 fitness/risk + 标注 issue（含解禁兜底）。
                     // 必须在 buildStockReport 前，让 clamp 后的值进 position-calculator 公式。
                     const gated = (0, quality_gate_1.applyQualityGate)(analyst, risk, data);
                     results.push(buildStockReport(meta, data.sector, gated.analyst, gated.risk, gated.issues));

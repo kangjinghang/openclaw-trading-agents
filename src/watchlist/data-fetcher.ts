@@ -1,5 +1,5 @@
 import * as path from "path";
-import type { StockData, NewsItem, NewsLayerStats, HotMoneyData, QuarterlyTrend, ConsensusEps } from "./shallow-analyzer";
+import type { StockData, NewsItem, NewsLayerStats, HotMoneyData, QuarterlyTrend, ConsensusEps, LockupData, LockupItem, ReduceHolding } from "./shallow-analyzer";
 import type { SourceCall } from "../types";
 import { execSkillScript } from "../exec-python";
 
@@ -270,7 +270,50 @@ export function parseFundamentals(raw: any): { pe: number; pb: number; rev_q1: n
   };
 }
 
-/** 单股并行跑 4 个 script。失败的 script 返回 null 字段（容忍）。 */
+/** 从 lockup.py 输出解析解禁与减持摘要。
+ *
+ *  raw 结构（exec-python.ts 已把 raw.data 提到顶层）：
+ *  { lockup_upcoming:[{date,type,shares,ratio}], reduce_holdings:[{date,reducing_shareholder,...}],
+ *    pressure_rating:"重大压力"|... }
+ *  shares/ratio 在脚本侧是字符串，原样透传（不强转，避免 parse 失败丢信息，LLM 直接读字符串）。
+ *  全程容忍字段缺失。pressure_rating 缺失 → "未知"。upcoming/reduce_holdings 全空且无评级 → null（无数据）。 */
+export function parseLockup(raw: any): LockupData | null {
+  if (!raw || typeof raw !== "object") return null;
+  const rating = typeof raw.pressure_rating === "string" && raw.pressure_rating.trim()
+    ? raw.pressure_rating.trim() : "未知";
+
+  const upcoming: LockupItem[] = Array.isArray(raw.lockup_upcoming)
+    ? raw.lockup_upcoming
+      .filter((x: any) => !!x && typeof x === "object" && typeof x.date === "string")
+      .map((x: any): LockupItem => ({
+        date: x.date,
+        ...(typeof x.type === "string" && x.type ? { type: x.type } : {}),
+        ...(typeof x.shares === "string" && x.shares ? { shares: x.shares } : {}),
+        ...(typeof x.ratio === "string" && x.ratio ? { ratio: x.ratio } : {}),
+      }))
+    : [];
+
+  const reduceHoldings: ReduceHolding[] = Array.isArray(raw.reduce_holdings)
+    ? raw.reduce_holdings
+      .filter((x: any) => !!x && typeof x === "object" && typeof x.date === "string")
+      .map((x: any): ReduceHolding => ({
+        date: x.date,
+        ...(typeof x.reducing_shareholder === "string" && x.reducing_shareholder ? { reducing_shareholder: x.reducing_shareholder } : {}),
+        ...(typeof x.reducing_shares === "string" && x.reducing_shares ? { reducing_shares: x.reducing_shares } : {}),
+        ...(typeof x.reducing_ratio === "string" && x.reducing_ratio ? { reducing_ratio: x.reducing_ratio } : {}),
+        ...(typeof x.reduce_reason === "string" && x.reduce_reason ? { reduce_reason: x.reduce_reason } : {}),
+      }))
+    : [];
+
+  // 全空（拉取失败或真无数据）：评级非"未知"才保留（让 LLM 知道"无明显压力"），
+  // 否则 upcoming/reduce_holdings 全空 + 评级未知 = 没拿到数据，省略整段。
+  if (upcoming.length === 0 && reduceHoldings.length === 0 && rating === "未知") {
+    return null;
+  }
+  return { pressure_rating: rating, upcoming, reduce_holdings: reduceHoldings };
+}
+
+/** 单股并行跑 5 个 script（kline/news/hot_money/fundamentals/lockup）。失败的 script 返回 null 字段（容忍）。 */
 export async function fetchStockData(
   ticker: string,
   name: string,
@@ -288,8 +331,11 @@ export async function fetchStockData(
     safeCall(() => execSkillScript("trading-news", "news", PROJECT_ROOT, ["--ticker", ticker, "--date", today, "--lookback-days", "7", "--skip-macro"])),
     safeCall(() => execSkillScript("trading-hot-money", "hot_money", PROJECT_ROOT, [ticker])),
     safeCall(() => execSkillScript("trading-fundamentals", "fundamentals", PROJECT_ROOT, [ticker])),
+    // lockup.py：--ticker/--date 均 required，解禁区间 [date, date+90]。全量接入（含 mootdx F10），
+    // 慢（5-8s，F10 是瓶颈），但未来 90 天解禁是 rebalancer 中期组合的硬风险。
+    safeCall(() => execSkillScript("trading-lockup", "lockup", PROJECT_ROOT, ["--ticker", ticker, "--date", today])),
   ];
-  const [klineR, newsR, hotR, fundR] = await Promise.all(tasks);
+  const [klineR, newsR, hotR, fundR, lockupR] = await Promise.all(tasks);
 
   // klineR 是 {data, vpa}（safeCall 改造后）；其余只有 data
   const klineRaw = klineR?.data ?? null;
@@ -300,6 +346,7 @@ export async function fetchStockData(
   const fund = fundR?.data ? parseFundamentals(fundR.data) : { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "", quarterly_trends: undefined, consensus_eps: undefined };
   // fund 先于 hot 解析：parseHotMoney 需要 industry 判板块轮动归属（主线/弱势/未上榜）
   const hot = hotR?.data ? parseHotMoney(hotR.data, fund.industry) : { ...EMPTY_HOT_MONEY };
+  const lockup = lockupR?.data ? parseLockup(lockupR.data) ?? undefined : undefined;
 
   // 收集 4 个脚本的子源级调用记录（_calls），用于数据源健康统计
   const allCalls = [
@@ -315,8 +362,9 @@ export async function fetchStockData(
     hot_money: hot,
     fundamentals: fund,
     ranker_thesis: rankerThesis,
-    vpa_text: vpaText,
-    news_layer_stats: newsLayerStats,
+    vpa_text: vpaText,  // kline.py 预计算的 VPA 量价背离结论，undefined 则不注入
+    news_layer_stats: newsLayerStats,  // news.py layer_stats，undefined 则不注入
+    lockup,  // lockup.py 解禁+减持，undefined（拉取失败/无数据）则 risk prompt 省略解禁段
     calls: allCalls.length > 0 ? allCalls : undefined,
   };
 }

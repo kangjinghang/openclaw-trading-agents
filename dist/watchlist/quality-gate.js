@@ -9,12 +9,8 @@
 // 没有下游 LLM 再读。若只标注不钳制，幻觉数字会一路流到仓位。所以这里
 // 既标注又钳制，必须内联在 analyzeAll 循环里。
 //
-// 与 trading_full quality-gate.ts 的差异：trading_full 是只读打分（A-F + summary
-// 注入 PM prompt，PM 会二次消化）；shallow 这里要改值（fitness/risk clamp），
-// 因为 fitness 没有下游 LLM 再消化。
-//
-// 6 条规则分两类：
-// - 钳制型（1-4）：有明确 prompt 数据依据，代码直接改值兜底
+// 7 条规则分两类：
+// - 钳制型（1-4, 7）：有明确 prompt 数据依据，代码直接改值兜底
 // - 标注型（5-6）：语义模糊无法自修，只记 issue 留给 rebalancer LLM / 人看
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.applyQualityGate = applyQualityGate;
@@ -30,8 +26,14 @@ const RUMOR_TERMS = [
     "传闻", "传言", "市场传言", "未经证实", "尚未证实", "尚待证实", "尚待验证",
     "待证实", "据称", "疑似", "据传",
 ];
-/** 把多规则同时触发时的 clamp 取最严：fitness 越低越严，risk 越高越严。
- *  clamp 只能压低不能抬高（规则只惩罚过度乐观，不奖励过度悲观）。 */
+/** 把 ratio 字符串（如 "0.4%"/"5"）解析成数字，失败返回 NaN。
+ *  lockup.py 的 shares/ratio 都是字符串，规则 7 要判 ratio≥5 需 parse。 */
+function parseRatio(s) {
+    if (typeof s !== "string")
+        return NaN;
+    const m = s.match(/(\d+(?:\.\d+)?)/);
+    return m ? parseFloat(m[1]) : NaN;
+}
 function applyQualityGate(analyst, risk, data) {
     const issues = [];
     // 副本，不动入参（LLM 原始输出可能被 trace 记录，保持原样可审计）
@@ -61,27 +63,42 @@ function applyQualityGate(analyst, risk, data) {
         fitness = FITNESS_UNVERIFIABLE_CAP;
     }
     // 规则 2：传闻词封顶。thesis 明示"未经证实"类信息，prompt 要求最多 6 分。
-    // LLM 若给更高分则钳制——治"把传闻当业绩兑现打高分"的幻觉。
     const hitRumor = RUMOR_TERMS.some(t => thesis.includes(t));
     if (hitRumor && fitness > FITNESS_UNVERIFIABLE_CAP) {
         issues.push(`fitness ${fitness}→${FITNESS_UNVERIFIABLE_CAP}（thesis 含传闻/未证实信息）`);
         fitness = FITNESS_UNVERIFIABLE_CAP;
     }
     // 规则 3：deal_breaker 一致性。deal_breaker=true 意味灾难性风险，
-    // overall_risk 必须是 high（position-calculator 的 deal_breaker 分支会强制 SELL，
-    // 但 high 等级也让非 deal_breaker 路径的风险因子正确重压仓位）。
+    // overall_risk 必须是 high。
     if (dealBreaker && overallRisk !== "high") {
         issues.push(`deal_breaker=true 但 overall_risk=${overallRisk}，改为 high`);
         overallRisk = "high";
     }
+    // 规则 7：重大解禁兜底。未来 90 天解禁 pressure_rating=重大压力，
+    // 或 upcoming 任一条 ratio ≥ 5%（流通市值，供给冲击大），
+    // 强制 overall_risk=high。防 LLM 漏判中期组合踩解禁洪峰的硬风险。
+    // 仅在 lockup 数据存在时生效（拉取失败不臆测）。
+    const lockup = data.lockup;
+    if (lockup) {
+        const majorPressure = lockup.pressure_rating === "重大压力";
+        const bigUnlock = lockup.upcoming.some(it => {
+            const r = parseRatio(it.ratio);
+            return !isNaN(r) && r >= 5;
+        });
+        if ((majorPressure || bigUnlock) && overallRisk !== "high") {
+            const reason = majorPressure
+                ? "解禁压力评级=重大压力"
+                : "未来90天有单笔解禁≥5%";
+            issues.push(`${reason}，overall_risk=${overallRisk}→high（中期组合解禁兜底）`);
+            overallRisk = "high";
+        }
+    }
     // ── 标注型（不改值，无法确定性地造出正确结论）──────────────
     // 规则 5：高风险无依据。标了 high 却没给任何 risk_flag，结论缺乏支撑。
-    // 只标注：无法确定性地补出正确的 flag 文本。
     if (overallRisk === "high" && risk.risk_flags.length === 0) {
         issues.push("overall_risk=high 但 risk_flags 为空，结论缺支撑");
     }
     // 规则 6：thesis 过短。LLM 敷衍（如只回 "好"），下游无法据 thesis 复盘。
-    // 只标注：无法确定性地补全 thesis。
     if (thesis.trim().length < 20) {
         issues.push(`thesis 过短（${thesis.trim().length} 字符），可能敷衍`);
     }
