@@ -27,7 +27,10 @@ import {
   ProvenanceStage,
   DebateResult,
   ResearchDecision,
+  TradingPlan,
   RiskAssessment,
+  RiskDebateResult,
+  QualityReview,
 } from "./types";
 import { AbortError, ParseError, EnvironmentError } from "./errors";
 import { DATA_FETCH_STAGGER_MS, LLM_CALL_STAGGER_MS, DEFAULT_CONCURRENCY, DEFAULT_LLM_CONCURRENCY } from "./constants";
@@ -604,6 +607,38 @@ function saveRawData(
 }
 
 /**
+ * Shared quality gate: validate analyst reports + LLM credibility review + health checks.
+ * Extracted to eliminate ~28 lines of duplication between quick and full modes.
+ */
+async function runQualityGate(
+  analystReports: AnalystReport[],
+  dataResults: Array<{ role: string; result: ScriptResult }>,
+  ticker: string, date: string, mode: string,
+  config: TradingAgentsConfig, openaiClient: OpenAI, traceLogger: TraceLogger,
+  health: PipelineHealth, log: LogProgressFn,
+): Promise<{ quality: QualitySummary; qualityReview: QualityReview | null }> {
+  const quality = validateAnalystReports(analystReports, dataResults);
+  const qualityReview = await runQualityReview(analystReports, quality, ticker, date, config, openaiClient, traceLogger);
+  if (qualityReview) quality.summary_text += formatQualityReview(qualityReview);
+  log(`质量门控: ${quality.grades.map(g => `${g.role}=${g.grade}`).join(", ")}${qualityReview ? ` (可信度 ${qualityReview.credibility})` : ""}`);
+
+  for (const g of quality.grades) {
+    if (g.grade === "D" || g.grade === "F") {
+      health.add({ stage: "quality_gate", severity: "warn", check: "layer1_grade",
+        message: `${g.role} 质量门评级 ${g.grade}: ${(g.issues || []).join("; ")}`,
+        context: { role: g.role, grade: g.grade } });
+    }
+  }
+  if (qualityReview) {
+    for (const suspect of qualityReview.fabrication_suspects || []) {
+      health.add({ stage: "quality_review", severity: "warn", check: "fabrication_suspect",
+        message: `${suspect} 疑似编造数据`, context: { role: suspect } });
+    }
+  }
+  return { quality, qualityReview };
+}
+
+/**
  * Shared Phase 1-2: fetch data + run 7 analysts in parallel.
  * Used by both runQuickAnalysis() and runFullAnalysis().
  */
@@ -892,28 +927,7 @@ export async function runQuickAnalysis(
   haltIfAborted(health); // ≥6 data sources failed → don't run PM on empty analysts
 
   // ── Quality Gate ──────────────────────────────────────────────────
-  const quality = validateAnalystReports(analystReports, dataResults);
-  // Layer-2 LLM credibility review (optional; degrades to Layer-1 on skip/failure)
-  const qualityReview = await runQualityReview(analystReports, quality, ticker, date, config, openaiClient, traceLogger);
-  if (qualityReview) quality.summary_text += formatQualityReview(qualityReview);
-  log(`[2/4] 质量门控: ${quality.grades.map(g => `${g.role}=${g.grade}`).join(", ")}${qualityReview ? ` (可信度 ${qualityReview.credibility})` : ""}`);
-
-  // CP4: Quality gate — register layer-1 grades
-  for (const g of quality.grades) {
-    if (g.grade === "D" || g.grade === "F") {
-      health.add({ stage: "quality_gate", severity: "warn", check: "layer1_grade",
-        message: `${g.role} 质量门评级 ${g.grade}: ${(g.issues || []).join("; ")}`,
-        context: { role: g.role, grade: g.grade } });
-    }
-  }
-
-  // CP5: Quality review — register layer-2 findings
-  if (qualityReview) {
-    for (const suspect of qualityReview.fabrication_suspects || []) {
-      health.add({ stage: "quality_review", severity: "warn", check: "fabrication_suspect",
-        message: `${suspect} 疑似编造数据`, context: { role: suspect } });
-    }
-  }
+  const { quality, qualityReview } = await runQualityGate(analystReports, dataResults, ticker, date, "quick", config, openaiClient, traceLogger, health, log);
 
   // Persist the quality-gate output BEFORE downstream phases so a mid-run crash
   // still leaves the audit on disk. Previously this was only injected into
@@ -1084,28 +1098,7 @@ export async function runFullAnalysis(
   haltIfAborted(health); // ≥6 data sources failed → don't run debate/research/risk on empty analysts
 
   // Quality Gate
-  const quality = validateAnalystReports(analystReports, dataResults);
-  // Layer-2 LLM credibility review (optional; degrades to Layer-1 on skip/failure)
-  const qualityReview = await runQualityReview(analystReports, quality, ticker, date, config, openaiClient, traceLogger);
-  if (qualityReview) quality.summary_text += formatQualityReview(qualityReview);
-  log(`质量门控: ${quality.grades.map(g => `${g.role}=${g.grade}`).join(", ")}${qualityReview ? ` (可信度 ${qualityReview.credibility})` : ""}`);
-
-  // CP4: Quality gate — register layer-1 grades
-  for (const g of quality.grades) {
-    if (g.grade === "D" || g.grade === "F") {
-      health.add({ stage: "quality_gate", severity: "warn", check: "layer1_grade",
-        message: `${g.role} 质量门评级 ${g.grade}: ${(g.issues || []).join("; ")}`,
-        context: { role: g.role, grade: g.grade } });
-    }
-  }
-
-  // CP5: Quality review — register layer-2 findings
-  if (qualityReview) {
-    for (const suspect of qualityReview.fabrication_suspects || []) {
-      health.add({ stage: "quality_review", severity: "warn", check: "fabrication_suspect",
-        message: `${suspect} 疑似编造数据`, context: { role: suspect } });
-    }
-  }
+  const { quality, qualityReview } = await runQualityGate(analystReports, dataResults, ticker, date, "full", config, openaiClient, traceLogger, health, log);
 
   // Persist the quality-gate output BEFORE downstream phases so a mid-run crash
   // still leaves the audit on disk. Previously this was only injected into
@@ -1114,8 +1107,15 @@ export async function runFullAnalysis(
 
   // Phase 3: Bull↔Bear Debate
   log(`[3/7] 多空辩论 (${config.debate_rounds} 轮)...`);
-  const debate = await runBullBearDebate(analystReports, quality.summary_text, config, openaiClient, traceLogger);
-  log(`[3/7] 多空辩论完成 (Bull ${debate.rounds.flatMap(r => r.bull_claims).length} claims, Bear ${debate.rounds.flatMap(r => r.bear_claims).length} claims)`);
+  let debate: DebateResult;
+  try {
+    debate = await runBullBearDebate(analystReports, quality.summary_text, config, openaiClient, traceLogger);
+    log(`[3/7] 多空辩论完成 (Bull ${debate.rounds.flatMap(r => r.bull_claims).length} claims, Bear ${debate.rounds.flatMap(r => r.bear_claims).length} claims)`);
+  } catch (err: any) {
+    log(`[3/7] 多空辩论失败: ${err.message?.slice(0, 80)}，跳过辩论继续`);
+    health.add({ stage: "debate", severity: "warn", check: "debate_failed", message: `辩论异常: ${err.message?.slice(0, 120)}` });
+    debate = { rounds: [], bull_summary: "(辩论失败)", bear_summary: "(辩论失败)", convergence_score: 0, resolved_points: [], total_tokens: 0, total_cost_usd: 0 };
+  }
   tracker.emit("debate");
 
   // Debate divergence detection
@@ -1155,8 +1155,15 @@ export async function runFullAnalysis(
 
   // Phase 4: Research Manager
   log(`[4/7] 研究经理裁决...`);
-  const researchDecision = await runResearchManager(analystReports, debate, quality.summary_text, config, openaiClient, traceLogger);
-  log(`[4/7] 研究经理裁决: ${researchDecision.direction} (信心 ${researchDecision.confidence})`);
+  let researchDecision: ResearchDecision;
+  try {
+    researchDecision = await runResearchManager(analystReports, debate, quality.summary_text, config, openaiClient, traceLogger);
+    log(`[4/7] 研究经理裁决: ${researchDecision.direction} (信心 ${researchDecision.confidence})`);
+  } catch (err: any) {
+    log(`[4/7] 研究经理失败: ${err.message?.slice(0, 80)}，默认 Hold`);
+    health.add({ stage: "research", severity: "warn", check: "research_failed", message: `研究经理异常: ${err.message?.slice(0, 120)}` });
+    researchDecision = { direction: "Hold", confidence: 0, reasoning: "(研究经理异常，降级为 Hold)", bull_score: 50, bear_score: 50, key_debate_points: [], verdict: { direction: "Hold", reason: "研究经理异常" } };
+  }
   tracker.emit("research");
 
   // Research manager self-consistency: reasoning rhetoric must match the
@@ -1186,35 +1193,59 @@ export async function runFullAnalysis(
 
   // Phase 5: Trader
   log(`[5/7] 交易员制定执行计划...`);
-  let tradingPlan = await runTrader(researchDecision, analystReports, quality.summary_text, config, openaiClient, traceLogger, ticker, date);
-  log(`[5/7] 交易计划: ${tradingPlan.direction} 目标价 ${tradingPlan.target_price} 止损 ${tradingPlan.stop_loss}`);
+  let tradingPlan: TradingPlan;
+  try {
+    tradingPlan = await runTrader(researchDecision, analystReports, quality.summary_text, config, openaiClient, traceLogger, ticker, date);
+    log(`[5/7] 交易计划: ${tradingPlan.direction} 目标价 ${tradingPlan.target_price} 止损 ${tradingPlan.stop_loss}`);
+  } catch (err: any) {
+    log(`[5/7] 交易员失败: ${err.message?.slice(0, 80)}，默认 Hold 无仓位`);
+    health.add({ stage: "trader", severity: "warn", check: "trader_failed", message: `交易员异常: ${err.message?.slice(0, 120)}` });
+    tradingPlan = { direction: "Hold", target_price: 0, stop_loss: 0, position_pct: 0, execution_plan: "(交易员异常，降级为 Hold)", entry_signals: [], exit_signals: [], invalidations: [], key_risks: [], t_plus_1_note: "" };
+  }
   tracker.emit("trader");
 
   if (signal?.aborted) throw new AbortError();
 
   // Phase 6-7: Risk Debate + Risk Manager (with revise loop)
   log(`[6/7] 风控辩论 (3 方)...`);
-  let riskDebate = await runRiskDebate(tradingPlan, analystReports, config, openaiClient, traceLogger);
-  log(`[6/7] 风控辩论完成`);
+  let riskDebate: RiskDebateResult;
+  try {
+    riskDebate = await runRiskDebate(tradingPlan, analystReports, config, openaiClient, traceLogger);
+    log(`[6/7] 风控辩论完成`);
+  } catch (err: any) {
+    log(`[6/7] 风控辩论失败: ${err.message?.slice(0, 80)}，跳过风控继续`);
+    health.add({ stage: "risk_debate", severity: "warn", check: "risk_debate_failed", message: `风控辩论异常: ${err.message?.slice(0, 120)}` });
+    riskDebate = { rounds: [], risk_arguments: [], total_tokens: 0, total_cost_usd: 0 };
+  }
   tracker.emit("riskDebate");
 
   log(`[7/7] 风控经理评估...`);
-  let riskAssessment = await runRiskManager(riskDebate, tradingPlan, config, openaiClient, traceLogger);
+  let riskAssessment: RiskAssessment;
+  try {
+    riskAssessment = await runRiskManager(riskDebate, tradingPlan, config, openaiClient, traceLogger);
+  } catch (err: any) {
+    log(`[7/7] 风控经理失败: ${err.message?.slice(0, 80)}，默认 pass 无约束`);
+    health.add({ stage: "risk_manager", severity: "warn", check: "risk_manager_failed", message: `风控经理异常: ${err.message?.slice(0, 120)}` });
+    riskAssessment = { status: "pass", risk_score: 0, reasoning: "(风控经理异常，降级为 pass)" };
+  }
 
   let retries = 0;
   while (riskAssessment.status === "revise" && retries < config.max_risk_retries) {
     retries++;
     log(`  风控要求修订 (${retries}/${config.max_risk_retries}), 重新生成交易计划...`);
-    // Inject the prior risk constraints into the trader so the revised plan
-    // actually addresses them (instead of a blind retry). max_position_override
-    // remains as a hard numeric cap fallback in case the LLM ignores hard_constraints.
-    tradingPlan = await runTrader(researchDecision, analystReports, quality.summary_text, config, openaiClient, traceLogger, ticker, date, riskAssessment.judge);
-    if (riskAssessment.max_position_override) {
-      const capped = Math.max(0, Math.min(100, riskAssessment.max_position_override));
-      tradingPlan.position_pct = Math.min(tradingPlan.position_pct, capped);
+    try {
+      tradingPlan = await runTrader(researchDecision, analystReports, quality.summary_text, config, openaiClient, traceLogger, ticker, date, riskAssessment.judge);
+      if (riskAssessment.max_position_override) {
+        const capped = Math.max(0, Math.min(100, riskAssessment.max_position_override));
+        tradingPlan.position_pct = Math.min(tradingPlan.position_pct, capped);
+      }
+      riskDebate = await runRiskDebate(tradingPlan, analystReports, config, openaiClient, traceLogger);
+      riskAssessment = await runRiskManager(riskDebate, tradingPlan, config, openaiClient, traceLogger);
+    } catch (err: any) {
+      log(`  风控修订失败: ${err.message?.slice(0, 80)}，停止修订`);
+      health.add({ stage: "risk_revise", severity: "warn", check: "revise_failed", message: `风控修订异常: ${err.message?.slice(0, 120)}` });
+      break;
     }
-    riskDebate = await runRiskDebate(tradingPlan, analystReports, config, openaiClient, traceLogger);
-    riskAssessment = await runRiskManager(riskDebate, tradingPlan, config, openaiClient, traceLogger);
   }
 
   // If still revise after max retries, keep the honest verdict and flag it.
