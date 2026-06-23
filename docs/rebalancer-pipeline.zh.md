@@ -1447,6 +1447,27 @@ npm run rebalance -- --api-key xxx --base-url xxx --model glm-5.1
 | 自动调度 | cron 每日定时跑 | P3 |
 | plan.md 渲染 | 当前只输出 plan.json，缺人类可读 markdown | P1（小工作量） |
 | 跨日 thesis 跟踪 | 同一只股多次 rebalance 的 thesis 演化对比 | P3 |
+| **Fitness 回测** | 决策快照 + 懒结算事后收益，验证 fitness 分数预测力 | **P1（已实现）** |
+
+### 13.1 Fitness 回测设计
+
+**目标**：验证 "fitness 9 分是否真跑赢 7 分"。每次 rebalance 自动采集决策快照，下次启动时懒结算到期记录的事后收益。1 个月后可直接拉统计。
+
+**三阶段**：
+1. **采集**（rebalance 时）：从 plan.json 提取 decision_date/ticker/fitness/action/risk/target_weight/entry_price → `fitness-history-store.ts` append
+2. **懒结算**（下次 rebalance 启动时）：`fitness-backfiller.ts` 扫描 open 记录，≥30 天的调 kline.py 拉 60 根日 K，按日期找收盘价算 return_7d/14d/30d
+3. **回测**（1 个月后）：`fitness-history-cli.ts` 按 fitness 分桶统计平均 return_30d
+
+**关键约束**：
+- 环形 buffer 上限 2000 条（~1 年），FIFO 淘汰
+- 懒结算靠 rebalancer 运行驱动，无 cron
+- 全链路 try/catch，失败只 stderr，绝不阻塞主流程
+- decision_date + ticker 去重，幂等
+
+**文件**：
+- `src/watchlist/fitness-history-store.ts` — 存储（append/read/settle）
+- `src/watchlist/fitness-backfiller.ts` — 懒结算（kline 回填收益）
+- `src/fitness-history-cli.ts` — 回测 CLI（`npm run fitness-history`）
 
 ## 14. FAQ
 

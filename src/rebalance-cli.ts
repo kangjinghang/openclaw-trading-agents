@@ -15,7 +15,9 @@ import { fetchAllStockData } from "./watchlist/data-fetcher";
 import { formatPlanMarkdown } from "./watchlist/plan-formatter";
 import { generateDataHealthReport } from "./watchlist/data-health-aggregator";
 import { generateDataTraceReport } from "./watchlist/data-trace-report";
-import type { LastRebalance, RebalancePlanFile } from "./watchlist/rebalance-types";
+import { FitnessHistoryStore, type FitnessRecord } from "./watchlist/fitness-history-store";
+import { backfillReturns } from "./watchlist/fitness-backfiller";
+import type { LastRebalance, RebalancePlanFile, ActionType } from "./watchlist/rebalance-types";
 import type { ScanSummary } from "./watchlist/types";
 import type { SourceCall } from "./types";
 
@@ -76,6 +78,18 @@ Options:
   const lastRebalance: LastRebalance | null = fs.existsSync(lastRebalancePath)
     ? JSON.parse(fs.readFileSync(lastRebalancePath, "utf-8"))
     : null;
+
+  // 懒结算 fitness 历史：回填到期 open 记录的事后收益（≥30 天的算 7/14/30 涨跌幅）。
+  // 在数据拉取前跑，本次决策用的是已结算的历史。失败只打日志，绝不阻塞 rebalance。
+  try {
+    const fitnessStore = new FitnessHistoryStore(watchlistDir);
+    const bf = await backfillReturns(fitnessStore, date);
+    if (bf.settled + bf.failed > 0) {
+      console.log(`  fitness 历史: 结算 ${bf.settled} 条（失败 ${bf.failed}），跳过未到期 ${bf.skipped} 条`);
+    }
+  } catch (e) {
+    console.error(`  [fitness-history] backfill 跳过: ${e instanceof Error ? e.message : e}`);
+  }
 
   // LLM 配置
   const apiKey = argValue(args, "--api-key") ?? process.env.OPENAI_API_KEY;
@@ -180,6 +194,39 @@ Options:
   };
   writeAtomicJson(path.join(rebalanceDir, "plan.json"), planFile);
   writeAtomicJson(path.join(rebalanceDir, "holdings_snapshot.json"), holdings);
+
+  // 采集 fitness 决策快照（为 1-3 个月后的预测力回测铺路）。
+  // 每只 report + 对应 action 一条记录，entry_price 取决策日收盘价（kline）。
+  // 失败只 stderr，绝不阻塞——这是"锦上添花"，不能让采集失败导致 rebalancer 跑不起来。
+  try {
+    const fitnessStore = new FitnessHistoryStore(watchlistDir);
+    const actionsByTicker = new Map(result.rebalancer_output.actions.map(a => [a.ticker, a]));
+    const records: FitnessRecord[] = result.reports.map(r => {
+      const action = actionsByTicker.get(r.ticker);
+      // fitness_raw：若 quality_notes 含"→6"等钳制标注，说明被改过，溯源记原值
+      const clampNote = r.quality_notes?.find(n => /→\s*6/.test(n));
+      const clampedMatch = clampNote?.match(/fitness\s+(\d+(?:\.\d+)?)\s*→/);
+      return {
+        decision_date: date,
+        ticker: r.ticker,
+        name: r.name,
+        action: (action?.action ?? "HOLD") as ActionType,
+        fitness: r.fitness_score,
+        ...(clampedMatch ? { fitness_raw: parseFloat(clampedMatch[1]) } : {}),
+        overall_risk: r.overall_risk,
+        target_weight: action?.target_weight ?? 0,
+        // entry_price 此处留 0（不额外拉数据拖慢主流程）。backfiller 结算时从
+        // kline 按 decision_date 重拉当日收盘价作为收益基准（和 7/14/30 价同源）。
+        entry_price: 0,
+        ...(r.quality_notes && r.quality_notes.length > 0 ? { quality_notes: r.quality_notes } : {}),
+        run_id: `rebalance-${date}`,
+        status: "open" as const,
+      };
+    });
+    fitnessStore.appendDecisions(records);
+  } catch (e) {
+    console.error(`  [fitness-history] 采集跳过: ${e instanceof Error ? e.message : e}`);
+  }
 
   // 写 plan.md（人类可读）
   const planMd = formatPlanMarkdown(planFile);
