@@ -812,7 +812,7 @@ async function runAnalystPhase(
         );
         // CP3-s: 语义检查 — 方向性结论 + reason 承认数据不足 → 警告（数据缺失不该支撑看多/看空）
         if (verdict && verdict.direction !== "中性") {
-          const suspect = /缺失|失败|无数据|无法|不确定|不足|拉取失败|不可用|empty|error/i.test(verdict.reason);
+          const suspect = /缺失|失败|无数据|无法|不确定|不足|拉取失败|不可用|empty|error|unavailable|missing|failed|no.data|insufficient/i.test(verdict.reason);
           health.check("analyst_output", "warn", "suspicious_reason",
             !suspect,
             `${cfg.role} 方向=${verdict.direction} 但 reason 含数据缺失关键词: "${verdict.reason.slice(0, 60)}"`,
