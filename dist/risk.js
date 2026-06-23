@@ -115,13 +115,12 @@ const RISK_VERDICTS = new Set(["pass", "revise", "reject"]);
  * arrays are coerced to empty defaults so partial LLM output is still usable.
  */
 function parseRiskJudge(content) {
-    const regex = /<!--\s*RISK_JUDGE:\s*(\{.*?\})\s*-->/s;
-    const match = content.match(regex);
-    if (!match)
+    const jsonStr = (0, llm_client_1.extractTaggedJson)(content, "RISK_JUDGE");
+    if (!jsonStr)
         return null;
     let parsed;
     try {
-        parsed = JSON.parse(match[1]);
+        parsed = JSON.parse(jsonStr);
     }
     catch {
         return null;
@@ -200,6 +199,8 @@ async function runRiskDebate(tradingPlan, analystReports, config, openaiClient, 
     const riskArguments = new Array(exports.RISK_ROLES.length);
     const concurrency = config.llm_concurrency || constants_1.DEFAULT_LLM_CONCURRENCY;
     const rateLimitCoordinator = new llm_client_1.RateLimitCoordinator();
+    let accumulatedTokens = 0;
+    let accumulatedCost = 0;
     await pool(exports.RISK_ROLES, async ({ role, instructions }, idx) => {
         await rateLimitCoordinator.waitIfNeeded();
         const riskRoleLabel = role === "aggressive" ? "激进风控" : role === "conservative" ? "保守风控" : "中性风控";
@@ -221,13 +222,15 @@ async function runRiskDebate(tradingPlan, analystReports, config, openaiClient, 
             traceLogger,
             rateLimitCoordinator,
         });
+        accumulatedTokens += result.usage.total_tokens;
+        accumulatedCost += result.costUsd;
         riskArguments[idx] = parseRiskArgument(result.content, role);
     }, concurrency, constants_1.LLM_CALL_STAGGER_MS);
     return {
         rounds: [riskArguments],
         risk_arguments: riskArguments,
-        total_tokens: 0,
-        total_cost_usd: 0,
+        total_tokens: accumulatedTokens,
+        total_cost_usd: accumulatedCost,
     };
 }
 async function runRiskManager(riskDebate, tradingPlan, config, openaiClient, traceLogger) {

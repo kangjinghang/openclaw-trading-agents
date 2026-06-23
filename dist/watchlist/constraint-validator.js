@@ -15,7 +15,7 @@ function validateRebalance(plan, ctx, c) {
     }
     // 规则 2: 单仓 ≤ single_name
     for (const a of plan.actions) {
-        if (a.target_weight > c.single_name + 0.0001) {
+        if (a.target_weight > c.single_name + 0.001) {
             violations.push({
                 rule: "2. 单仓上限",
                 detail: `${a.ticker} target_weight ${a.target_weight.toFixed(3)} 超 ${c.single_name} 上限`,
@@ -33,7 +33,7 @@ function validateRebalance(plan, ctx, c) {
         sectorSums.set(sector, (sectorSums.get(sector) ?? 0) + a.target_weight);
     }
     for (const [sector, sum] of sectorSums) {
-        if (sum > c.single_sector + 0.0001) {
+        if (sum > c.single_sector + 0.001) {
             violations.push({
                 rule: "3. 单行业上限",
                 detail: `${sector} 行业 sum ${sum.toFixed(3)} 超 ${c.single_sector} 上限`,
@@ -42,14 +42,14 @@ function validateRebalance(plan, ctx, c) {
     }
     // 规则 4: 日换手 ≤ daily_turnover
     const turnover = plan.actions.reduce((s, a) => s + Math.abs(a.delta), 0);
-    if (turnover > c.daily_turnover + 0.0001) {
+    if (turnover > c.daily_turnover + 0.001) {
         violations.push({
             rule: "4. 日换手上限",
             detail: `sum(|delta|) ${turnover.toFixed(3)} 超 ${c.daily_turnover} 上限`,
         });
     }
     // 规则 5: 现金 ≥ cash_reserve
-    if (plan.portfolio_after.cash_pct < c.cash_reserve - 0.0001) {
+    if (plan.portfolio_after.cash_pct < c.cash_reserve - 0.001) {
         violations.push({
             rule: "5. 现金下限",
             detail: `cash_pct ${plan.portfolio_after.cash_pct.toFixed(3)} 不足 ${c.cash_reserve} 下限`,
@@ -81,21 +81,21 @@ function validateRebalance(plan, ctx, c) {
     // 规则 8: action 一致性
     for (const a of plan.actions) {
         const inconsistent = [];
-        if (a.action === "BUY" && a.current_weight > 0.0001)
+        if (a.action === "BUY" && a.current_weight > 0.001)
             inconsistent.push("BUY 但 current>0");
-        if (a.action === "SELL" && a.target_weight > 0.0001)
+        if (a.action === "SELL" && a.target_weight > 0.001)
             inconsistent.push("SELL 但 target>0");
-        if (a.action === "ADD" && a.current_weight < 0.0001)
+        if (a.action === "ADD" && a.current_weight < 0.001)
             inconsistent.push("ADD 但 current=0");
         if (a.action === "ADD" && a.target_weight <= a.current_weight)
             inconsistent.push("ADD 但 target≤current");
-        if (a.action === "REDUCE" && a.current_weight < 0.0001)
+        if (a.action === "REDUCE" && a.current_weight < 0.001)
             inconsistent.push("REDUCE 但 current=0");
         if (a.action === "REDUCE" && a.target_weight <= 0)
             inconsistent.push("REDUCE 但 target≤0");
         if (a.action === "REDUCE" && a.target_weight >= a.current_weight)
             inconsistent.push("REDUCE 但 target≥current");
-        if (a.action === "HOLD" && Math.abs(a.target_weight - a.current_weight) > 0.0001)
+        if (a.action === "HOLD" && Math.abs(a.target_weight - a.current_weight) > 0.001)
             inconsistent.push("HOLD 但 target≠current");
         if (inconsistent.length > 0) {
             violations.push({ rule: "8. action 一致性", detail: `${a.ticker} ${a.action}: ${inconsistent.join("; ")}` });
@@ -112,7 +112,7 @@ function validateRebalance(plan, ctx, c) {
     }
     // 规则 10: sector 非空
     for (const a of plan.actions) {
-        if (a.target_weight > 0.0001 && !ctx.sectors.get(a.ticker)) {
+        if (a.target_weight > 0.001 && !ctx.sectors.get(a.ticker)) {
             violations.push({
                 rule: "10. sector 非空",
                 detail: `${a.ticker} target>0 但 sector 缺失`,

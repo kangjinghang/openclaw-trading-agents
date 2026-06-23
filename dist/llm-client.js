@@ -2,10 +2,12 @@
 // src/llm-client.ts
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.RateLimitCoordinator = exports.MODEL_COSTS = void 0;
+exports.hasUnknownModelCost = hasUnknownModelCost;
 exports.is429 = is429;
 exports.getRetryAfterMs = getRetryAfterMs;
 exports.retryDelayMs = retryDelayMs;
 exports.callLLM = callLLM;
+exports.extractTaggedJson = extractTaggedJson;
 exports.parseVerdict = parseVerdict;
 const openai_1 = require("openai");
 const errors_1 = require("./errors");
@@ -35,6 +37,9 @@ function generateTraceId() {
 /** Models whose missing price entry has already been warned about this
  *  process — avoids spamming the log once per LLM call. */
 const _warnedMissingCost = new Set();
+/** True if any LLM call used a model not in MODEL_COSTS (cost reported as $0). */
+let _hasUnknownModelCost = false;
+function hasUnknownModelCost() { return _hasUnknownModelCost; }
 /** Calculate cost in USD based on model and token usage */
 function calculateCost(model, promptTokens, completionTokens) {
     const costs = exports.MODEL_COSTS[model];
@@ -44,7 +49,10 @@ function calculateCost(model, promptTokens, completionTokens) {
         // silently fell back to gpt-4o pricing, overstating cost ~50x for the
         // default GLM models (which were absent from the table) and producing
         // a misleading total_cost_usd in run_summary / dashboard / CLI output.
+        _hasUnknownModelCost = true;
         if (!_warnedMissingCost.has(model)) {
+            if (_warnedMissingCost.size > 100)
+                _warnedMissingCost.clear(); // 防内存泄露
             _warnedMissingCost.add(model);
             console.error(`  [LLM] cost unknown for model "${model}" — reporting $0 (add an entry to MODEL_COSTS for accurate accounting)`);
         }
@@ -274,13 +282,33 @@ async function callLLM(client, options) {
  *
  * Returns null only if no direction signal can be found at all.
  */
+/** Extract JSON from <!-- TAG: {...} --> using brace-depth matching.
+ *  More robust than {.*?} which fails on nested JSON or unbalanced braces. */
+function extractTaggedJson(content, tag) {
+    const tagIdx = content.indexOf(`${tag}:`);
+    if (tagIdx === -1)
+        return null;
+    const jsonStart = content.indexOf("{", tagIdx);
+    if (jsonStart === -1)
+        return null;
+    let depth = 0;
+    for (let i = jsonStart; i < content.length; i++) {
+        if (content[i] === "{")
+            depth++;
+        else if (content[i] === "}") {
+            depth--;
+            if (depth === 0)
+                return content.slice(jsonStart, i + 1);
+        }
+    }
+    return null;
+}
 function parseVerdict(content) {
     // ── Layer 1: VERDICT tag ──────────────────────────────────────
-    const verdictRegex = /<!--\s*VERDICT:\s*(\{.*?\})\s*-->/s;
-    const match = content.match(verdictRegex);
-    if (match) {
+    const jsonStr = extractTaggedJson(content, "VERDICT");
+    if (jsonStr) {
         try {
-            const verdict = JSON.parse(match[1]);
+            const verdict = JSON.parse(jsonStr);
             if (typeof verdict.direction === "string" && typeof verdict.reason === "string") {
                 return { direction: verdict.direction, reason: verdict.reason };
             }
@@ -325,19 +353,41 @@ function classifyDirection(text) {
     const holdKeywords = [
         "HOLD", "持有", "观望", "中性", "谨慎",
     ];
-    // Score each category by counting keyword hits
+    const negations = ["不", "非", "无", "没", "NOT", "NO", "NEITHER", "WITHOUT"];
+    // Score each category, skipping negated keywords ("不买入" → skip 买入)
     let buyScore = 0, sellScore = 0, holdScore = 0;
     for (const kw of buyKeywords) {
-        if (upper.includes(kw.toUpperCase()))
-            buyScore++;
+        const upperKw = kw.toUpperCase();
+        let idx = upper.indexOf(upperKw);
+        while (idx !== -1) {
+            const prefix = upper.slice(Math.max(0, idx - 3), idx);
+            const negated = negations.some(n => prefix.includes(n.toUpperCase()));
+            if (!negated)
+                buyScore++;
+            idx = upper.indexOf(upperKw, idx + upperKw.length);
+        }
     }
     for (const kw of sellKeywords) {
-        if (upper.includes(kw.toUpperCase()))
-            sellScore++;
+        const upperKw = kw.toUpperCase();
+        let idx = upper.indexOf(upperKw);
+        while (idx !== -1) {
+            const prefix = upper.slice(Math.max(0, idx - 3), idx);
+            const negated = negations.some(n => prefix.includes(n.toUpperCase()));
+            if (!negated)
+                sellScore++;
+            idx = upper.indexOf(upperKw, idx + upperKw.length);
+        }
     }
     for (const kw of holdKeywords) {
-        if (upper.includes(kw.toUpperCase()))
-            holdScore++;
+        const upperKw = kw.toUpperCase();
+        let idx = upper.indexOf(upperKw);
+        while (idx !== -1) {
+            const prefix = upper.slice(Math.max(0, idx - 3), idx);
+            const negated = negations.some(n => prefix.includes(n.toUpperCase()));
+            if (!negated)
+                holdScore++;
+            idx = upper.indexOf(upperKw, idx + upperKw.length);
+        }
     }
     // Return the highest-scoring category; ties broken by priority: Sell > Buy > Hold
     const maxScore = Math.max(buyScore, sellScore, holdScore);

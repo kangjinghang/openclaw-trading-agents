@@ -7,7 +7,7 @@ export declare function actionPriority(action: ActionType): number;
  *  平衡档：9分→7% / 8分→5% / 7分→3% / ≤6→0%（不买）。
  *  线性插值：8.5分 = 6%（5% + 2% × 0.5）。 */
 export declare function baseWeight(fitness: number): number;
-/** 波动率折扣：日线收益率标准差（单位 0-1，如 0.025 = 2.5%/日）。
+/** 波动率折扣：日线收益率标准差（单位 %，如 2.5 = 2.5%/日，由 computeVolatility 输出）。
  *  0（kline 失败/未知）→ ×0.6（最保守折扣，防"零风险"假象）。
  *  <2%/日 → ×1.0（大盘股），2-4% → ×0.8（成长股），>4% → ×0.6（题材/次新）。 */
 export declare function volatilityFactor(volatility: number): number;

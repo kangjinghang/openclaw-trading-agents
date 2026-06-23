@@ -61,7 +61,7 @@ function parseArgs(argv) {
         }
     }
     if (!date) {
-        date = new Date().toISOString().split("T")[0];
+        date = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
     }
     if (!process.env.OPENAI_API_KEY) {
         throw new Error("OPENAI_API_KEY environment variable is required.");

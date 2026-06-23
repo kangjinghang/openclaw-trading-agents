@@ -43,7 +43,7 @@ const path = __importStar(require("path"));
  * Missing keys are left as-is.
  */
 function renderTemplate(template, vars) {
-    return template.replace(/\{\{(\w+)\}\}/g, (match, key) => {
+    return template.replace(/\{\{([\w.-]+)\}\}/g, (match, key) => {
         return vars.hasOwnProperty(key) ? vars[key] : match;
     });
 }

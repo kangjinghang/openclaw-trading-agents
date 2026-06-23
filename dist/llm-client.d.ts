@@ -39,6 +39,7 @@ export interface LLMCallResult {
     costUsd: number;
     traceId: string;
 }
+export declare function hasUnknownModelCost(): boolean;
 /** Check if an error is a 429 rate limit error */
 export declare function is429(error: unknown): boolean;
 /** Extract Retry-After from error headers, returns ms or undefined */
@@ -73,6 +74,9 @@ export declare function callLLM(client: OpenAI, options: LLMCallOptions): Promis
  *
  * Returns null only if no direction signal can be found at all.
  */
+/** Extract JSON from <!-- TAG: {...} --> using brace-depth matching.
+ *  More robust than {.*?} which fails on nested JSON or unbalanced braces. */
+export declare function extractTaggedJson(content: string, tag: string): string | null;
 export declare function parseVerdict(content: string): {
     direction: string;
     reason: string;
