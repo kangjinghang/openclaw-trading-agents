@@ -335,7 +335,8 @@ export async function fetchStockData(
   // 用 today 作为分析日期；--lookback-days 7 对齐 trading_full 的 news 角色。
   // --skip-macro：shallow 不消费宏观新闻（与 ticker 无关、N 股重复拉取纯浪费），
   // 省掉 CLS+akshare 两路 HTTP（实测单股 1.27s→0.37s，-71%）。
-  const today = new Date().toISOString().slice(0, 10);
+  // 用北京时间（UTC+8）而非 UTC，避免北京 0-8 点日期早一天
+  const today = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
   const tasks = [
     safeCall(() => execSkillScript("trading-kline", "kline", PROJECT_ROOT, [ticker])),
     safeCall(() => execSkillScript("trading-news", "news", PROJECT_ROOT, ["--ticker", ticker, "--date", today, "--lookback-days", "7", "--skip-macro"])),

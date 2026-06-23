@@ -37,7 +37,7 @@ function main() {
   const watchlistDir = process.env.WATCHLIST_DIR ?? DEFAULT_WATCHLIST_DIR;
 
   const dateIdx = args.indexOf("--date");
-  const date = dateIdx >= 0 && args[dateIdx + 1] ? args[dateIdx + 1] : new Date().toISOString().split("T")[0];
+  const date = dateIdx >= 0 && args[dateIdx + 1] ? args[dateIdx + 1] : new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
   const concIdx = args.indexOf("--concurrency");
   const concurrency = concIdx >= 0 && args[concIdx + 1] ? args[concIdx + 1] : "3";
 

@@ -246,7 +246,7 @@ export default {
       description: "快速A股分析 — 7位分析师 + 投资组合经理，约8次LLM调用。适用于快速了解一只股票的基本面、技术面、资金面概况。",
       parameters: QuickAnalysisParams,
       async execute(_toolCallId: string, params: { ticker: string; date?: string }, _signal: any, onUpdate: any) {
-        const date = params.date || new Date().toISOString().split("T")[0];
+        const date = params.date || new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
         const onProgress = onUpdate ? (text: string, id?: string) => {
           const p: any = { text, visibility: "channel", privacy: "public" as const };
           if (id) p.id = id;
@@ -268,7 +268,7 @@ export default {
       description: "全量深度分析 — 7分析师 → 多空辩论 → 研究合成 → 交易计划 → 风控审核，约15+次LLM调用。适用于需要详细交易计划、止损止盈价位、仓位建议。",
       parameters: FullAnalysisParams,
       async execute(_toolCallId: string, params: { ticker: string; date?: string }, _signal: any, onUpdate: any) {
-        const date = params.date || new Date().toISOString().split("T")[0];
+        const date = params.date || new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
         const onProgress = onUpdate ? (text: string, id?: string) => {
           const p: any = { text, visibility: "channel", privacy: "public" as const };
           if (id) p.id = id;

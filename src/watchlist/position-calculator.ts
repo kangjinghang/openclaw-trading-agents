@@ -42,14 +42,14 @@ export function baseWeight(fitness: number): number {
   return 0; // ≤6 不买
 }
 
-/** 波动率折扣：日线收益率标准差（单位 0-1，如 0.025 = 2.5%/日）。
+/** 波动率折扣：日线收益率标准差（单位 %，如 2.5 = 2.5%/日，由 computeVolatility 输出）。
  *  0（kline 失败/未知）→ ×0.6（最保守折扣，防"零风险"假象）。
  *  <2%/日 → ×1.0（大盘股），2-4% → ×0.8（成长股），>4% → ×0.6（题材/次新）。 */
 export function volatilityFactor(volatility: number): number {
   if (volatility <= 0) return 0.6;   // 未知波动率 → 最保守
-  if (volatility < 0.02) return 1.0;
-  if (volatility < 0.04) return 0.8;
-  return 0.6;
+  if (volatility < 2) return 1.0;    // <2%/日 大盘股
+  if (volatility < 4) return 0.8;    // 2-4%/日 成长股
+  return 0.6;                         // >4%/日 题材/次新
 }
 
 /** 风险因子：low ×1.0，medium ×0.6，high ×0.3。
