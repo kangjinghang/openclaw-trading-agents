@@ -33,6 +33,25 @@ describe("Pipeline Health Integration", () => {
     expect(h.getIssues("analyst_output")).toHaveLength(1);
   });
 
+  it("CP3-s: warns when direction is bullish/bearish but reason admits data gaps", () => {
+    const h = new PipelineHealth("run-test");
+    // 看多 + reason 含「缺失」→ 应触发 warn
+    h.check("analyst_output", "warn", "suspicious_reason", false,
+      "hot_money 方向=看多 但 reason 含数据缺失关键词: \"资金数据缺失，但政策利好\"",
+      { role: "hot_money", direction: "看多", reason: "资金数据缺失，但政策利好" });
+    expect(h.hasAbort).toBe(false);
+    expect(h.getIssues("analyst_output")).toHaveLength(1);
+    expect(h.getIssues("analyst_output")[0].check).toBe("suspicious_reason");
+  });
+
+  it("CP3-s: passes when direction is neutral or reason is clean", () => {
+    const h = new PipelineHealth("run-test");
+    // 中性 → 不检查 reason
+    h.check("analyst_output", "warn", "suspicious_reason", true,
+      "should not appear", { role: "news", direction: "中性" });
+    expect(h.issues).toHaveLength(0);
+  });
+
   it("CP4-6: accumulating issues from multiple stages", () => {
     const h = new PipelineHealth("run-test");
     h.add({ stage: "quality_gate", severity: "warn", check: "layer1_grade", message: "news grade D" });
