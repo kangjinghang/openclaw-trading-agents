@@ -8,6 +8,8 @@ export interface ValidationContext {
   held: Map<string, { days_held: number; locked: boolean }>;
   tickersInPool: Set<string>;
   recentSoldTickers?: Set<string>;
+  /** ticker → fitness score（shallow-analyzer 产物）。用于规则 11：fitness<7 禁止 BUY/ADD。 */
+  fitnessByTicker?: Map<string, number>;
 }
 
 export function validateRebalance(
@@ -129,6 +131,20 @@ export function validateRebalance(
         rule: "10. sector 非空",
         detail: `${a.ticker} target>0 但 sector 缺失`,
       });
+    }
+  }
+
+  // 规则 11: fitness 门槛 — fitness<7 的股禁止 BUY/ADD（等效入场信号拦截）
+  if (ctx.fitnessByTicker) {
+    for (const a of plan.actions) {
+      if (a.action !== "BUY" && a.action !== "ADD") continue;
+      const fitness = ctx.fitnessByTicker.get(a.ticker);
+      if (typeof fitness === "number" && fitness < 7) {
+        violations.push({
+          rule: "11. fitness 门槛",
+          detail: `${a.ticker} fitness=${fitness}<7，禁止 ${a.action}（需等待更高评分或数据改善）`,
+        });
+      }
     }
   }
 

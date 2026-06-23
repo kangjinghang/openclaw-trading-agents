@@ -387,10 +387,13 @@ export async function rebalancePipeline(input: RebalancePipelineInput): Promise<
       }
     }
   }
+  const fitnessByTicker = new Map<string, number>();
+  for (const r of reports) fitnessByTicker.set(r.ticker, r.fitness_score);
   const ctx: ValidationContext = {
     sectors, held,
     tickersInPool: new Set(reports.map(r => r.ticker)),
     recentSoldTickers: recentSold,
+    fitnessByTicker,
   };
 
   // 4. rebalancer + revise（接入确定性仓位计算器）

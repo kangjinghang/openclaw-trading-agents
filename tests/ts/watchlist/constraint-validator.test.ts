@@ -164,6 +164,47 @@ describe("validateRebalance 规则 10: sector 非空", () => {
   });
 });
 
+describe("validateRebalance 规则 11: fitness 门槛", () => {
+  it("失败：BUY fitness=5 的股", () => {
+    const plan = makePlan([makeAction({ ticker: "A", current_weight: 0, target_weight: 0.05, delta: 0.05, action: "BUY" })]);
+    plan.portfolio_after.cash_pct = 0.95;
+    const fitness = new Map([["A", 5]]);
+    const r = validateRebalance(plan, { sectors: new Map([["A", "x"]]), held: new Map(), tickersInPool: new Set(["A"]), fitnessByTicker: fitness }, C);
+    expect(r.violations.some(v => v.rule.includes("fitness 门槛") && v.detail.includes("BUY"))).toBe(true);
+  });
+
+  it("失败：ADD fitness=6 的股", () => {
+    const plan = makePlan([makeAction({ ticker: "A", current_weight: 0.02, target_weight: 0.05, delta: 0.03, action: "ADD" })]);
+    plan.portfolio_after.cash_pct = 0.93;
+    const fitness = new Map([["A", 6]]);
+    const r = validateRebalance(plan, { sectors: new Map([["A", "x"]]), held: new Map(), tickersInPool: new Set(["A"]), fitnessByTicker: fitness }, C);
+    expect(r.violations.some(v => v.rule.includes("fitness 门槛") && v.detail.includes("ADD"))).toBe(true);
+  });
+
+  it("通过：BUY fitness=8 的股", () => {
+    const plan = makePlan([makeAction({ ticker: "A", current_weight: 0, target_weight: 0.05, delta: 0.05, action: "BUY" })]);
+    plan.portfolio_after.cash_pct = 0.95;
+    const fitness = new Map([["A", 8]]);
+    const r = validateRebalance(plan, { sectors: new Map([["A", "x"]]), held: new Map(), tickersInPool: new Set(["A"]), fitnessByTicker: fitness }, C);
+    expect(r.violations.some(v => v.rule.includes("fitness 门槛"))).toBe(false);
+  });
+
+  it("通过：SELL/REDUCE 不受 fitness 门槛限制", () => {
+    const plan = makePlan([makeAction({ ticker: "A", current_weight: 0.10, target_weight: 0, delta: -0.10, action: "SELL" })]);
+    plan.portfolio_after.cash_pct = 1.0;
+    const fitness = new Map([["A", 3]]);
+    const r = validateRebalance(plan, { sectors: new Map([["A", "x"]]), held: new Map(), tickersInPool: new Set(["A"]), fitnessByTicker: fitness }, C);
+    expect(r.violations.some(v => v.rule.includes("fitness 门槛"))).toBe(false);
+  });
+
+  it("通过：无 fitnessByTicker 时跳过检查（向后兼容）", () => {
+    const plan = makePlan([makeAction({ ticker: "A", current_weight: 0, target_weight: 0.05, delta: 0.05, action: "BUY" })]);
+    plan.portfolio_after.cash_pct = 0.95;
+    const r = validateRebalance(plan, { sectors: new Map([["A", "x"]]), held: new Map(), tickersInPool: new Set(["A"]) }, C);
+    expect(r.violations.some(v => v.rule.includes("fitness 门槛"))).toBe(false);
+  });
+});
+
 describe("composeReviseFeedback", () => {
   it("把 violations 拼成 LLM 友好的 feedback 字符串", () => {
     const violations = [

@@ -335,10 +335,10 @@ describe("rebalancePipeline (integration)", () => {
     };
     const holdings: Holdings = { updated_at: "x", cash_pct: 0.50, positions: [] };
 
-    // fundamentals 给不同 industry（电子 vs 白酒）
+    // fundamentals 给不同 industry（电子 vs 白酒）+ 非零 pe/np_q1（避免质量门控钳制 fitness）
     const dataByTicker = new Map<string, StockData>([
-      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "未分类", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01 }, news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "电子" } }],
-      ["SH600519", { ticker: "SH600519", name: "贵州茅台", sector: "未分类", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01 }, news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "白酒" } }],
+      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "未分类", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01, volume_ratio_5_20: 1.0 }, news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 25, pb: 3, rev_q1: 1e9, np_q1: 1e8, industry: "电子" } }],
+      ["SH600519", { ticker: "SH600519", name: "贵州茅台", sector: "未分类", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01, volume_ratio_5_20: 1.0 }, news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 30, pb: 10, rev_q1: 4e9, np_q1: 2e9, industry: "白酒" } }],
     ]);
 
     const shallowCaller: ShallowLlmCaller = async ({ role }) => {
@@ -382,9 +382,9 @@ describe("rebalancePipeline (integration)", () => {
     };
     const holdings: Holdings = { updated_at: "x", cash_pct: 0.80, positions: [] };
 
-    // fundamentals.industry 为空（模拟拉取失败）
+    // fundamentals.industry 为空（模拟拉取失败）+ 非零 pe/np_q1（避免质量门控钳制 fitness）
     const dataByTicker = new Map<string, StockData>([
-      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "未分类", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01 }, news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "" } }],
+      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "未分类", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01, volume_ratio_5_20: 1.0 }, news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 25, pb: 3, rev_q1: 1e9, np_q1: 1e8, industry: "" } }],
     ]);
 
     const shallowCaller: ShallowLlmCaller = async ({ role }) => {
