@@ -106,6 +106,8 @@ def _fetch_hot_rank(date):
             "fields": "f2,f3,f4,f12,f14,f104,f105,f127",
         }
         r = em_get(url, params=params, timeout=10)
+        _http = dict(url=str(r.url)[:200], status_code=r.status_code,
+                     response_size=len(r.content), response_snippet=r.text[:200])
         d = r.json()
         items = d.get("data", {}).get("diff", [])
         result = [
@@ -113,7 +115,7 @@ def _fetch_hot_rank(date):
              "change_pct": item.get("f3", 0), "price": item.get("f2", 0)}
             for item in items[:20]
         ]
-        record_call("sentiment/hot_rank", success=True, duration_ms=(time.monotonic() - start) * 1000)
+        record_call("sentiment/hot_rank", success=True, duration_ms=(time.monotonic() - start) * 1000, **_http)
         return result
     except Exception as e:
         record_call("sentiment/hot_rank", success=False, error=str(e), duration_ms=(time.monotonic() - start) * 1000)

@@ -48,6 +48,8 @@ def _fetch_policy_eastmoney(code, lookback_days=30):
             "User-Agent": _UA,
         }
         resp = em_get(url, params=params, headers=headers, timeout=15)
+        _http = dict(url=str(resp.url)[:200], status_code=resp.status_code,
+                     response_size=len(resp.content), response_snippet=resp.text[:200])
         text = resp.text
         text = text[text.index("(") + 1: text.rindex(")")]
         data = json.loads(text)
@@ -64,7 +66,7 @@ def _fetch_policy_eastmoney(code, lookback_days=30):
                     "source": item.get("mediaName", "东方财富"),
                 })
         record_call("policy/stock_em", success=True,
-                    duration_ms=(time.monotonic() - start) * 1000)
+                    duration_ms=(time.monotonic() - start) * 1000, **_http)
         return articles
     except Exception as e:
         record_call("policy/stock_em", success=False, error=str(e),

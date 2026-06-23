@@ -124,13 +124,17 @@ def _fetch_announcements(code, date, lookback_days=60):
     headers = {"User-Agent": _UA, "Referer": "https://data.eastmoney.com/"}
     try:
         resp = http_get(url, params=params, headers=headers, timeout=10)
+        _http = dict(url=str(resp.url)[:200], status_code=resp.status_code,
+                     response_size=len(resp.content), response_snippet=resp.text[:200])
         payload = resp.json()
         if not payload.get("success"):
-            record_call("lockup/ann_em", success=False, error="API returned no success", duration_ms=(time.monotonic() - start) * 1000)
+            record_call("lockup/ann_em", success=False, error="API returned no success",
+                        duration_ms=(time.monotonic() - start) * 1000, **_http)
             return []
         items = payload.get("data", {}).get("list", []) or []
     except Exception as e:
-        record_call("lockup/ann_em", success=False, error=str(e), duration_ms=(time.monotonic() - start) * 1000)
+        record_call("lockup/ann_em", success=False, error=str(e),
+                    duration_ms=(time.monotonic() - start) * 1000)
         return []
 
     cutoff = datetime.strptime(date, "%Y-%m-%d") - timedelta(days=lookback_days)
@@ -158,7 +162,8 @@ def _fetch_announcements(code, date, lookback_days=60):
             "url": f"https://data.eastmoney.com/notices/detail/{code}/{art_code}.html" if art_code else "",
         })
     events.sort(key=lambda x: (x["importance"], x["date"]), reverse=True)
-    record_call("lockup/ann_em", success=True, duration_ms=(time.monotonic() - start) * 1000)
+    record_call("lockup/ann_em", success=True, duration_ms=(time.monotonic() - start) * 1000,
+                url=str(resp.url)[:200], status_code=resp.status_code, response_size=len(resp.content))
     return events[:8]
 
 
