@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 
 XUEQIU_URL = "https://xueqiu.com/rainbow/ai/abnormal/reasons.json"
-XUEQIU_COOKIE_TOKEN = "XqTest6f8800ddb9f1e382c937c39fa0ea7f2c4149a3ea"
+XUEQIU_COOKIE_TOKEN = "XqTestc79726cc9517198fb708bef5c76a6e65c02dfccc"
 XUEQIU_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 BEIJING_TZ = timezone(timedelta(hours=8))
 WINDOW_MONTHS = 14
@@ -116,9 +116,27 @@ def main():
     if args.limit:
         stocks_list = stocks_list[:args.limit]
 
-    total = len(stocks_list)
     # 查询窗口（传雪球）：基于 scan_target
     q_begin_ms, q_end_ms, _, _ = compute_window(scan_target)
+
+    # 探针：提前发现 token 过期，避免全量扫完才知道
+    probe_symbol = stocks_list[0]["symbol"]
+    try:
+        pr = requests.get(
+            XUEQIU_URL,
+            params={"symbol": probe_symbol, "begin": q_begin_ms, "end": q_end_ms},
+            cookies={"xq_a_token": XUEQIU_COOKIE_TOKEN},
+            headers={"user-agent": XUEQIU_UA},
+            timeout=15,
+        )
+        if pr.status_code == 400 and "400016" in pr.text:
+            print("error: xq_a_token 已过期，请从浏览器重新复制", file=sys.stderr)
+            sys.exit(1)
+        pr.raise_for_status()
+    except requests.RequestException as e:
+        print(f"[snapshot] 探针警告 {probe_symbol}: {e}", file=sys.stderr)
+
+    total = len(stocks_list)
     print(f"[snapshot] 扫描 {total} 股 | 查询日 {scan_target} | 并发 {concurrency}", file=sys.stderr)
 
     stocks_out = {}
