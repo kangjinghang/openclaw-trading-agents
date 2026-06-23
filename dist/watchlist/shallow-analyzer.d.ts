@@ -138,6 +138,8 @@ export interface StockData {
         industry: string;
         quarterly_trends?: QuarterlyTrend[];
         consensus_eps?: ConsensusEps;
+        pe_percentile?: number;
+        pb_percentile?: number;
     };
     ranker_thesis?: string;
     /** kline.py 预计算的 VPA 量价分析文本（含"顶部背离信号/放量滞涨"等结论）。
@@ -181,6 +183,10 @@ export declare function renderConsensus(c?: ConsensusEps): string;
  *  每段只在该段有数据时输出；无 upcoming 且无减持 → 只输出压力评级行（让 LLM 知道无压力）。
  *  ratio 字段是字符串（如"0.4%"），原样透传让 LLM 读，避免 parse 失败丢信息。 */
 export declare function renderLockup(l: LockupData): string;
+/** 渲染 PE/PB 历史分位标注（如「[近5年15%分位]」），无数据 → 空串（向后兼容）。
+ *  分位含义：0-100，表示当前值在近5年序列里的位置——低分位=相对便宜，高分位=相对贵。
+ *  让 LLM 据此判断"PE=18 在该股历史上贵不贵"，治绝对值盲区。 */
+export declare function renderPercentileLabel(percentile: number | undefined): string;
 export declare function formatAnalystPrompt(d: StockData): string;
 /** 解析 analyst-role 输出。非 JSON / 缺字段返回 null（或填默认值）。 */
 export declare function parseAnalystReport(content: string): AnalystReport | null;

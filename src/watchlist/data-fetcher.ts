@@ -243,18 +243,25 @@ export function parseHotMoney(raw: any, industry?: string): HotMoneyData {
   };
 }
 
-export function parseFundamentals(raw: any): { pe: number; pb: number; rev_q1: number; np_q1: number; industry: string; quarterly_trends?: QuarterlyTrend[]; consensus_eps?: ConsensusEps } {
+export function parseFundamentals(raw: any): { pe: number; pb: number; rev_q1: number; np_q1: number; industry: string; quarterly_trends?: QuarterlyTrend[]; consensus_eps?: ConsensusEps; pe_percentile?: number; pb_percentile?: number } {
   // fundamentals.py 的真实输出是嵌套结构：
   //   valuation.pe_ttm / valuation.pb          （腾讯实时估值）
   //   financial_snapshot.revenue / .net_profit （mootdx 财务快照）
   //   stock_info.industry                       （东方财富 f127 / datacenter BOARD_NAME 双路）
   //   quarterly_trends / consensus_eps          （datacenter 季度趋势 / 机构预期）
+  //   valuation_percentile.pe_percentile/.pb    （baidu 历史估值分位，近5年）
   // 老实现误读顶层 pe_ttm/pb/revenue_q1/net_profit_q1 → 恒 0，导致 shallow-analyzer
   // 的 PE/PB/营收/净利全盲，fitness 被评分规则压制到 ≤6（无法证实业绩）。
   // 主路读嵌套字段；保留顶层/别名作为容错（兼容可能的旧扁平格式或其他调用方）。
   const val = raw?.valuation ?? {};
   const snap = raw?.financial_snapshot ?? {};
   const num = (v: unknown): number => typeof v === "number" && Number.isFinite(v) ? v : 0;
+  // 分位校验：0-100 且 finite，否则 undefined（避免 baidu 接口异常值污染 prompt）
+  const pct = (v: unknown): number | undefined => {
+    const n = num(v);
+    return n > 0 && n <= 100 ? n : undefined;
+  };
+  const valPct = raw?.valuation_percentile ?? {};
   return {
     pe: num(val.pe_ttm) || num(val.pe) || num(raw?.pe_ttm) || num(raw?.pe),
     pb: num(val.pb) || num(raw?.pb),
@@ -267,6 +274,9 @@ export function parseFundamentals(raw: any): { pe: number; pb: number; rev_q1: n
     quarterly_trends: Array.isArray(raw?.quarterly_trends) ? raw.quarterly_trends as QuarterlyTrend[] : undefined,
     consensus_eps: raw?.consensus_eps && typeof raw.consensus_eps === "object" && !Array.isArray(raw.consensus_eps)
       ? raw.consensus_eps as ConsensusEps : undefined,
+    // PE/PB 历史分位（baidu 近5年），缺/非法 → undefined，prompt 据此省略方括号标注
+    pe_percentile: pct(valPct.pe_percentile),
+    pb_percentile: pct(valPct.pb_percentile),
   };
 }
 

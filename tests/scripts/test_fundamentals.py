@@ -13,7 +13,7 @@ import pytest
 skills_dir = Path(__file__).parent.parent.parent / "skills"
 sys.path.insert(0, str(skills_dir / "trading-fundamentals" / "scripts"))
 
-from fundamentals import _derive_financial_health  # noqa: E402
+from fundamentals import _derive_financial_health, _percentile_of_latest, _fetch_valuation_percentile  # noqa: E402
 
 YI = 1e8
 
@@ -153,3 +153,102 @@ class TestPeriodsAndDegradation:
         # Must round-trip through strict JSON (bare NaN/inf would fail).
         js = json.dumps(res, allow_nan=False)
         json.loads(js)
+
+
+class TestPercentileOfLatest:
+    """_percentile_of_latest：当前值在序列里的百分位（0-100，手写避免 numpy）。"""
+
+    def test_latest_at_top_returns_near_100(self):
+        # 50 个点，当前值最大 → 接近 100
+        seq = list(range(1, 51))  # 当前值 50
+        assert _percentile_of_latest(seq) == 100.0
+
+    def test_latest_at_bottom_returns_zero(self):
+        seq = [50] + list(range(2, 51))  # 当前值 50... 等等，当前在最后
+        # 构造当前值最小：最后一个是 1，其余 2..51
+        seq = list(range(2, 52)) + [1]
+        assert _percentile_of_latest(seq) == 0.0
+
+    def test_latest_in_middle_returns_50(self):
+        # 101 个点（1..100 + 当前值 50），当前值 50 正中间
+        # 低于 50 的有 1..49 共 49 个，分位 = 49/(101-1)*100 = 49.0
+        seq = list(range(1, 101)) + [50]
+        assert _percentile_of_latest(seq) == 49.0
+
+    def test_too_short_series_returns_none(self):
+        assert _percentile_of_latest([1, 2, 3]) is None  # <30 点
+
+    def test_filters_none_and_nonpositive(self):
+        # 混入 None/0/负数应被过滤，不影响计算
+        seq = list(range(1, 31)) + [0, None, -5]
+        assert _percentile_of_latest(seq) == 100.0  # 当前值 30 最大
+
+
+class TestFetchValuationPercentile:
+    """_fetch_valuation_percentile：mock akshare 的 baidu 估值接口。"""
+
+    def test_returns_percentiles_when_akshare_succeeds(self, monkeypatch):
+        import pandas as pd
+        # 构造 731 行的近10年序列，当前值（最后一行）偏高 → 高分位
+        dates = pd.date_range("2016-06-24", periods=731, freq="D").strftime("%Y-%m-%d")
+        pe_values = list(range(1, 732))  # 当前 731（最大）
+        pb_values = list(range(1, 732, 1))[:731]
+
+        def fake_baidu(symbol, indicator, period):
+            vals = pe_values if "市盈率" in indicator else pb_values
+            return pd.DataFrame({"date": dates[:len(vals)], "value": vals})
+
+        import sys as _sys
+        class FakeAk:
+            stock_zh_valuation_baidu = staticmethod(fake_baidu)
+        monkeypatch.setitem(_sys.modules, "akshare", FakeAk)
+
+        res = _fetch_valuation_percentile("600519")
+        assert res is not None
+        assert "pe_percentile" in res
+        assert "pb_percentile" in res
+        # 5年裁剪后仍 >30 点，当前值最大 → 高分位
+        assert res["pe_percentile"] >= 90
+
+    def test_returns_none_when_akshare_missing(self, monkeypatch):
+        import builtins
+        real_import = builtins.__import__
+        def block_akshare(name, *a, **k):
+            if name == "akshare":
+                raise ImportError("no akshare")
+            return real_import(name, *a, **k)
+        monkeypatch.setattr(builtins, "__import__", block_akshare)
+        assert _fetch_valuation_percentile("600519") is None
+
+    def test_returns_none_when_series_too_short(self, monkeypatch):
+        import pandas as pd
+        # 只有 10 行（裁剪后 <30）→ None
+        def fake_baidu(symbol, indicator, period):
+            return pd.DataFrame({"date": ["2026-01-0%d" % i for i in range(1, 11)],
+                                 "value": list(range(10, 20))})
+        import sys as _sys
+        class FakeAk:
+            stock_zh_valuation_baidu = staticmethod(fake_baidu)
+        monkeypatch.setitem(_sys.modules, "akshare", FakeAk)
+        assert _fetch_valuation_percentile("600519") is None
+
+    def test_crops_to_5_years(self, monkeypatch):
+        """验证裁剪：10 年序列但只有最近 1 年有数据足够多时，分位基于近 5 年。
+        构造：前 6 年全是低值，近 4 年（在 5 年窗口内）全是高值，当前值中等。
+        若不裁剪，当前值会被远古低值拉高分位；裁剪后基于近 5 年。"""
+        import pandas as pd
+        from datetime import datetime, timedelta
+        base = datetime(2026, 6, 24)
+        dates = [(base - timedelta(days=365 * 9 - i)).strftime("%Y-%m-%d") for i in range(731)]
+        # 前 500 个低值（PE=5），后 231 个高值（PE=50），当前值 50
+        values = [5] * 500 + [50] * 231
+        def fake_baidu(symbol, indicator, period):
+            return pd.DataFrame({"date": dates, "value": values})
+        import sys as _sys
+        class FakeAk:
+            stock_zh_valuation_baidu = staticmethod(fake_baidu)
+        monkeypatch.setitem(_sys.modules, "akshare", FakeAk)
+        res = _fetch_valuation_percentile("600519")
+        assert res is not None
+        # 裁剪到近5年后，序列里高值占主导，当前值 50 不再是最大但分位应较高
+        assert res["pe_percentile"] >= 50

@@ -270,6 +270,22 @@ describe("parseFundamentals", () => {
     const raw = { valuation: { pe_ttm: NaN, pb: "高" }, financial_snapshot: { revenue: null } };
     expect(parseFundamentals(raw)).toEqual({ pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "" });
   });
+  it("读 PE/PB 历史分位（valuation_percentile，0-100）", () => {
+    const raw = { valuation_percentile: { pe_percentile: 15.2, pb_percentile: 85 } };
+    const r = parseFundamentals(raw);
+    expect(r.pe_percentile).toBe(15.2);
+    expect(r.pb_percentile).toBe(85);
+  });
+  it("分位非法值（0/负/>100/NaN）→ undefined（不污染 prompt）", () => {
+    const raw = { valuation_percentile: { pe_percentile: 0, pb_percentile: 150 } };
+    const r = parseFundamentals(raw);
+    expect(r.pe_percentile).toBeUndefined();
+    expect(r.pb_percentile).toBeUndefined();
+  });
+  it("无 valuation_percentile → 分位 undefined（向后兼容）", () => {
+    expect(parseFundamentals({}).pe_percentile).toBeUndefined();
+    expect(parseFundamentals({ valuation_percentile: {} }).pb_percentile).toBeUndefined();
+  });
   it("透传 quarterly_trends / consensus_eps 原样对象（对齐 fundamentals.py）", () => {
     const trends = [
       { report_date: "2025-03-31", revenue_yi: 285, net_profit_yi: 32, revenue_yoy: 10.5 },

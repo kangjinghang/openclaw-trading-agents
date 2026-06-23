@@ -47,6 +47,8 @@ export declare function parseFundamentals(raw: any): {
     industry: string;
     quarterly_trends?: QuarterlyTrend[];
     consensus_eps?: ConsensusEps;
+    pe_percentile?: number;
+    pb_percentile?: number;
 };
 /** 从 lockup.py 输出解析解禁与减持摘要。
  *

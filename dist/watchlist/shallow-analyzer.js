@@ -4,6 +4,7 @@ exports.renderHotMoneySummary = renderHotMoneySummary;
 exports.renderQuarterlyTrends = renderQuarterlyTrends;
 exports.renderConsensus = renderConsensus;
 exports.renderLockup = renderLockup;
+exports.renderPercentileLabel = renderPercentileLabel;
 exports.formatAnalystPrompt = formatAnalystPrompt;
 exports.parseAnalystReport = parseAnalystReport;
 exports.formatRiskPrompt = formatRiskPrompt;
@@ -46,7 +47,7 @@ const ANALYST_PROMPT_TEMPLATE = `# 角色
 （注意时效：最近 1-2 天的突发新闻权重高于一周前的旧闻；标题党风险——标题与正文矛盾时以正文为准）
 ## 资金流向
 {hot_money_summary}
-## 基本面（PE {pe} / PB {pb} / Q1 营收 {rev_q1} / Q1 净利 {np_q1}）
+## 基本面（PE {pe}{pe_label} / PB {pb}{pb_label} / Q1 营收 {rev_q1} / Q1 净利 {np_q1}）
 ## 季度业绩趋势（近 4 季度营收/净利/ROE + 同比，判断业绩连续性）
 {quarterly_trends}
 ## 机构一致预期（卖方覆盖数 / EPS 预期 / 目标价 / 评级）
@@ -235,6 +236,15 @@ function renderLockup(l) {
     }
     return segs.join(" | ");
 }
+/** 渲染 PE/PB 历史分位标注（如「[近5年15%分位]」），无数据 → 空串（向后兼容）。
+ *  分位含义：0-100，表示当前值在近5年序列里的位置——低分位=相对便宜，高分位=相对贵。
+ *  让 LLM 据此判断"PE=18 在该股历史上贵不贵"，治绝对值盲区。 */
+function renderPercentileLabel(percentile) {
+    if (typeof percentile !== "number" || !Number.isFinite(percentile) || percentile <= 0 || percentile > 100) {
+        return "";
+    }
+    return `[近5年${percentile}%分位]`;
+}
 function formatAnalystPrompt(d) {
     const newsBullets = d.news.map(n => {
         const time = n.time ? `[${n.time}] ` : "";
@@ -259,7 +269,9 @@ function formatAnalystPrompt(d) {
         .replace("{news_bullets}", newsBullets)
         .replace("{hot_money_summary}", renderHotMoneySummary(d.hot_money))
         .replace("{pe}", String(d.fundamentals.pe))
+        .replace("{pe_label}", renderPercentileLabel(d.fundamentals.pe_percentile))
         .replace("{pb}", String(d.fundamentals.pb))
+        .replace("{pb_label}", renderPercentileLabel(d.fundamentals.pb_percentile))
         .replace("{rev_q1}", String(d.fundamentals.rev_q1))
         .replace("{np_q1}", String(d.fundamentals.np_q1))
         // 季度趋势/机构预期：render 返回空串 → 整段标题下内容空白，LLM 理解为"无此数据"。
@@ -359,7 +371,7 @@ const RISK_PROMPT_TEMPLATE = `# 角色
 - 量比 < 0.8 = 缩量；> 1.2 = 放量；0.8-1.2 = 正常
 ## 资金流向
 {hot_money_summary}
-## 基本面（PE {pe} / PB {pb} / Q1 营收 {rev_q1} / Q1 净利 {np_q1}）
+## 基本面（PE {pe}{pe_label} / PB {pb}{pb_label} / Q1 营收 {rev_q1} / Q1 净利 {np_q1}）
 ## 季度业绩趋势（营收/净利同比连续下滑 = 业绩拐点风险，应输出 risk_flag）
 {quarterly_trends}
 
@@ -392,7 +404,9 @@ function formatRiskPrompt(d, analyst) {
         .replace("{volume_ratio_5_20}", String(d.kline.volume_ratio_5_20))
         .replace("{hot_money_summary}", renderHotMoneySummary(d.hot_money))
         .replace("{pe}", String(d.fundamentals.pe))
+        .replace("{pe_label}", renderPercentileLabel(d.fundamentals.pe_percentile))
         .replace("{pb}", String(d.fundamentals.pb))
+        .replace("{pb_label}", renderPercentileLabel(d.fundamentals.pb_percentile))
         .replace("{rev_q1}", String(d.fundamentals.rev_q1))
         .replace("{np_q1}", String(d.fundamentals.np_q1))
         .replace("{quarterly_trends}", renderQuarterlyTrends(d.fundamentals.quarterly_trends) || "(无季度趋势数据)")

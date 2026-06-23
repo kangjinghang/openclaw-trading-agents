@@ -196,6 +196,21 @@ def fetch_fundamentals(ticker, date):
                     duration_ms=(time.monotonic() - start) * 1000)
         data["financial_health_error"] = str(e)
 
+    # 8. PE/PB historical percentile (baidu valuation, akshare).
+    #    当前 PE 在近 5 年序列的分位（0-100），治"PE=18 在化工合理/白酒偏低"的判断盲区——
+    #    LLM 之前只看到 PE 绝对值无法判断贵贱。近 5 年裁剪避免远古失真（行业转型）。
+    start = time.monotonic()
+    try:
+        pct = _fetch_valuation_percentile(code)
+        data["valuation_percentile"] = pct
+        record_call("fundamentals/baidu_valuation", success=pct is not None,
+                    error=None if pct else "baidu valuation unavailable or series too short",
+                    duration_ms=(time.monotonic() - start) * 1000)
+    except Exception as e:
+        record_call("fundamentals/baidu_valuation", success=False, error=str(e),
+                    duration_ms=(time.monotonic() - start) * 1000)
+        data["valuation_percentile_error"] = str(e)
+
     return data
 
 
@@ -420,6 +435,56 @@ def _fetch_financial_health(code, periods=4):
     if not (bs_map and cf_map and is_map):
         return None
     return _derive_financial_health(bs_map, cf_map, is_map, periods)
+
+
+def _percentile_of_latest(values):
+    """当前值（序列最后一个）在该序列里的百分位（0-100），手写避免 numpy/scipy 依赖。
+    返回 None 当序列过短（<30 个有效点，分位无统计意义）或当前值缺失。
+    例：序列 [10,20,30,40,50]，当前值 50 → 排在最高 → 100.0。"""
+    clean = [v for v in values if v is not None and isinstance(v, (int, float)) and v > 0]
+    if len(clean) < 30:
+        return None
+    current = clean[-1]
+    below = sum(1 for v in clean if v < current)
+    # 用 "低于当前值的比例" 定义分位：50 个点里 40 个低于当前 → 80.0（偏贵）
+    return round(below / (len(clean) - 1) * 100, 1)
+
+
+def _fetch_valuation_percentile(code, window_years=5):
+    """Fetch PE(TTM)/PB historical percentile via akshare baidu valuation.
+
+    Source: ak.stock_zh_valuation_baidu(symbol=纯6位, indicator, period="近十年")
+    → DataFrame[date, value]，10 年日线序列（~731 行）。裁剪到最近 5 年后算
+    当前值的百分位。治"PE 绝对值无法判断贵贱"的盲区。
+
+    Returns None on structural failure (akshare missing / fetch error / series
+    too short for a meaningful percentile). Both indicators fail → None.
+    """
+    try:
+        import akshare as ak
+    except Exception as e:
+        record_call("fundamentals/akshare_baidu", success=False, error=str(e))
+        return None
+
+    result = {}
+    for indicator, key in (("市盈率(TTM)", "pe_percentile"), ("市净率", "pb_percentile")):
+        try:
+            df = ak.stock_zh_valuation_baidu(symbol=code, indicator=indicator, period="近十年")
+            if df is None or len(df) == 0:
+                continue
+            # 裁剪到最近 window_years 年（按 date 列过滤，date 是 'YYYY-MM-DD' 字符串）
+            if "date" in df.columns:
+                cutoff = f"{int(df['date'].iloc[-1][:4]) - window_years}-01-01"
+                df = df[df["date"] >= cutoff]
+            values = df["value"].tolist() if "value" in df.columns else []
+            pct = _percentile_of_latest(values)
+            if pct is not None:
+                result[key] = pct
+        except Exception:
+            # 单指标失败不影响另一个（PE/PB 独立），整体都失败则 result 为空
+            continue
+
+    return result if result else None
 
 
 def _derive_financial_health(bs_map, cf_map, is_map, periods=4):

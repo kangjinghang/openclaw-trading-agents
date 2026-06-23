@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatAnalystPrompt, parseAnalystReport, formatRiskPrompt, parseRiskReport, buildStockReport, buildFallbackReport, analyzeAll, renderQuarterlyTrends, renderConsensus, renderLockup, type ShallowLlmCaller, type StockData, type ConsensusEps } from "../../../src/watchlist/shallow-analyzer";
+import { formatAnalystPrompt, parseAnalystReport, formatRiskPrompt, parseRiskReport, buildStockReport, buildFallbackReport, analyzeAll, renderQuarterlyTrends, renderConsensus, renderLockup, renderPercentileLabel, type ShallowLlmCaller, type StockData, type ConsensusEps } from "../../../src/watchlist/shallow-analyzer";
 import type { AnalystReport } from "../../../src/watchlist/rebalance-types";
 import type { CandidateMeta } from "../../../src/watchlist/candidate-selector";
 import type { StockData } from "../../../src/watchlist/shallow-analyzer";
@@ -694,5 +694,60 @@ describe("formatRiskPrompt 解禁段注入", () => {
     };
     const prompt = formatRiskPrompt(data, { thesis: "x", fitness_score: 8, data_freshness: "", key_signals: [], data_gaps: [] });
     expect(prompt).toContain("无解禁数据");
+  });
+});
+
+// ── renderPercentileLabel：PE/PB 历史分位标注 ──────────────
+describe("renderPercentileLabel", () => {
+  it("有效分位（0-100）→ [近5年X%分位]", () => {
+    expect(renderPercentileLabel(15)).toBe("[近5年15%分位]");
+    expect(renderPercentileLabel(85.5)).toBe("[近5年85.5%分位]");
+    expect(renderPercentileLabel(100)).toBe("[近5年100%分位]");
+  });
+
+  it("undefined / 非法值 → 空串（向后兼容，prompt 不带方括号）", () => {
+    expect(renderPercentileLabel(undefined)).toBe("");
+    expect(renderPercentileLabel(0)).toBe("");        // 0 = 无数据/无效
+    expect(renderPercentileLabel(-5)).toBe("");        // 负数
+    expect(renderPercentileLabel(150)).toBe("");       // 超 100
+    expect(renderPercentileLabel(NaN)).toBe("");
+  });
+});
+
+// ── formatAnalystPrompt/formatRiskPrompt：分位标注注入 ──────
+describe("formatAnalystPrompt 分位标注注入", () => {
+  const base = (): StockData => ({
+    ticker: "SZ300319", name: "麦捷科技", sector: "电子",
+    kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.02, volume_ratio_5_20: 1.0 },
+    news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" },
+    fundamentals: { pe: 18.5, pb: 2.1, rev_q1: 1e9, np_q1: 1e8, industry: "电子" },
+  });
+
+  it("有分位 → 基本面段含 [近5年X%分位] 标注", () => {
+    const d = base();
+    d.fundamentals.pe_percentile = 15;
+    d.fundamentals.pb_percentile = 29;
+    const prompt = formatAnalystPrompt(d);
+    expect(prompt).toContain("PE 18.5[近5年15%分位]");
+    expect(prompt).toContain("PB 2.1[近5年29%分位]");
+  });
+
+  it("无分位 → 退回原样（不带方括号，向后兼容）", () => {
+    const prompt = formatAnalystPrompt(base());
+    expect(prompt).toContain("PE 18.5 /");
+    expect(prompt).not.toContain("[近5年");
+  });
+});
+
+describe("formatRiskPrompt 分位标注注入", () => {
+  it("risk prompt 也含分位标注（risk 需判断估值贵贱）", () => {
+    const d: StockData = {
+      ticker: "SZ300319", name: "麦捷科技", sector: "电子",
+      kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 },
+      news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" },
+      fundamentals: { pe: 85, pb: 6, rev_q1: 1e9, np_q1: 1e8, industry: "电子", pe_percentile: 95 },
+    };
+    const prompt = formatRiskPrompt(d, { thesis: "x", fitness_score: 8, data_freshness: "", key_signals: [], data_gaps: [] });
+    expect(prompt).toContain("PE 85[近5年95%分位]");  // 高分位让 risk LLM 识别估值高位
   });
 });
