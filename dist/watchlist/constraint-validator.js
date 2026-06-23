@@ -119,6 +119,20 @@ function validateRebalance(plan, ctx, c) {
             });
         }
     }
+    // 规则 11: fitness 门槛 — fitness<7 的股禁止 BUY/ADD（等效入场信号拦截）
+    if (ctx.fitnessByTicker) {
+        for (const a of plan.actions) {
+            if (a.action !== "BUY" && a.action !== "ADD")
+                continue;
+            const fitness = ctx.fitnessByTicker.get(a.ticker);
+            if (typeof fitness === "number" && fitness < 7) {
+                violations.push({
+                    rule: "11. fitness 门槛",
+                    detail: `${a.ticker} fitness=${fitness}<7，禁止 ${a.action}（需等待更高评分或数据改善）`,
+                });
+            }
+        }
+    }
     return { passed: violations.length === 0, violations };
 }
 /** 把 violations 拼成 LLM revise 用的 feedback 字符串。空 violations 返回空。 */

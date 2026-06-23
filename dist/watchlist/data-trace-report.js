@@ -40,6 +40,13 @@ function traceKline(d) {
     lines.push(fieldRow("resistance", d.kline.resistance));
     lines.push(fieldRow("volatility_20d", d.kline.volatility_20d, "%"));
     lines.push(fieldRow("volume_ratio_5_20", d.kline.volume_ratio_5_20));
+    if (d.macd) {
+        lines.push(fieldRow("MACD DIF", d.macd.dif));
+        lines.push(fieldRow("MACD DEA", d.macd.dea));
+        lines.push(fieldRow("MACD histogram", d.macd.histogram));
+        lines.push(fieldRow("MACD direction", d.macd.direction));
+        lines.push(fieldRow("MACD crossover", d.macd.crossover));
+    }
     lines.push("");
     lines.push("**→ 注入 prompt 的行**:");
     lines.push("```");

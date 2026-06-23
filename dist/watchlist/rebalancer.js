@@ -329,10 +329,22 @@ async function rebalancePipeline(input) {
         if (m.is_held)
             held.set(m.ticker, { days_held: m.days_held, locked: m.locked });
     }
+    // anti-churn 买锁：最近 N 天内卖出过的 ticker 禁止 BUY
+    // 优先用 recent_sells（跨次累积，覆盖多次 rebalance），fallback 到 lastRebalance.actions
     const recentSold = new Set();
-    if (input.lastRebalance) {
-        const daysSince = Math.floor((new Date(input.currentDate + "T00:00:00+08:00").getTime() -
-            new Date(input.lastRebalance.date + "T00:00:00+08:00").getTime()) / (24 * 60 * 60 * 1000));
+    const currentMs = new Date(input.currentDate + "T00:00:00+08:00").getTime();
+    if (input.lastRebalance?.recent_sells) {
+        for (const [tick, sellDate] of Object.entries(input.lastRebalance.recent_sells)) {
+            const sellMs = new Date(sellDate + "T00:00:00+08:00").getTime();
+            if (Math.floor((currentMs - sellMs) / 86400000) < config.anti_churn_days) {
+                recentSold.add(tick);
+            }
+        }
+    }
+    else if (input.lastRebalance) {
+        // 旧版 last_rebalance.json 无 recent_sells：fallback 到单次检查
+        const daysSince = Math.floor((currentMs -
+            new Date(input.lastRebalance.date + "T00:00:00+08:00").getTime()) / 86400000);
         if (daysSince < config.anti_churn_days) {
             for (const ac of input.lastRebalance.actions) {
                 if (ac.action === "SELL")
@@ -340,10 +352,14 @@ async function rebalancePipeline(input) {
             }
         }
     }
+    const fitnessByTicker = new Map();
+    for (const r of reports)
+        fitnessByTicker.set(r.ticker, r.fitness_score);
     const ctx = {
         sectors, held,
         tickersInPool: new Set(reports.map(r => r.ticker)),
         recentSoldTickers: recentSold,
+        fitnessByTicker,
     };
     // 4. rebalancer + revise（接入确定性仓位计算器）
     const prompt = formatRebalancerPrompt(reports, input.holdings, input.lastRebalance, config.constraints, config.anti_churn_days);

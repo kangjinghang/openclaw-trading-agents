@@ -42,8 +42,11 @@ function baseWeight(fitness) {
     return 0; // ≤6 不买
 }
 /** 波动率折扣：日线收益率标准差（单位 0-1，如 0.025 = 2.5%/日）。
- *  <2%/日 ×1.0（大盘股），2-4% ×0.8（成长股），>4% ×0.6（题材/次新）。 */
+ *  0（kline 失败/未知）→ ×0.6（最保守折扣，防"零风险"假象）。
+ *  <2%/日 → ×1.0（大盘股），2-4% → ×0.8（成长股），>4% → ×0.6（题材/次新）。 */
 function volatilityFactor(volatility) {
+    if (volatility <= 0)
+        return 0.6; // 未知波动率 → 最保守
     if (volatility < 0.02)
         return 1.0;
     if (volatility < 0.04)
@@ -75,8 +78,11 @@ function computePosition(input) {
     if (action === "HOLD") {
         return { targetWeight: currentWeight, trace: `HOLD：维持当前 ${(currentWeight * 100).toFixed(1)}%` };
     }
-    // REDUCE：减半（fitness≤5 或 high risk 触发，代码不信任 AI 的具体数字）
+    // REDUCE：减半；若仓位已很小（≤3%，即 fitness 7 的基础档），直接清仓（省一个换手槽位）
     if (action === "REDUCE") {
+        if (currentWeight <= 0.03) {
+            return { targetWeight: 0, trace: `REDUCE：当前 ${(currentWeight * 100).toFixed(1)}% ≤3%，直接清仓` };
+        }
         const target = currentWeight / 2;
         return {
             targetWeight: target,

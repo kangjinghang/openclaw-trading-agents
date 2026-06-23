@@ -4,6 +4,7 @@ exports.renderHotMoneySummary = renderHotMoneySummary;
 exports.renderQuarterlyTrends = renderQuarterlyTrends;
 exports.renderConsensus = renderConsensus;
 exports.renderLockup = renderLockup;
+exports.renderMacd = renderMacd;
 exports.renderPercentileLabel = renderPercentileLabel;
 exports.formatAnalystPrompt = formatAnalystPrompt;
 exports.parseAnalystReport = parseAnalystReport;
@@ -236,6 +237,20 @@ function renderLockup(l) {
     }
     return segs.join(" | ");
 }
+/** 渲染 MACD 动量信号为一行文本。无数据 → 空串（prompt 该行省略）。
+ *  格式：「DIF=0.523 DEA=0.481 柱状图=0.042 多头｜金叉」
+ *  让 LLM 识别动量方向 + 交叉信号（金叉=看多加速，死叉=看空加速）。 */
+function renderMacd(m) {
+    if (!m)
+        return "";
+    const parts = [`DIF=${m.dif}`, `DEA=${m.dea}`, `柱状图=${m.histogram}`];
+    parts.push(m.direction);
+    if (m.crossover === "golden")
+        parts.push("金叉");
+    else if (m.crossover === "death")
+        parts.push("死叉");
+    return parts.join(" | ");
+}
 /** 渲染 PE/PB 历史分位标注（如「[近5年15%分位]」），无数据 → 空串（向后兼容）。
  *  分位含义：0-100，表示当前值在近5年序列里的位置——低分位=相对便宜，高分位=相对贵。
  *  让 LLM 据此判断"PE=18 在该股历史上贵不贵"，治绝对值盲区。 */
@@ -378,6 +393,9 @@ const RISK_PROMPT_TEMPLATE = `# 角色
 ## VPA 量价预计算
 {vpa_text}
 
+## MACD 动量信号
+{macd_text}
+
 ## 解禁与减持（未来 90 天解禁 + 近期减持；未来大额解禁或减持 = 供给压力）
 {lockup_summary}
 
@@ -411,6 +429,7 @@ function formatRiskPrompt(d, analyst) {
         .replace("{np_q1}", String(d.fundamentals.np_q1))
         .replace("{quarterly_trends}", renderQuarterlyTrends(d.fundamentals.quarterly_trends) || "(无季度趋势数据)")
         .replace("{vpa_text}", d.vpa_text || "(无 VPA 数据)")
+        .replace("{macd_text}", renderMacd(d.macd) || "(无 MACD 数据)")
         .replace("{lockup_summary}", d.lockup ? renderLockup(d.lockup) : "(无解禁数据)")
         .replace("{analyst_thesis}", `${analyst.thesis}（fitness ${analyst.fitness_score}）`);
 }

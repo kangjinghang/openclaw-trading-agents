@@ -368,9 +368,10 @@ async function fetchStockData(ticker, name, sector, rankerThesis) {
         safeCall(() => (0, exec_python_1.execSkillScript)("trading-lockup", "lockup", PROJECT_ROOT, ["--ticker", ticker, "--date", today])),
     ];
     const [klineR, newsR, hotR, fundR, lockupR] = await Promise.all(tasks);
-    // klineR 是 {data, vpa}（safeCall 改造后）；其余只有 data
+    // klineR 是 {data, vpa, macd}（safeCall 改造后）；其余只有 data
     const klineRaw = klineR?.data ?? null;
     const vpaText = klineR?.vpa;
+    const macdData = klineR?.macd;
     const kline = klineRaw ? parseKline(klineRaw) : { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 };
     const news = newsR?.data ? parseNews(newsR.data) : [];
     const newsLayerStats = newsR?.data ? parseNewsLayerStats(newsR.data) ?? undefined : undefined;
@@ -392,6 +393,7 @@ async function fetchStockData(ticker, name, sector, rankerThesis) {
         fundamentals: fund,
         ranker_thesis: rankerThesis,
         vpa_text: vpaText, // kline.py 预计算的 VPA 量价背离结论，undefined 则不注入
+        macd: macdData, // kline.py 预计算的 MACD 结构化数据，undefined 则不注入
         news_layer_stats: newsLayerStats, // news.py layer_stats，undefined 则不注入
         lockup, // lockup.py 解禁+减持，undefined（拉取失败/无数据）则 risk prompt 省略解禁段
         calls: allCalls.length > 0 ? allCalls : undefined,
@@ -409,6 +411,7 @@ async function safeCall(fn) {
         return {
             data: result.data,
             vpa: typeof result.vpa === "string" ? result.vpa : undefined,
+            macd: (result.macd && typeof result.macd === "object" && typeof result.macd.dif === "number") ? result.macd : undefined,
             calls: Array.isArray(result.calls) ? result.calls : undefined,
         };
     }

@@ -114,6 +114,13 @@ export interface LockupData {
     upcoming: LockupItem[];
     reduce_holdings: ReduceHolding[];
 }
+export interface MacdData {
+    dif: number;
+    dea: number;
+    histogram: number;
+    direction: "看多" | "看空" | "中性";
+    crossover: "golden" | "death" | "none";
+}
 export interface StockData {
     ticker: string;
     name: string;
@@ -145,6 +152,9 @@ export interface StockData {
     /** kline.py 预计算的 VPA 量价分析文本（含"顶部背离信号/放量滞涨"等结论）。
      *  undefined = 无 VPA 数据（非 kline 脚本或拉取失败）。 */
     vpa_text?: string;
+    /** kline.py 预计算的 MACD 结构化数据（DIF/DEA/histogram/方向/金叉死叉）。
+     *  undefined = 数据不足或拉取失败。 */
+    macd?: MacdData;
     /** 新闻时间分层数量（news.py layer_stats）。undefined = 无统计，不阻塞分析。
      *  shallow 用它判断热门/冷门 + 有无突发，是一行文本的成本换密度信号。 */
     news_layer_stats?: NewsLayerStats;
@@ -183,6 +193,10 @@ export declare function renderConsensus(c?: ConsensusEps): string;
  *  每段只在该段有数据时输出；无 upcoming 且无减持 → 只输出压力评级行（让 LLM 知道无压力）。
  *  ratio 字段是字符串（如"0.4%"），原样透传让 LLM 读，避免 parse 失败丢信息。 */
 export declare function renderLockup(l: LockupData): string;
+/** 渲染 MACD 动量信号为一行文本。无数据 → 空串（prompt 该行省略）。
+ *  格式：「DIF=0.523 DEA=0.481 柱状图=0.042 多头｜金叉」
+ *  让 LLM 识别动量方向 + 交叉信号（金叉=看多加速，死叉=看空加速）。 */
+export declare function renderMacd(m?: MacdData): string;
 /** 渲染 PE/PB 历史分位标注（如「[近5年15%分位]」），无数据 → 空串（向后兼容）。
  *  分位含义：0-100，表示当前值在近5年序列里的位置——低分位=相对便宜，高分位=相对贵。
  *  让 LLM 据此判断"PE=18 在该股历史上贵不贵"，治绝对值盲区。 */

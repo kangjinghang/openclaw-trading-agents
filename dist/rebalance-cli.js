@@ -259,13 +259,26 @@ Options:
             fs.writeFileSync(path.join(rebalanceDir, "data-trace.md"), traceMd, "utf-8");
         }
     }
-    // 更新 last_rebalance.json
+    // 更新 last_rebalance.json（含 recent_sells 跨次累积，供 anti-churn 买锁）
     if (result.rebalancer_output.actions.length > 0) {
+        // 继承旧的 recent_sells，追加本次 SELL，淘汰 >14 天的旧记录
+        const prevSells = lastRebalance?.recent_sells ?? {};
+        const mergedSells = { ...prevSells };
+        for (const a of result.rebalancer_output.actions) {
+            if (a.action === "SELL")
+                mergedSells[a.ticker] = date;
+        }
+        const cutoffMs = new Date(date + "T00:00:00+08:00").getTime() - 14 * 86400000;
+        for (const [tick, d] of Object.entries(mergedSells)) {
+            if (new Date(d + "T00:00:00+08:00").getTime() < cutoffMs)
+                delete mergedSells[tick];
+        }
         const newLast = {
             date,
             actions: result.rebalancer_output.actions
                 .filter(a => a.action !== "HOLD")
                 .map(a => ({ action: a.action, ticker: a.ticker, weight: a.target_weight })),
+            recent_sells: mergedSells,
         };
         (0, atomic_json_1.writeAtomicJson)(path.join(watchlistDir, "last_rebalance.json"), newLast);
     }
