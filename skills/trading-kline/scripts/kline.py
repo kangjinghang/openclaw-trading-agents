@@ -531,6 +531,7 @@ def compute_technical_indicators(data: list) -> str:
         lines.append("")
 
     # ── RSI (14) ──
+    rsi = None
     period = 14
     if len(closes) >= period + 1:
         gains = []
@@ -564,6 +565,7 @@ def compute_technical_indicators(data: list) -> str:
         lines.append("")
 
     # ── KDJ (9, 3, 3) ──
+    k_val = d_val = j_val = None
     kdj_period = 9
     if n >= kdj_period:
         k_values = [50.0]  # Start at 50
@@ -606,6 +608,7 @@ def compute_technical_indicators(data: list) -> str:
         lines.append("")
 
     # ── Bollinger Bands (20, 2) ──
+    boll_ma = band_width = position = None
     boll_period = 20
     if n >= boll_period:
         boll_ma = sum(closes[-boll_period:]) / boll_period
@@ -655,19 +658,19 @@ def compute_technical_indicators(data: list) -> str:
         signals.append(("MACD", f"DIF={dif:.3f}", macd_dir, macd_str))
 
     # RSI signal
-    if 'rsi' in dir():
+    if rsi is not None:
         rsi_dir = "看多" if rsi > 60 else "看空" if rsi < 40 else "中性"
         rsi_str = "强" if rsi > 70 or rsi < 30 else "中"
         signals.append(("RSI(14)", f"{rsi:.1f}", rsi_dir, rsi_str))
 
     # KDJ signal
-    if 'k_val' in dir():
+    if k_val is not None:
         kdj_dir = "看多" if k_val > d_val else "看空"
         kdj_str = "强" if j_val > 100 or j_val < 0 else "中"
         signals.append(("KDJ", f"K={k_val:.1f} D={d_val:.1f}", kdj_dir, kdj_str))
 
     # Bollinger signal
-    if 'boll_ma' in dir() and band_width > 0:
+    if boll_ma is not None and band_width > 0:
         boll_dir = "看多" if position < 0.2 else "看空" if position > 0.8 else "中性"
         boll_str = "强" if position < 0.1 or position > 0.9 else "中"
         signals.append(("Bollinger", f"位={position:.0%}", boll_dir, boll_str))

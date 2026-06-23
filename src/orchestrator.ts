@@ -617,12 +617,13 @@ async function runAnalystPhase(
   health: PipelineHealth,
   log: LogProgressFn,
   tracker?: ProgressTracker,
+  totalStages: number = 4,
 ): Promise<{ analystReports: AnalystReport[]; totalTokens: number; totalCostUsd: number; dataResults: Array<{ role: string; result: ScriptResult }>; companyName: string }> {
   let totalTokens = 0;
   let totalCostUsd = 0;
 
   // ── Phase 1: Fetch data from all 7 scripts with concurrency limit ──
-  log("[1/4] 数据采集 7 个数据源...");
+  log(`[1/${totalStages}] 数据采集 7 个数据源...`);
   const dataConcurrency = config.llm_concurrency || DEFAULT_CONCURRENCY;
   const dataResults: Array<{ role: string; result: ScriptResult }> = new Array(ANALYST_CONFIGS.length);
 
@@ -647,7 +648,7 @@ async function runAnalystPhase(
   );
 
   const dataFailed = dataResults.filter(d => !d.result.success).length;
-  log(`[1/4] 数据采集完成 (${ANALYST_CONFIGS.length - dataFailed}/${ANALYST_CONFIGS.length} 成功${dataFailed > 0 ? `, ${dataFailed} 失败` : ""})`);
+  log(`[1/${totalStages}] 数据采集完成 (${ANALYST_CONFIGS.length - dataFailed}/${ANALYST_CONFIGS.length} 成功${dataFailed > 0 ? `, ${dataFailed} 失败` : ""})`);
   tracker?.emit("data");
 
   // CP1: Data collection gate
@@ -733,7 +734,7 @@ async function runAnalystPhase(
     : ticker;
 
   // ── Phase 2: Run all 7 analysts with concurrency limit ─────────
-  log("[2/4] 分析师阶段 7 个分析师...");
+  log("[2/${totalStages}] 分析师阶段 7 个分析师...");
   const promptsBaseDir = path.join(SKILLS_DIR, "trading-analysis", "prompts");
 
   const analystReports: AnalystReport[] = new Array(ANALYST_CONFIGS.length);
@@ -799,7 +800,7 @@ async function runAnalystPhase(
         const vDir = verdict?.direction || "?";
         votes[vDir] = (votes[vDir] || 0) + 1;
         const voteStr = Object.entries(votes).map(([d, c]) => `${c}${d}`).join("/");
-        log(`⏳ [2/4] 分析师 ${completedCount}/${ANALYST_CONFIGS.length} (${voteStr})`, undefined, undefined, "analyst-progress");
+        log(`⏳ [2/${totalStages}] 分析师 ${completedCount}/${ANALYST_CONFIGS.length} (${voteStr})`, undefined, undefined, "analyst-progress");
         log(`  ✓ ${cfg.role}: ${vDir} (${llmResult.usage.total_tokens.toLocaleString()} tokens)`);
         tracker?.emit("analysts", completedCount / ANALYST_CONFIGS.length);
 
@@ -833,7 +834,7 @@ async function runAnalystPhase(
       } catch (err: any) {
         completedCount++;
         const voteStr = Object.entries(votes).map(([d, c]) => `${c}${d}`).join("/");
-        log(`⏳ [2/4] 分析师 ${completedCount}/${ANALYST_CONFIGS.length} (${voteStr})`, undefined, undefined, "analyst-progress");
+        log(`⏳ [2/${totalStages}] 分析师 ${completedCount}/${ANALYST_CONFIGS.length} (${voteStr})`, undefined, undefined, "analyst-progress");
         log(`  ✗ ${cfg.role}: 失败 — ${err.message?.slice(0, 60)}`);
         tracker?.emit("analysts", completedCount / ANALYST_CONFIGS.length);
         analystReports[idx] = {
@@ -849,7 +850,7 @@ async function runAnalystPhase(
   );
 
   const analystEmpty = analystReports.filter(r => r.content.startsWith("[分析失败")).length;
-  log(`[2/4] 分析师阶段完成${analystEmpty > 0 ? ` (${analystEmpty} 个失败)` : ""}`);
+  log(`[2/${totalStages}] 分析师阶段完成${analystEmpty > 0 ? ` (${analystEmpty} 个失败)` : ""}`);
 
   return { analystReports, totalTokens, totalCostUsd, dataResults, companyName };
 }
@@ -1077,7 +1078,7 @@ export async function runFullAnalysis(
 
   // Phase 1-2: Analysts
   const health = new PipelineHealth(runId);
-  const { analystReports, dataResults, companyName } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health, log, tracker);
+  const { analystReports, dataResults, companyName } = await runAnalystPhase(ticker, date, config, openaiClient, traceLogger, runId, health, log, tracker, 7);
 
   if (signal?.aborted) throw new AbortError();
   haltIfAborted(health); // ≥6 data sources failed → don't run debate/research/risk on empty analysts
