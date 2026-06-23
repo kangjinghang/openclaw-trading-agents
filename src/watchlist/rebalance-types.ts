@@ -181,6 +181,10 @@ export interface RebalanceConfig {
   anti_churn_days: number;
   max_revise_retries: number;
   run_optional_scripts: boolean;
+  /** shallow-analyzer 跨股并发数（任意时刻最多 N 个 LLM call）。
+   *  zhipu glm-5.x 在并发 ≥3 时易触发 429（推理模型耗时长，请求堆积），
+   *  默认 2 比 analyzeAll 原默认 3 更稳；可通过 config.json 覆盖。 */
+  shallow_concurrency: number;
 }
 
 export const DEFAULT_REBALANCE_CONFIG: RebalanceConfig = {
@@ -194,4 +198,5 @@ export const DEFAULT_REBALANCE_CONFIG: RebalanceConfig = {
   anti_churn_days: 7,
   max_revise_retries: 2,
   run_optional_scripts: false,
+  shallow_concurrency: 2,
 };

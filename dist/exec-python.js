@@ -70,26 +70,48 @@ function resolvePythonCmd() {
     const candidates = [
         process.env.TRADING_PYTHON,
         'python3',
+        'python', // Windows: `python` is the common alias; `python3` may resolve to a bare install
         '/usr/bin/python3',
         '/opt/homebrew/bin/python3',
         path.join(os.homedir(), '.pyenv/shims/python3'),
     ].filter(Boolean);
-    for (const cmd of candidates) {
-        try {
-            (0, child_process_1.execSync)(`${cmd} -c "import requests"`, {
-                timeout: 5000,
-                stdio: 'pipe',
-                env: { ...process.env, PYTHONUTF8: '1' },
-            });
-            resolvedPython = cmd;
-            console.error(`[exec-python] resolved python: ${cmd}`);
-            return cmd;
+    // Two-phase dependency check:
+    // Phase 1 (preferred): find a python with ALL deps (requests + akshare + pandas).
+    //   This avoids picking a bare system python3 that shadows the uv-managed python
+    //   where akshare/pandas are installed (observed: fundamentals financial_health
+    //   silently degraded to "No module named 'akshare'").
+    // Phase 2 (fallback): if no candidate has all deps, accept requests-only (original
+    //   behavior) so environments without akshare still work — akshare-dependent
+    //   features degrade gracefully.
+    const tryResolve = (deps) => {
+        for (const cmd of candidates) {
+            try {
+                (0, child_process_1.execSync)(`${cmd} -c "${deps}"`, {
+                    timeout: 5000,
+                    stdio: 'pipe',
+                    env: { ...process.env, PYTHONUTF8: '1' },
+                });
+                return cmd;
+            }
+            catch {
+                // try next candidate
+            }
         }
-        catch {
-            // try next candidate
-        }
+        return null;
+    };
+    const full = tryResolve('import requests, akshare, pandas');
+    if (full) {
+        resolvedPython = full;
+        console.error(`[exec-python] resolved python: ${full}`);
+        return full;
     }
-    // No candidate has requests — fallback to bare python3
+    const minimal = tryResolve('import requests');
+    if (minimal) {
+        resolvedPython = minimal;
+        console.error(`[exec-python] resolved python: ${minimal} (akshare/pandas missing — some features degrade)`);
+        return minimal;
+    }
+    // No candidate has even requests — fallback to bare python3
     resolvedPython = 'python3';
     console.error('[exec-python] no python with requests found, falling back to python3');
     return 'python3';

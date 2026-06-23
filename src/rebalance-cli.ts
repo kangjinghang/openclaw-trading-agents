@@ -28,6 +28,33 @@ function argValue(args: string[], key: string): string | undefined {
   return idx >= 0 && args[idx + 1] ? args[idx + 1] : undefined;
 }
 
+/** 读取 plugin config（~/.openclaw/openclaw.json → plugins.entries.trading-agents.config）。
+ *  与 rank-cli 的 loadPluginConfig 同源；扩展读 llm_concurrency / shallow_concurrency，
+ *  让 rebalance 的 shallow-analyzer 并发可配置（避免 GLM-5.x 推理模型 429）。 */
+function loadPluginConfig(): {
+  api_key?: string; base_url?: string; model?: string;
+  shallow_concurrency?: number;
+} {
+  const openclawJson = path.join(os.homedir(), ".openclaw", "openclaw.json");
+  if (!fs.existsSync(openclawJson)) return {};
+  try {
+    const root = JSON.parse(fs.readFileSync(openclawJson, "utf-8"));
+    const cfg = root?.plugins?.entries?.["trading-agents"]?.config;
+    if (!cfg) return {};
+    return {
+      api_key: cfg.api_key,
+      base_url: cfg.base_url,
+      model: cfg.models?.analyst,
+      // shallow_concurrency 优先于 llm_concurrency（rebalance 专用细粒度控制）
+      shallow_concurrency: typeof cfg.shallow_concurrency === "number"
+        ? cfg.shallow_concurrency
+        : typeof cfg.llm_concurrency === "number" ? cfg.llm_concurrency : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
 function findLatestScan(watchlistDir: string): string | null {
   const scanRoot = path.join(watchlistDir, "scan");
   if (!fs.existsSync(scanRoot)) return null;
@@ -91,10 +118,11 @@ Options:
     console.error(`  [fitness-history] backfill 跳过: ${e instanceof Error ? e.message : e}`);
   }
 
-  // LLM 配置
-  const apiKey = argValue(args, "--api-key") ?? process.env.OPENAI_API_KEY;
-  const baseUrl = argValue(args, "--base-url") ?? process.env.OPENAI_BASE_URL;
-  const model = argValue(args, "--model") ?? "glm-4.7";
+  // LLM 配置（优先级：CLI args > plugin config (openclaw.json) > env > 默认）
+  const pluginCfg = loadPluginConfig();
+  const apiKey = argValue(args, "--api-key") ?? pluginCfg.api_key ?? process.env.OPENAI_API_KEY;
+  const baseUrl = argValue(args, "--base-url") ?? pluginCfg.base_url ?? process.env.OPENAI_BASE_URL;
+  const model = argValue(args, "--model") ?? pluginCfg.model ?? "glm-4-flash";
   if (!apiKey) {
     console.error(`error: 缺 API key`);
     process.exit(2);
@@ -155,10 +183,15 @@ Options:
   console.log(`  数据就绪: ${dataByTicker.size}/${dedupMetas.length} 只`);
 
   // 跑 pipeline
+  // shallow_concurrency：plugin config > 默认（DEFAULT_REBALANCE_CONFIG.shallow_concurrency=2）
+  const shallowConcurrency = pluginCfg.shallow_concurrency;
   const result = await rebalancePipeline({
     scan, holdings, lastRebalance, currentDate: date,
     shallowCaller, rebalanceCaller, dataByTicker,
-    config: { top_n: topN },
+    config: {
+      top_n: topN,
+      ...(shallowConcurrency !== undefined ? { shallow_concurrency: shallowConcurrency } : {}),
+    },
   });
 
   // 收集数据源健康统计：从 dataByTicker 里提取每个股的 calls，聚合为 run 级别

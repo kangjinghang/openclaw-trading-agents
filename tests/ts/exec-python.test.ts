@@ -313,13 +313,14 @@ describe('resolvePythonCmd', () => {
   });
 
   it('prioritizes TRADING_PYTHON env var when set and valid', () => {
-    // Save and set env
+    // Save and set env. Use a python that has all required deps (requests+akshare+pandas);
+    // resolvePythonCmd Phase-1 prefers a python with full deps over a bare python3.
     const orig = process.env.TRADING_PYTHON;
-    process.env.TRADING_PYTHON = 'python3'; // use valid python3
+    process.env.TRADING_PYTHON = 'python'; // uv-managed python with full deps
     resetPythonResolver();
 
     const cmd = resolvePythonCmd();
-    expect(cmd).toBe('python3');
+    expect(cmd).toBe('python');
 
     // Restore
     if (orig) {
