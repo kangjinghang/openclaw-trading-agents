@@ -55,6 +55,9 @@ function generateTraceId(): string {
 /** Models whose missing price entry has already been warned about this
  *  process — avoids spamming the log once per LLM call. */
 const _warnedMissingCost = new Set<string>();
+/** True if any LLM call used a model not in MODEL_COSTS (cost reported as $0). */
+let _hasUnknownModelCost = false;
+export function hasUnknownModelCost(): boolean { return _hasUnknownModelCost; }
 
 /** Calculate cost in USD based on model and token usage */
 function calculateCost(
@@ -69,6 +72,7 @@ function calculateCost(
     // silently fell back to gpt-4o pricing, overstating cost ~50x for the
     // default GLM models (which were absent from the table) and producing
     // a misleading total_cost_usd in run_summary / dashboard / CLI output.
+    _hasUnknownModelCost = true;
     if (!_warnedMissingCost.has(model)) {
       if (_warnedMissingCost.size > 100) _warnedMissingCost.clear();  // 防内存泄露
       _warnedMissingCost.add(model);
@@ -337,15 +341,29 @@ export async function callLLM(
  *
  * Returns null only if no direction signal can be found at all.
  */
+/** Extract JSON from <!-- TAG: {...} --> using brace-depth matching.
+ *  More robust than {.*?} which fails on nested JSON or unbalanced braces. */
+export function extractTaggedJson(content: string, tag: string): string | null {
+  const tagIdx = content.indexOf(`${tag}:`);
+  if (tagIdx === -1) return null;
+  const jsonStart = content.indexOf("{", tagIdx);
+  if (jsonStart === -1) return null;
+  let depth = 0;
+  for (let i = jsonStart; i < content.length; i++) {
+    if (content[i] === "{") depth++;
+    else if (content[i] === "}") { depth--; if (depth === 0) return content.slice(jsonStart, i + 1); }
+  }
+  return null;
+}
+
 export function parseVerdict(
   content: string
 ): { direction: string; reason: string } | null {
   // ── Layer 1: VERDICT tag ──────────────────────────────────────
-  const verdictRegex = /<!--\s*VERDICT:\s*(\{.*?\})\s*-->/s;
-  const match = content.match(verdictRegex);
-  if (match) {
+  const jsonStr = extractTaggedJson(content, "VERDICT");
+  if (jsonStr) {
     try {
-      const verdict = JSON.parse(match[1]);
+      const verdict = JSON.parse(jsonStr);
       if (typeof verdict.direction === "string" && typeof verdict.reason === "string") {
         return { direction: verdict.direction, reason: verdict.reason };
       }

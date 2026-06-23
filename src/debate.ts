@@ -1,7 +1,7 @@
 // src/debate.ts
 
 import OpenAI from "openai";
-import { callLLM } from "./llm-client";
+import { callLLM, extractTaggedJson } from "./llm-client";
 import { loadAndRender } from "./prompt-loader";
 import { TraceLogger } from "./trace-logger";
 import {
@@ -60,13 +60,12 @@ export function extractSummary(content: string): string {
  * is still usable.
  */
 export function parseDebateState(content: string): DebateStatePayload | null {
-  const regex = /<!--\s*DEBATE_STATE:\s*(\{.*?\})\s*-->/s;
-  const match = content.match(regex);
-  if (!match) return null;
+  const jsonStr = extractTaggedJson(content, "DEBATE_STATE");
+  if (!jsonStr) return null;
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(match[1]);
+    parsed = JSON.parse(jsonStr);
   } catch {
     return null;
   }

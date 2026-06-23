@@ -199,8 +199,8 @@ def tencent_quote(codes):
     url = "https://qt.gtimg.cn/q=" + ",".join(prefixed)
     req = urllib.request.Request(url)
     req.add_header("User-Agent", "Mozilla/5.0")
-    resp = urllib.request.urlopen(req, timeout=10)
-    raw = resp.read().decode("gbk")
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        raw = resp.read().decode("gbk")
 
     result = {}
     for line in raw.strip().split(";"):

@@ -1,7 +1,7 @@
 // src/risk.ts
 
 import OpenAI from "openai";
-import { callLLM, parseVerdict, RateLimitCoordinator } from "./llm-client";
+import { callLLM, parseVerdict, extractTaggedJson, RateLimitCoordinator } from "./llm-client";
 import { loadAndRender } from "./prompt-loader";
 import { TraceLogger } from "./trace-logger";
 import {
@@ -107,13 +107,12 @@ const RISK_VERDICTS = new Set(["pass", "revise", "reject"]);
  * arrays are coerced to empty defaults so partial LLM output is still usable.
  */
 export function parseRiskJudge(content: string): RiskJudge | null {
-  const regex = /<!--\s*RISK_JUDGE:\s*(\{.*?\})\s*-->/s;
-  const match = content.match(regex);
-  if (!match) return null;
+  const jsonStr = extractTaggedJson(content, "RISK_JUDGE");
+  if (!jsonStr) return null;
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(match[1]);
+    parsed = JSON.parse(jsonStr);
   } catch {
     return null;
   }

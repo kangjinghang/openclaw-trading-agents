@@ -482,15 +482,19 @@ function parseDirection(raw?: string): FinalDecision["direction"] {
   const firstOption = raw.split("|")[0].trim();
   const normalized = firstOption.toLowerCase();
 
-  // English mappings
-  if (normalized === "buy" || normalized === "overweight") return "Buy";
+  // English mappings (5-tier, preserving Overweight/Underweight nuance)
+  if (normalized === "buy") return "Buy";
+  if (normalized === "overweight") return "Overweight";
   if (normalized === "hold" || normalized === "neutral") return "Hold";
-  if (normalized === "sell" || normalized === "underweight") return "Sell";
+  if (normalized === "underweight") return "Underweight";
+  if (normalized === "sell") return "Sell";
 
   // Chinese mappings
-  if (normalized === "买入" || normalized === "增持" || normalized === "看多") return "Buy";
+  if (normalized === "买入" || normalized === "看多") return "Buy";
+  if (normalized === "增持" || normalized === "偏多") return "Overweight";
   if (normalized === "持有" || normalized === "中性") return "Hold";
-  if (normalized === "卖出" || normalized === "减持" || normalized === "看空") return "Sell";
+  if (normalized === "减持" || normalized === "偏空") return "Underweight";
+  if (normalized === "卖出" || normalized === "看空") return "Sell";
 
   // Default to Hold for unrecognized directions
   return "Hold";
