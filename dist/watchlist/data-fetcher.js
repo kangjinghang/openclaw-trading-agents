@@ -359,11 +359,15 @@ async function fetchStockData(ticker, name, sector, rankerThesis) {
     // 省掉 CLS+akshare 两路 HTTP（实测单股 1.27s→0.37s，-71%）。
     // 用北京时间（UTC+8）而非 UTC，避免北京 0-8 点日期早一天
     const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+    // 5 个脚本的 CLI 参数（--ticker/--date 均为 argparse 命名参数，required=True）：
+    // 老实现只传 [ticker] 裸位置参数 → argparse 报错 exit 2 → safeCall 恒返回 null → 全零默认值。
+    // 历史上 commit 56444b0 只修了 news.py，kline/hot_money/fundamentals 漏修，本批一并补齐。
     const tasks = [
-        safeCall(() => (0, exec_python_1.execSkillScript)("trading-kline", "kline", PROJECT_ROOT, [ticker])),
+        // kline.py: --ticker required，--date 可选（default=""，kline 不消费日期）
+        safeCall(() => (0, exec_python_1.execSkillScript)("trading-kline", "kline", PROJECT_ROOT, ["--ticker", ticker])),
         safeCall(() => (0, exec_python_1.execSkillScript)("trading-news", "news", PROJECT_ROOT, ["--ticker", ticker, "--date", today, "--lookback-days", "7", "--skip-macro"])),
-        safeCall(() => (0, exec_python_1.execSkillScript)("trading-hot-money", "hot_money", PROJECT_ROOT, [ticker])),
-        safeCall(() => (0, exec_python_1.execSkillScript)("trading-fundamentals", "fundamentals", PROJECT_ROOT, [ticker])),
+        safeCall(() => (0, exec_python_1.execSkillScript)("trading-hot-money", "hot_money", PROJECT_ROOT, ["--ticker", ticker, "--date", today])),
+        safeCall(() => (0, exec_python_1.execSkillScript)("trading-fundamentals", "fundamentals", PROJECT_ROOT, ["--ticker", ticker, "--date", today])),
         // lockup.py：--ticker/--date 均 required，解禁区间 [date, date+90]。全量接入（含 mootdx F10），
         // 慢（5-8s，F10 是瓶颈），但未来 90 天解禁是 rebalancer 中期组合的硬风险。
         safeCall(() => (0, exec_python_1.execSkillScript)("trading-lockup", "lockup", PROJECT_ROOT, ["--ticker", ticker, "--date", today])),
@@ -380,12 +384,14 @@ async function fetchStockData(ticker, name, sector, rankerThesis) {
     // fund 先于 hot 解析：parseHotMoney 需要 industry 判板块轮动归属（主线/弱势/未上榜）
     const hot = hotR?.data ? parseHotMoney(hotR.data, fund.industry) : { ...exports.EMPTY_HOT_MONEY };
     const lockup = lockupR?.data ? parseLockup(lockupR.data) ?? undefined : undefined;
-    // 收集 4 个脚本的子源级调用记录（_calls），用于数据源健康统计
+    // 收集 5 个脚本的子源级调用记录（_calls），用于数据源健康统计
+    // 老实现遗漏 lockupR?.calls，导致解禁源（lockup/ann_em、lockup/reduce_em）从不进入健康报告
     const allCalls = [
         ...(klineR?.calls ?? []),
         ...(newsR?.calls ?? []),
         ...(hotR?.calls ?? []),
         ...(fundR?.calls ?? []),
+        ...(lockupR?.calls ?? []),
     ];
     return {
         ticker, name, sector,
@@ -403,12 +409,18 @@ async function fetchStockData(ticker, name, sector, rankerThesis) {
 /** 安全调用 execSkillScript，失败返回 null。
  *  返回 {data, vpa?, calls?} —— data 是脚本主输出，vpa 是 kline.py 额外的量价预计算文本
  *  （exec-python.ts:280 提到顶层），calls 是子源级调用记录。
- *  非 kline 脚本无 vpa，该字段 undefined。 */
+ *  非 kline 脚本无 vpa，该字段 undefined。
+ *
+ *  失败时不再静默吞错：打印 stderr 级日志，避免脚本崩溃（如 argparse 传参错误、
+ *  网络异常）后下游默认全零却无从知晓。日志走 console.error，不影响 stdout 产物。 */
 async function safeCall(fn) {
     try {
         const result = await fn();
-        if (!result || !result.success)
+        if (!result || !result.success) {
+            const detail = result?.error ?? "(no result / unknown error)";
+            console.error(`[data-fetcher] script call failed: ${detail}`);
             return null;
+        }
         return {
             data: result.data,
             vpa: typeof result.vpa === "string" ? result.vpa : undefined,
@@ -416,7 +428,8 @@ async function safeCall(fn) {
             calls: Array.isArray(result.calls) ? result.calls : undefined,
         };
     }
-    catch {
+    catch (e) {
+        console.error(`[data-fetcher] script call threw: ${e instanceof Error ? e.message : String(e)}`);
         return null;
     }
 }

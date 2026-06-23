@@ -9,8 +9,11 @@ import * as path from "path";
 import * as os from "os";
 import * as fs from "fs";
 
+// 默认模型：glm-4-flash 是智谱 coding 端点下唯一确认的非推理模型（glm-5-turbo/5.2/4.7/4.6
+// 均已升级为推理模型，会先输出 reasoning_content 占用 max_tokens，多轮辩论场景易超时）。
+// decision_deep 本应更强，但当前端点下只有 flash 稳定可用；后续若开放更强非推理模型可调整。
 const DEFAULT_CONFIG: TradingAgentsConfig = {
-  models: { analyst: "glm-5-turbo", debater: "glm-5.2", decision: "glm-5.2", risk: "glm-5.2", decision_deep: "glm-5.2" },
+  models: { analyst: "glm-4-flash", debater: "glm-4-flash", decision: "glm-4-flash", risk: "glm-4-flash", decision_deep: "glm-4-flash" },
   debate_rounds: 2,
   risk_debate_rounds: 1,
   max_risk_retries: 1,

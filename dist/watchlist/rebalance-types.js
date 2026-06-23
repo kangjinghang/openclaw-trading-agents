@@ -13,5 +13,6 @@ exports.DEFAULT_REBALANCE_CONFIG = {
     anti_churn_days: 7,
     max_revise_retries: 2,
     run_optional_scripts: false,
+    shallow_concurrency: 2,
 };
 //# sourceMappingURL=rebalance-types.js.map

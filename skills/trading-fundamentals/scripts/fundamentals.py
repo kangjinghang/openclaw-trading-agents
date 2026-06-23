@@ -11,6 +11,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
 from http_helpers import tencent_quote, em_get, output_json, normalize_ticker, record_error, record_call
 import time
+from datetime import datetime, timedelta
 
 
 def fetch_fundamentals(ticker, date):
@@ -121,10 +122,17 @@ def fetch_fundamentals(ticker, date):
                 info["industry"] = item["BOARD_NAME"]
             if item.get("SECURITY_NAME_ABBR"):
                 info["name"] = item["SECURITY_NAME_ABBR"]
-        record_call("fundamentals/em_datacenter", success=True,
-                    duration_ms=(time.monotonic() - start) * 1000,
-                    url=url, status_code=r.status_code, response_size=len(r.content),
-                    response_snippet=r.text)
+            # 只有真正拿到数据才算成功；空 items 视为失败，避免"HTTP 200 但业务空"
+            # 被 _source-health 误统计为健康（曾导致 industry 全空但健康检查全绿）
+            record_call("fundamentals/em_datacenter", success=True,
+                        duration_ms=(time.monotonic() - start) * 1000,
+                        url=url, status_code=r.status_code, response_size=len(r.content),
+                        response_snippet=r.text)
+        else:
+            record_call("fundamentals/em_datacenter", success=False,
+                        error="datacenter returned empty data for ticker",
+                        duration_ms=(time.monotonic() - start) * 1000,
+                        url=url, status_code=r.status_code)
     except Exception as e:
         record_call("fundamentals/em_datacenter", success=False, error=str(e),
                     duration_ms=(time.monotonic() - start) * 1000,
@@ -210,6 +218,22 @@ def fetch_fundamentals(ticker, date):
         record_call("fundamentals/baidu_valuation", success=False, error=str(e),
                     duration_ms=(time.monotonic() - start) * 1000)
         data["valuation_percentile_error"] = str(e)
+
+    # 9. Market sentiment extra: ARBR(26日) + turnover interpretation + fear/greed.
+    #    Cross-validates market temperature alongside valuation. Sourced from
+    #    akshare (already imported for financials). Computed here (not in sentiment.py)
+    #    so fundamentals analyst can reference it for a more complete picture.
+    start = time.monotonic()
+    try:
+        mse = _fetch_market_sentiment_extra(code, date)
+        data["market_sentiment_extra"] = mse
+        record_call("fundamentals/market_sentiment", success=mse is not None,
+                    error=None if mse else "market sentiment unavailable",
+                    duration_ms=(time.monotonic() - start) * 1000)
+    except Exception as e:
+        record_call("fundamentals/market_sentiment", success=False, error=str(e),
+                    duration_ms=(time.monotonic() - start) * 1000)
+        data["market_sentiment_extra_error"] = str(e)
 
     return data
 
@@ -554,18 +578,108 @@ def _derive_financial_health(bs_map, cf_map, is_map, periods=4):
     }
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Fetch fundamental data for A-share stocks")
-    parser.add_argument("--ticker", required=True, help="Stock ticker code (e.g., 600519)")
-    parser.add_argument("--date", required=True, help="Analysis date YYYY-MM-DD")
-    args = parser.parse_args()
+def _calc_arbr(df, period=26):
+    """Calculate ARBR indicators from OHLCV DataFrame.
 
+    AR = SUM(H-O, period) / SUM(O-L, period) * 100
+    BR = SUM(H-prev_close, period) / SUM(prev_close-L, period) * 100
+
+    Returns dict with ar, br, signals, and historical stats.
+    """
+    if df is None or len(df) < period + 1:
+        return None
     try:
-        data = fetch_fundamentals(args.ticker, args.date)
-        output_json(True, data=data, source="tencent+mootdx+eastmoney+akshare")
-    except Exception as e:
-        output_json(False, error=str(e))
+        h = df["最高"].astype(float).values
+        o = df["开盘"].astype(float).values
+        l = df["最低"].astype(float).values
+        c = df["收盘"].astype(float).values
+    except (KeyError, ValueError):
+        return None
+
+    n = len(h)
+    ar_parts_ho, ar_parts_ol = [], []
+    br_parts_hc, br_parts_cl = [], []
+    for i in range(max(0, n - period), n):
+        ar_parts_ho.append(h[i] - o[i])
+        ar_parts_ol.append(o[i] - l[i])
+    for i in range(max(0, n - period), n):
+        prev = c[i - 1] if i > 0 else o[i]
+        br_parts_hc.append(h[i] - prev)
+        br_parts_cl.append(prev - l[i])
+
+    sum_ho = sum(ar_parts_ho)
+    sum_ol = sum(ar_parts_ol)
+    ar = round(sum_ho / sum_ol * 100, 2) if sum_ol != 0 else None
+
+    sum_hc = sum(br_parts_hc)
+    sum_cl = sum(br_parts_cl)
+    br = round(sum_hc / sum_cl * 100, 2) if sum_cl != 0 else None
+
+    signals = []
+    if ar is not None:
+        if ar > 150:
+            signals.append("AR>150: 超买信号(卖出)")
+        elif ar < 70:
+            signals.append("AR<70: 超卖信号(买入)")
+    if br is not None:
+        if br > 300:
+            signals.append("BR>300: 超买信号(卖出)")
+        elif br < 50:
+            signals.append("BR<50: 超卖信号(买入)")
+
+    return {"ar": ar, "br": br, "period": period, "signals": signals}
 
 
-if __name__ == "__main__":
-    main()
+def _fetch_market_sentiment_extra(code, date):
+    """Fetch ARBR(26日) + turnover interpretation for cross-validation.
+
+    Returns dict with arbr and turnover fields, or None on total failure.
+    """
+    try:
+        import akshare as ak
+    except ImportError:
+        return None
+
+    result = {}
+
+    # ARBR: need ~150 daily bars
+    try:
+        end = date
+        start = (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=200)).strftime("%Y-%m-%d")
+        df = ak.stock_zh_a_hist(symbol=code, period="daily",
+                                start_date=start, end_date=end, adjust="qfq")
+        if df is not None and len(df) >= 30:
+            arbr = _calc_arbr(df, period=26)
+            if arbr:
+                result["arbr"] = arbr
+    except Exception:
+        pass
+
+    # Turnover: from tencent_quote already fetched in valuation
+    # Include interpretation bands for LLM context
+    valuation = None
+    try:
+        tq = tencent_quote([code])
+        if code in tq:
+            valuation = tq[code]
+    except Exception:
+        pass
+
+    if valuation:
+        tp = valuation.get("turnover_pct", 0)
+        if tp < 1:
+            turnover_label = "低迷"
+        elif tp < 3:
+            turnover_label = "正常"
+        elif tp < 7:
+            turnover_label = "活跃"
+        elif tp < 15:
+            turnover_label = "高度活跃"
+        else:
+            turnover_label = "异常活跃"
+        result["turnover"] = {
+            "value": tp,
+            "label": turnover_label,
+        }
+
+    return result if result else None

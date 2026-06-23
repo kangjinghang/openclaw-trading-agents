@@ -405,6 +405,53 @@ describe("fetchStockData news 调用参数 + layer_stats", () => {
     expect(data).not.toBeNull();
     expect(data!.news_layer_stats).toBeUndefined();
   });
+
+  // 回归测试：kline/hot_money/fundamentals 的 CLI 参数。
+  // 这三个脚本的 --ticker/--date 是 argparse required 命名参数；老实现只传 [ticker]
+  // 裸位置参数 → argparse 报错 exit 2 → safeCall 返回 null → 基本面恒为全零、
+  // industry 恒为空（commit 56444b0 只修了 news，其余三个漏修）。本测试锁定修复。
+  it("kline/hot_money/fundamentals 均传 --ticker/--date 命名参数（防 P0 回归）", async () => {
+    mockBySkill();
+    await fetchStockData("SH600519", "贵州茅台", "白酒");
+    const mocked = vi.mocked(execSkillScript);
+
+    // kline: --ticker required, --date 可选（default=""）
+    const klineCall = mocked.mock.calls.find(c => c[0] === "trading-kline");
+    expect(klineCall).toBeDefined();
+    expect(klineCall![3]).toContain("--ticker");
+    expect((klineCall![3] as string[]).includes("SH600519")).toBe(true);
+
+    // hot_money: --ticker/--date 均 required
+    const hotCall = mocked.mock.calls.find(c => c[0] === "trading-hot-money");
+    expect(hotCall).toBeDefined();
+    expect(hotCall![3]).toContain("--ticker");
+    expect(hotCall![3]).toContain("--date");
+
+    // fundamentals: --ticker/--date 均 required
+    const fundCall = mocked.mock.calls.find(c => c[0] === "trading-fundamentals");
+    expect(fundCall).toBeDefined();
+    expect(fundCall![3]).toContain("--ticker");
+    expect(fundCall![3]).toContain("--date");
+  });
+
+  // 回归测试：lockup 的 _calls 纳入健康报告（老实现遗漏 lockupR?.calls）。
+  it("lockup 的 calls 被纳入 StockData.calls（防健康报告漏统计）", async () => {
+    const mocked = vi.mocked(execSkillScript);
+    mocked.mockImplementation(async (skillName: string) => {
+      if (skillName === "trading-lockup") {
+        return {
+          success: true,
+          data: { pressure_rating: "无", lockup_upcoming: [], reduce_holdings: [] },
+          calls: [{ stage: "lockup/ann_em", success: true, duration_ms: 100, url: "http://x", status_code: 200 }],
+        } as any;
+      }
+      return mockBySkillReturnValue(skillName);
+    });
+    const data = await fetchStockData("SH600519", "贵州茅台", "白酒");
+    expect(data).not.toBeNull();
+    expect(data!.calls).toBeDefined();
+    expect(data!.calls!.some(c => c.stage === "lockup/ann_em")).toBe(true);
+  });
 });
 
 /** 辅助：复用 mockBySkill 的返回值逻辑（不重置 mock）。 */

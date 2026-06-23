@@ -690,12 +690,17 @@ def fetch(ticker: str, count: int = 120) -> Dict[str, Any]:
     Fetch K-line data with automatic fallback.
 
     Args:
-        ticker: Stock ticker code
+        ticker: Stock ticker code (支持 SH600183 / 600183.SH / 600183 等格式，
+                入口归一化为纯 6 位数字，与 fundamentals.py/hot_money.py 对齐)
         count: Number of data points to fetch (default: 60)
 
     Returns:
         Dictionary with success status and data/error info
     """
+    # 归一化 ticker：剥离 SH/SZ/BJ 前缀或 .SH/.SZ 后缀。
+    # 老实现直接把 ticker 传给 detect_market，后者只认纯数字（startswith('6')），
+    # 导致 "SH600183" → Unknown ticker format。rebalance 传的就是带前缀格式。
+    ticker = http_helpers.normalize_ticker(ticker)
     last_error = None
 
     for source in SOURCES:

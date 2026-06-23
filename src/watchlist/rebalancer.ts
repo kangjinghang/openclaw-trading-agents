@@ -37,7 +37,7 @@ const REBALANCER_PROMPT_TEMPLATE = `# 角色
 - fitness ≥8 且 risk=low：HOLD 或 ADD
 - fitness 6-7 且 risk 可控：HOLD（默认）
 - fitness ≤5 或 risk=high 或 deal_breaker=true：REDUCE 或 SELL
-- locked=true（持仓<{anti_churn_days}天）：只能 HOLD 或 ADD，禁止 SELL/REDUCE
+- locked=true（持仓<{anti_churn_days}天，即买入后第 1-{anti_churn_days_sub} 天）：只能 HOLD 或 ADD，禁止 SELL/REDUCE。days_held ≥ {anti_churn_days} 时锁定解除（locked=false），可自由 SELL/REDUCE
 
 # 硬约束（validator 会强制 revise）
 - 单仓 ≤ {single_name}
@@ -114,6 +114,7 @@ export function formatRebalancerPrompt(
     .replace(/\{daily_turnover\}/g, String(c.daily_turnover))
     .replace(/\{cash_reserve\}/g, String(c.cash_reserve))
     .replace(/\{anti_churn_days\}/g, String(antiChurnDays))
+    .replace(/\{anti_churn_days_sub\}/g, String(Math.max(antiChurnDays - 1, 0)))
     .replace("{holdings_json}", holdingsStr)
     .replace("{last_rebalance_json}", lastStr)
     .replace("{per_stock_reports}", reportsStr);
@@ -127,7 +128,7 @@ function formatReportLine(r: StockReport): string {
     `## ${r.ticker} ${r.name} (${r.sector})`,
     `thesis: ${r.thesis}`,
     `fitness: ${r.fitness_score} / risk: ${r.overall_risk}${r.deal_breaker ? " [DEAL_BREAKER]" : ""}`,
-    `持仓: ${r.is_held ? `${(r.current_weight * 100).toFixed(1)}%, ${r.days_held}d${r.locked ? " [LOCKED]" : ""}` : "无"}`,
+    `持仓: ${r.is_held ? `${(r.current_weight * 100).toFixed(1)}%, ${r.days_held}d${r.locked ? " [LOCKED]" : " [UNLOCKED]"}` : "无"}`,
     `风险: ${flagStr}`,
     `关键信号: ${r.key_signals.join("; ") || "无"}`,
     r.ranker_score !== undefined ? `ranker_score: ${r.ranker_score}` : "",
@@ -333,7 +334,7 @@ export async function rebalancePipeline(input: RebalancePipelineInput): Promise<
 
   // 2. shallow-analyzer（dataByTicker 由 CLI 注入；测试可直接传）
   const dataByTicker = input.dataByTicker ?? new Map<string, StockData>();
-  const reports = await analyzeAll(metas, dataByTicker, input.shallowCaller);
+  const reports = await analyzeAll(metas, dataByTicker, input.shallowCaller, config.shallow_concurrency);
 
   // 3. 构造 validation context
   //    sectors 来源优先级：fundamentals.industry（全市场口径统一）> report.sector（shallow-analyzer

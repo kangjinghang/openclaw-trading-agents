@@ -6,7 +6,7 @@
 // Usage:
 //   npm run rank
 //   npm run rank -- --date 2026-06-17 --top 15 --long-top 7 --short-top 8
-//   npm run rank -- --model glm-4.7 --api-key xxx --base-url https://...
+//   npm run rank -- --model glm-4-flash --api-key xxx --base-url https://...
 
 import * as os from "os";
 import * as path from "path";
@@ -19,7 +19,9 @@ import { writeAtomicJson } from "./watchlist/atomic-json";
 import type { CandidatesFile } from "./watchlist/types";
 
 const DEFAULT_WATCHLIST_DIR = path.join(os.homedir(), ".openclaw", "watchlist");
-const DEFAULT_MODEL = "glm-4.7";
+// glm-4-flash 是当前智谱 coding 端点下唯一确认的非推理模型（glm-4.7/4.6/5-turbo/5.2
+// 均已升级为推理模型，会先生成 reasoning_content，shallow/rank 场景易超时或 max_tokens 被占满）。
+const DEFAULT_MODEL = "glm-4-flash";
 
 function readJson<T>(fp: string): T | null {
   if (!fs.existsSync(fp)) return null;
