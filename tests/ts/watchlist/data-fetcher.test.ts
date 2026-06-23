@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseKline, parseNews, parseNewsLayerStats, parseHotMoney, parseFundamentals, computeVolumeRatio } from "../../../src/watchlist/data-fetcher";
+import { parseKline, parseNews, parseNewsLayerStats, parseHotMoney, parseFundamentals, computeVolumeRatio, parseLockup } from "../../../src/watchlist/data-fetcher";
 
 describe("parseKline", () => {
   it("解析 data 对象数组（kline.py 真实结构）→ pct_5d/pct_20d/support/resistance/volatility_20d/volume_ratio_5_20", () => {
@@ -398,3 +398,60 @@ function mockBySkillReturnValue(skillName: string): any {
   if (skillName === "trading-fundamentals") return { success: true, data: { pe_ttm: 20, pb: 3, stock_info: { industry: "x" } } };
   return { success: false };
 }
+
+// ── parseLockup：解禁+减持解析 ──────────────────────────────
+describe("parseLockup", () => {
+  it("完整数据 → 评级 + upcoming + reduce_holdings 解析", () => {
+    const raw = {
+      pressure_rating: "重大压力",
+      lockup_upcoming: [
+        { date: "2026-08-15", type: "定增限售", shares: "100000000", ratio: "0.4%" },
+        { date: "2026-09-20", type: "首发原股东限售", ratio: "1.2%" },
+      ],
+      reduce_holdings: [
+        { date: "2026-06-10", reducing_shareholder: "张某", reducing_shares: "5000000", reducing_ratio: "2.1%", reduce_reason: "个人资金需求" },
+      ],
+    };
+    const l = parseLockup(raw);
+    expect(l).not.toBeNull();
+    expect(l!.pressure_rating).toBe("重大压力");
+    expect(l!.upcoming).toHaveLength(2);
+    expect(l!.upcoming[0]).toMatchObject({ date: "2026-08-15", type: "定增限售", ratio: "0.4%" });
+    expect(l!.reduce_holdings).toHaveLength(1);
+    expect(l!.reduce_holdings[0].reducing_shareholder).toBe("张某");
+  });
+
+  it("部分字段缺失（upcoming 元素无 type/shares）→ 只透传有的字段", () => {
+    const l = parseLockup({
+      pressure_rating: "中等压力",
+      lockup_upcoming: [{ date: "2026-08-15", ratio: "0.4%" }],  // 无 type/shares
+      reduce_holdings: [],
+    });
+    expect(l).not.toBeNull();
+    expect(l!.upcoming[0]).toEqual({ date: "2026-08-15", ratio: "0.4%" });  // 无 type/shares 键
+    expect(l!.upcoming[0].type).toBeUndefined();
+  });
+
+  it("无解禁无减持但有评级 → 保留（让 LLM 知道无明显压力）", () => {
+    const l = parseLockup({ pressure_rating: "无明显压力", lockup_upcoming: [], reduce_holdings: [] });
+    expect(l).not.toBeNull();
+    expect(l!.pressure_rating).toBe("无明显压力");
+    expect(l!.upcoming).toEqual([]);
+  });
+
+  it("全空（评级未知 + 无数据）→ null（无数据，省略整段）", () => {
+    expect(parseLockup({})).toBeNull();
+    expect(parseLockup(null)).toBeNull();
+    expect(parseLockup({ lockup_upcoming: [], reduce_holdings: [] })).toBeNull();  // 无评级 + 空
+  });
+
+  it("upcoming 元素缺 date → 过滤掉（date 是必需锚点）", () => {
+    const l = parseLockup({
+      pressure_rating: "中等压力",
+      lockup_upcoming: [{ type: "定增", ratio: "1%" }, { date: "2026-08-15", ratio: "0.4%" }],  // 第一个无 date
+      reduce_holdings: [],
+    });
+    expect(l!.upcoming).toHaveLength(1);
+    expect(l!.upcoming[0].date).toBe("2026-08-15");
+  });
+});

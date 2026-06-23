@@ -131,6 +131,7 @@ function formatReportLine(r: StockReport): string {
     `风险: ${flagStr}`,
     `关键信号: ${r.key_signals.join("; ") || "无"}`,
     r.ranker_score !== undefined ? `ranker_score: ${r.ranker_score}` : "",
+    r.quality_notes && r.quality_notes.length > 0 ? `质量门控: ${r.quality_notes.join("; ")}` : "",
   ].filter(Boolean).join("\n");
 }
 

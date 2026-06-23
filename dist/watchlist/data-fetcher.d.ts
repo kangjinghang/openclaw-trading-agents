@@ -1,4 +1,4 @@
-import type { StockData, NewsItem, NewsLayerStats, HotMoneyData, QuarterlyTrend, ConsensusEps } from "./shallow-analyzer";
+import type { StockData, NewsItem, NewsLayerStats, HotMoneyData, QuarterlyTrend, ConsensusEps, LockupData } from "./shallow-analyzer";
 /** 量比：近 recentDays 日均量 / 前 windowDays 日均量。
  *  典型用法：computeVolumeRatio(volumes, 5) = 近5日均量 / 20日均量。
  *  - ratio < 0.8 → 缩量（趋势可能衰竭，量价背离风险）
@@ -48,7 +48,15 @@ export declare function parseFundamentals(raw: any): {
     quarterly_trends?: QuarterlyTrend[];
     consensus_eps?: ConsensusEps;
 };
-/** 单股并行跑 4 个 script。失败的 script 返回 null 字段（容忍）。 */
+/** 从 lockup.py 输出解析解禁与减持摘要。
+ *
+ *  raw 结构（exec-python.ts 已把 raw.data 提到顶层）：
+ *  { lockup_upcoming:[{date,type,shares,ratio}], reduce_holdings:[{date,reducing_shareholder,...}],
+ *    pressure_rating:"重大压力"|... }
+ *  shares/ratio 在脚本侧是字符串，原样透传（不强转，避免 parse 失败丢信息，LLM 直接读字符串）。
+ *  全程容忍字段缺失。pressure_rating 缺失 → "未知"。upcoming/reduce_holdings 全空且无评级 → null（无数据）。 */
+export declare function parseLockup(raw: any): LockupData | null;
+/** 单股并行跑 5 个 script（kline/news/hot_money/fundamentals/lockup）。失败的 script 返回 null 字段（容忍）。 */
 export declare function fetchStockData(ticker: string, name: string, sector: string, rankerThesis?: string): Promise<StockData | null>;
 /** 跨股并行 fetch（concurrency=5）。失败的股跳过。 */
 export declare function fetchAllStockData(metas: Array<{

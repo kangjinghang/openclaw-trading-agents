@@ -67,6 +67,8 @@ export interface StockReport {
   days_held: number;               // is_held=false → 0
   locked: boolean;                 // is_held=false → false
   ranker_score?: number;
+  /** 确定性质量门控标注（applyQualityGate 产物，空则不输出）。 */
+  quality_notes?: string[];
 }
 
 // ═══ rebalancer 产物 ═══

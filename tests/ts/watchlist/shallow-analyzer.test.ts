@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatAnalystPrompt, parseAnalystReport, formatRiskPrompt, parseRiskReport, buildStockReport, buildFallbackReport, analyzeAll, renderQuarterlyTrends, renderConsensus, type ShallowLlmCaller, type StockData, type ConsensusEps } from "../../../src/watchlist/shallow-analyzer";
+import { formatAnalystPrompt, parseAnalystReport, formatRiskPrompt, parseRiskReport, buildStockReport, buildFallbackReport, analyzeAll, renderQuarterlyTrends, renderConsensus, renderLockup, type ShallowLlmCaller, type StockData, type ConsensusEps } from "../../../src/watchlist/shallow-analyzer";
 import type { AnalystReport } from "../../../src/watchlist/rebalance-types";
 import type { CandidateMeta } from "../../../src/watchlist/candidate-selector";
 import type { StockData } from "../../../src/watchlist/shallow-analyzer";
@@ -549,5 +549,72 @@ describe("formatRiskPrompt 基本面深度数据注入", () => {
     const prompt = formatRiskPrompt(d, { thesis: "x", fitness_score: 7, data_freshness: "", key_signals: [], data_gaps: [] });
     expect(prompt).toContain("200亿");
     expect(prompt).toContain("-15.3%");  // 负同比让 risk LLM 识别业绩下滑
+  });
+});
+
+// ── renderLockup：解禁+减持一行压缩 ────────────────────────
+describe("renderLockup", () => {
+  it("完整数据 → 压力评级 + 未来解禁 + 近期减持三段", () => {
+    const out = renderLockup({
+      pressure_rating: "重大压力",
+      upcoming: [
+        { date: "2026-08-15", type: "定增限售", ratio: "0.4%" },
+        { date: "2026-09-20", type: "首发原股东限售", ratio: "1.2%" },
+      ],
+      reduce_holdings: [
+        { date: "2026-06-10", reducing_shareholder: "张某", reducing_ratio: "2.1%", reduce_reason: "个人资金需求" },
+      ],
+    });
+    expect(out).toContain("解禁压力：重大压力");
+    expect(out).toContain("未来90天2笔");
+    expect(out).toContain("08-15");          // MM-DD
+    expect(out).toContain("定增限售");
+    expect(out).toContain("0.4%");
+    expect(out).toContain("近期减持1笔");
+    expect(out).toContain("2.1%");
+    expect(out).toContain("个人资金需求");
+  });
+
+  it("无解禁无减持但有评级 → 只输出压力评级行", () => {
+    const out = renderLockup({ pressure_rating: "无明显压力", upcoming: [], reduce_holdings: [] });
+    expect(out).toBe("解禁压力：无明显压力");
+  });
+
+  it("upcoming 超 3 笔 → 只渲染前 3（控 prompt 长度）", () => {
+    const upcoming = Array.from({ length: 5 }, (_, i) => ({ date: `2026-08-1${i}`, ratio: "0.1%" }));  // 08-10..08-14
+    const out = renderLockup({ pressure_rating: "重大压力", upcoming, reduce_holdings: [] });
+    expect(out).toContain("未来90天5笔");     // 总数显示 5
+    // renderLockup 用 date.slice(5) 渲染 MM-DD（08-10..08-14），只渲染前 3 个
+    expect((out.match(/08-1\d/g) || []).length).toBe(3);
+  });
+});
+
+// ── formatRiskPrompt：解禁段注入 ───────────────────────────
+describe("formatRiskPrompt 解禁段注入", () => {
+  it("有 lockup → risk prompt 含解禁段 + 解禁识别规则", () => {
+    const data: StockData = {
+      ticker: "SZ300319", name: "麦捷科技", sector: "电子",
+      kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 },
+      news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" },
+      fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0 },
+      lockup: { pressure_rating: "重大压力", upcoming: [{ date: "2026-08-15", ratio: "8%" }], reduce_holdings: [] },
+    };
+    const prompt = formatRiskPrompt(data, { thesis: "x", fitness_score: 8, data_freshness: "", key_signals: [], data_gaps: [] });
+    expect(prompt).toContain("解禁与减持");       // 数据段标题
+    expect(prompt).toContain("重大压力");          // 压力评级
+    expect(prompt).toContain("8%");                // 解禁比例
+    expect(prompt).toContain("解禁比例");          // 识别规则关键词（≥5%）
+  });
+
+  it("无 lockup → 标注（无解禁数据），不报错", () => {
+    const data: StockData = {
+      ticker: "SZ300319", name: "麦捷科技", sector: "电子",
+      kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 },
+      news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" },
+      fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0 },
+      // 无 lockup
+    };
+    const prompt = formatRiskPrompt(data, { thesis: "x", fitness_score: 8, data_freshness: "", key_signals: [], data_gaps: [] });
+    expect(prompt).toContain("无解禁数据");
   });
 });

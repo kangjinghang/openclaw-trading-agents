@@ -85,6 +85,34 @@ export interface ConsensusEps {
     };
     analyst_count?: number;
 }
+/** 单条解禁记录（lockup.py 的 lockup_upcoming / lockup_history 元素）。
+ *  字段对齐 lockup.py:27-33，shares/ratio 在脚本侧是字符串（FREE_SHARES_NUM/FREE_RATIO），
+ *  这里原样保留字符串让 LLM 读，避免 parse 失败丢信息。 */
+export interface LockupItem {
+    date: string;
+    type?: string;
+    shares?: string;
+    ratio?: string;
+}
+/** 单条减持记录（lockup.py 的 reduce_holdings 元素，对齐 lockup.py:176-185）。
+ *  来自东财 datacenter RPT_REDUCED_HOLDINGS，REDUCE_DATE >= 今天（脚本用 now() 非 --date）。 */
+export interface ReduceHolding {
+    date: string;
+    reducing_shareholder?: string;
+    reducing_shares?: string;
+    reducing_ratio?: string;
+    reduce_reason?: string;
+}
+/** 解禁与减持摘要（lockup.py 输出的浅层压缩）。
+ *  - pressure_rating：脚本按 upcoming 数量给的评级（"无明显压力"/"中等压力"/"重大压力"）
+ *  - upcoming：未来 90 天解禁（核心风险，区间 [date, date+90]）
+ *  - reduce_holdings：近期已披露减持明细（无计划类/进度类数据，仅已发生明细）
+ *  全部字段缺失 → undefined（拉取失败或无数据），risk prompt 据此省略整段。 */
+export interface LockupData {
+    pressure_rating: string;
+    upcoming: LockupItem[];
+    reduce_holdings: ReduceHolding[];
+}
 export interface StockData {
     ticker: string;
     name: string;
@@ -117,6 +145,10 @@ export interface StockData {
     /** 新闻时间分层数量（news.py layer_stats）。undefined = 无统计，不阻塞分析。
      *  shallow 用它判断热门/冷门 + 有无突发，是一行文本的成本换密度信号。 */
     news_layer_stats?: NewsLayerStats;
+    /** 解禁与减持（lockup.py）。undefined = 无数据，risk prompt 据此省略解禁段。
+     *  rebalancer 是中期组合（7天+ anti-churn），未来 90 天大额解禁是硬风险，
+     *  填补之前"fitness=8 但踩解禁洪峰"的盲区。 */
+    lockup?: LockupData;
 }
 export declare function renderHotMoneySummary(h: HotMoneyData): string;
 /** 把 4 季度财务趋势压成一行（对齐 renderHotMoneySummary 范式）。
@@ -136,13 +168,22 @@ export declare function renderQuarterlyTrends(trends?: QuarterlyTrend[]): string
  *  - 评级分布只列非零项，避免「买0/增0/中性0」噪音
  *  forward_pe/peg 由 fundamentals.py 预计算，LLM 只引用不算（避免算术错误）。 */
 export declare function renderConsensus(c?: ConsensusEps): string;
+/** 把解禁+减持压成一行（对齐 renderHotMoneySummary/renderQuarterlyTrends 范式）。
+ *
+ *  格式：「解禁压力：重大压力 | 未来90天2笔(最近 07-15 定增 0.4%；09-20 首发 1.2%) | 近期减持1笔(大股东 2.1%，个人资金需求)」
+ *  - 压力评级（lockup.py pressure_rating，按 upcoming 数量给的档）
+ *  - upcoming 取最近 3 笔（脚本已按日期升序），每笔：MM-DD 类型 ratio
+ *  - reduce_holdings 取最近 2 笔（脚本按日期倒序），每笔：股东 ratio 原因
+ *  每段只在该段有数据时输出；无 upcoming 且无减持 → 只输出压力评级行（让 LLM 知道无压力）。
+ *  ratio 字段是字符串（如"0.4%"），原样透传让 LLM 读，避免 parse 失败丢信息。 */
+export declare function renderLockup(l: LockupData): string;
 export declare function formatAnalystPrompt(d: StockData): string;
 /** 解析 analyst-role 输出。非 JSON / 缺字段返回 null（或填默认值）。 */
 export declare function parseAnalystReport(content: string): AnalystReport | null;
 export declare function formatRiskPrompt(d: StockData, analyst: AnalystReport): string;
 export declare function parseRiskReport(content: string): RiskReport | null;
 /** 合并 candidate meta + analyst report + risk report → 完整 StockReport。 */
-export declare function buildStockReport(meta: CandidateMeta, sector: string, analyst: AnalystReport, risk: RiskReport): StockReport;
+export declare function buildStockReport(meta: CandidateMeta, sector: string, analyst: AnalystReport, risk: RiskReport, qualityNotes?: string[]): StockReport;
 /** 持仓股 shallow-analyzer 失败时的保守默认 report。
  *
  *  为什么持仓股不能像候选股一样"失败就消失"：

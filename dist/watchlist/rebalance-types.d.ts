@@ -54,6 +54,8 @@ export interface StockReport {
     days_held: number;
     locked: boolean;
     ranker_score?: number;
+    /** 确定性质量门控标注（applyQualityGate 产物，空则不输出）。 */
+    quality_notes?: string[];
 }
 export type ActionType = "BUY" | "SELL" | "ADD" | "REDUCE" | "HOLD";
 export interface Evaluation {

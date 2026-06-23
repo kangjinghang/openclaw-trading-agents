@@ -1,5 +1,6 @@
 import type { AnalystReport, RiskFlag, RiskReport, StockReport } from "./rebalance-types";
 import type { CandidateMeta } from "./candidate-selector";
+import { applyQualityGate } from "./quality-gate";
 
 export type ShallowLlmCaller = (input: {
   role: "analyst" | "risk";
@@ -82,6 +83,37 @@ export interface ConsensusEps {
   analyst_count?: number;          // 覆盖机构数
 }
 
+/** 单条解禁记录（lockup.py 的 lockup_upcoming / lockup_history 元素）。
+ *  字段对齐 lockup.py:27-33，shares/ratio 在脚本侧是字符串（FREE_SHARES_NUM/FREE_RATIO），
+ *  这里原样保留字符串让 LLM 读，避免 parse 失败丢信息。 */
+export interface LockupItem {
+  date: string;       // 解禁日 YYYY-MM-DD
+  type?: string;      // 限售股类型（"定增限售"/"首发原股东限售" 等）
+  shares?: string;    // 解禁股数（字符串）
+  ratio?: string;     // 解禁比例（如 "0.4%"，字符串）
+}
+
+/** 单条减持记录（lockup.py 的 reduce_holdings 元素，对齐 lockup.py:176-185）。
+ *  来自东财 datacenter RPT_REDUCED_HOLDINGS，REDUCE_DATE >= 今天（脚本用 now() 非 --date）。 */
+export interface ReduceHolding {
+  date: string;                // 减持日 YYYY-MM-DD
+  reducing_shareholder?: string; // 减持股东
+  reducing_shares?: string;      // 减持股数（字符串）
+  reducing_ratio?: string;       // 减持比例（字符串）
+  reduce_reason?: string;        // 减持原因（个人资金需求 等）
+}
+
+/** 解禁与减持摘要（lockup.py 输出的浅层压缩）。
+ *  - pressure_rating：脚本按 upcoming 数量给的评级（"无明显压力"/"中等压力"/"重大压力"）
+ *  - upcoming：未来 90 天解禁（核心风险，区间 [date, date+90]）
+ *  - reduce_holdings：近期已披露减持明细（无计划类/进度类数据，仅已发生明细）
+ *  全部字段缺失 → undefined（拉取失败或无数据），risk prompt 据此省略整段。 */
+export interface LockupData {
+  pressure_rating: string;          // lockup.py 的压力评级
+  upcoming: LockupItem[];           // 未来 90 天解禁
+  reduce_holdings: ReduceHolding[]; // 近期减持
+}
+
 export interface StockData {
   ticker: string;
   name: string;
@@ -99,6 +131,10 @@ export interface StockData {
   /** 新闻时间分层数量（news.py layer_stats）。undefined = 无统计，不阻塞分析。
    *  shallow 用它判断热门/冷门 + 有无突发，是一行文本的成本换密度信号。 */
   news_layer_stats?: NewsLayerStats;
+  /** 解禁与减持（lockup.py）。undefined = 无数据，risk prompt 据此省略解禁段。
+   *  rebalancer 是中期组合（7天+ anti-churn），未来 90 天大额解禁是硬风险，
+   *  填补之前"fitness=8 但踩解禁洪峰"的盲区。 */
+  lockup?: LockupData;
 }
 
 const ANALYST_PROMPT_TEMPLATE = `# 角色
@@ -293,6 +329,45 @@ export function renderConsensus(c?: ConsensusEps): string {
   return segs.join(" | ");
 }
 
+/** 把解禁+减持压成一行（对齐 renderHotMoneySummary/renderQuarterlyTrends 范式）。
+ *
+ *  格式：「解禁压力：重大压力 | 未来90天2笔(最近 07-15 定增 0.4%；09-20 首发 1.2%) | 近期减持1笔(大股东 2.1%，个人资金需求)」
+ *  - 压力评级（lockup.py pressure_rating，按 upcoming 数量给的档）
+ *  - upcoming 取最近 3 笔（脚本已按日期升序），每笔：MM-DD 类型 ratio
+ *  - reduce_holdings 取最近 2 笔（脚本按日期倒序），每笔：股东 ratio 原因
+ *  每段只在该段有数据时输出；无 upcoming 且无减持 → 只输出压力评级行（让 LLM 知道无压力）。
+ *  ratio 字段是字符串（如"0.4%"），原样透传让 LLM 读，避免 parse 失败丢信息。 */
+export function renderLockup(l: LockupData): string {
+  const segs: string[] = [];
+
+  // 压力评级（lockup.py 按 upcoming 数量分档，重大压力 = ≥3 笔）
+  segs.push(`解禁压力：${l.pressure_rating || "未知"}`);
+
+  // 未来解禁：取前 3 笔（最近在前，upcoming 已按日期升序）
+  if (l.upcoming && l.upcoming.length > 0) {
+    const items = l.upcoming.slice(0, 3).map(it => {
+      const d = it.date ? it.date.slice(5) : "?";   // MM-DD
+      const t = it.type || "解禁";
+      const r = it.ratio ? ` ${it.ratio}` : "";
+      return `${d} ${t}${r}`;
+    });
+    segs.push(`未来90天${l.upcoming.length}笔(${items.join("；")})`);
+  }
+
+  // 近期减持：取前 2 笔（已按日期倒序）
+  if (l.reduce_holdings && l.reduce_holdings.length > 0) {
+    const items = l.reduce_holdings.slice(0, 2).map(rd => {
+      const who = rd.reducing_shareholder ? rd.reducing_shareholder.slice(0, 8) : "股东";
+      const r = rd.reducing_ratio ? ` ${rd.reducing_ratio}` : "";
+      const reason = rd.reduce_reason ? `，${rd.reduce_reason.slice(0, 12)}` : "";
+      return `${who}${r}${reason}`;
+    });
+    segs.push(`近期减持${l.reduce_holdings.length}笔(${items.join("；")})`);
+  }
+
+  return segs.join(" | ");
+}
+
 export function formatAnalystPrompt(d: StockData): string {
   const newsBullets = d.news.map(n => {
     const time = n.time ? `[${n.time}] ` : "";
@@ -376,6 +451,13 @@ const RISK_PROMPT_TEMPLATE = `# 角色
 - 5 日涨幅较大（>10%）但量比 volume_ratio_5_20 < 0.8（缩量上涨，资金不认可）
 这些是技术性见顶信号，与基本面好坏无关——业绩再好，技术见顶也是风险。
 
+## 解禁与减持识别规则（重点）
+若以下任一成立，应输出对应 risk_flag 并提升 overall_risk（重大解禁→high）：
+- 解禁压力评级为"重大压力"（未来 90 天 ≥3 笔解禁）
+- 未来 90 天有单笔解禁比例 ≥5%（流通市值，供给冲击大）
+- 近期有大股东减持记录（减持动力强，后续可能持续减持）
+这些是供给端压力，与公司好坏无关——业绩再好，解禁抛压也是风险。
+
 # 股票
 {ticker} {name}（行业：{sector}）
 
@@ -390,6 +472,9 @@ const RISK_PROMPT_TEMPLATE = `# 角色
 
 ## VPA 量价预计算
 {vpa_text}
+
+## 解禁与减持（未来 90 天解禁 + 近期减持；未来大额解禁或减持 = 供给压力）
+{lockup_summary}
 
 # Analyst thesis
 {analyst_thesis}
@@ -420,6 +505,7 @@ export function formatRiskPrompt(d: StockData, analyst: AnalystReport): string {
     .replace("{np_q1}", String(d.fundamentals.np_q1))
     .replace("{quarterly_trends}", renderQuarterlyTrends(d.fundamentals.quarterly_trends) || "(无季度趋势数据)")
     .replace("{vpa_text}", d.vpa_text || "(无 VPA 数据)")
+    .replace("{lockup_summary}", d.lockup ? renderLockup(d.lockup) : "(无解禁数据)")
     .replace("{analyst_thesis}", `${analyst.thesis}（fitness ${analyst.fitness_score}）`);
 }
 
@@ -448,8 +534,9 @@ export function buildStockReport(
   sector: string,
   analyst: AnalystReport,
   risk: RiskReport,
+  qualityNotes?: string[],
 ): StockReport {
-  return {
+  const report: StockReport = {
     ticker: meta.ticker,
     name: meta.name,
     sector,
@@ -466,6 +553,10 @@ export function buildStockReport(
     locked: meta.locked,
     ranker_score: meta.ranker_score,
   };
+  if (qualityNotes && qualityNotes.length > 0) {
+    report.quality_notes = qualityNotes;
+  }
+  return report;
 }
 
 /** 持仓股 shallow-analyzer 失败时的保守默认 report。
@@ -545,7 +636,9 @@ export async function analyzeAll(
             results.push(meta.is_held ? buildFallbackReport(meta, data.sector, "risk-role 返回非 JSON") : null);
             continue;
           }
-          results.push(buildStockReport(meta, data.sector, analyst, risk));
+          // 确定性质量门控（内联守卫）：钳制 fitness/risk + 标注 issue（含解禁兜底）。
+          const gated = applyQualityGate(analyst, risk, data);
+          results.push(buildStockReport(meta, data.sector, gated.analyst, gated.risk, gated.issues));
         } catch (e) {
           const reason = e instanceof Error ? e.message : String(e);
           results.push(meta.is_held ? buildFallbackReport(meta, data.sector, `LLM 调用异常：${reason}`) : null);

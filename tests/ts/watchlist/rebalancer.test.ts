@@ -269,7 +269,8 @@ describe("rebalancePipeline (integration)", () => {
     const holdings: Holdings = { updated_at: "x", cash_pct: 0.10, positions: [] };
 
     const dataByTicker = new Map<string, StockData>([
-      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "电子", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01 }, news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0 } }],
+      // PE/净利 非零：让 fitness=9 不被质量门控规则1钳制，纯测现金排队降级路径
+      ["SZ300319", { ticker: "SZ300319", name: "麦捷科技", sector: "电子", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01 }, news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 30, pb: 5, rev_q1: 1e9, np_q1: 1e8 } }],
     ]);
 
     const shallowCaller: ShallowLlmCaller = async ({ role }) => {
@@ -443,5 +444,54 @@ describe("rebalancePipeline (integration)", () => {
     expect(result.status).toBe("ok");
     // industry 拉到了 → 无 warning（即使持仓股用户填的 sector 被覆盖）
     expect(result.sector_warnings).toHaveLength(0);
+  });
+
+  it("重大解禁兜底：LLM 给 fitness=9 + risk=low，但 lockup 重大压力 → overall_risk 强制 high + quality_notes 标注", async () => {
+    const scan: ScanSummary = {
+      scan_date: "2026-06-21", total_candidates: 1,
+      groups: { LONG: { total: 1, ranked: 1, excluded: 0, fallback: false }, SHORT: { total: 0, pre_filter: 0, post_common_filter: 0, ranked: 0, excluded: 0, fallback: false } },
+      top_picks: [
+        { ticker: "SZ300319", name: "麦捷科技", score: 9.5, group: "LONG", percent: 134, days: 55, range_kind: "new", reason: "r" },
+      ],
+    };
+    const holdings: Holdings = { updated_at: "x", cash_pct: 1.0, positions: [] };
+
+    const dataByTicker = new Map<string, StockData>([
+      // PE/净利 非零（避免规则1误伤），但 lockup 重大压力
+      ["SZ300319", {
+        ticker: "SZ300319", name: "麦捷科技", sector: "电子",
+        kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01 },
+        news: [], hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" },
+        fundamentals: { pe: 30, pb: 5, rev_q1: 1e9, np_q1: 1e8 },
+        lockup: { pressure_rating: "重大压力", upcoming: [{ date: "2026-08-15", ratio: "8%" }], reduce_holdings: [] },
+      }],
+    ]);
+
+    // LLM 漏判解禁：给 fitness=9 + risk=low（无 deal_breaker）
+    const shallowCaller: ShallowLlmCaller = async ({ role }) => {
+      if (role === "analyst") return JSON.stringify({ thesis: "订单饱满业绩兑现产能就绪", fitness_score: 9, data_freshness: "2026-06-21", key_signals: [], data_gaps: [] });
+      return JSON.stringify({ risk_flags: [], overall_risk: "low", deal_breaker: false });
+    };
+    const rebalanceCaller: RebalanceLlmCaller = async () => JSON.stringify({
+      evaluations: [{ ticker: "SZ300319", judgment: "BUY", brief: "buy" }],
+      actions: [{ action: "BUY", ticker: "SZ300319", name: "麦捷科技", reason: "buy" }],
+      summary: "buy",
+    });
+
+    const result = await rebalancePipeline({
+      scan, holdings, lastRebalance: null, currentDate: "2026-06-21",
+      shallowCaller, rebalanceCaller, dataByTicker,
+    });
+
+    // 质量门控规则7：解禁兜底生效——overall_risk 被强制 high（经 riskFactor ×0.3 落到仓位）
+    const report = result.reports.find(r => r.ticker === "SZ300319");
+    expect(report).toBeDefined();
+    expect(report!.overall_risk).toBe("high");
+    expect(report!.fitness_score).toBe(9);  // fitness 不动（解禁影响 risk 不影响 fitness）
+    expect(report!.quality_notes).toBeDefined();
+    expect(report!.quality_notes!.some(n => n.includes("解禁") || n.includes("重大压力"))).toBe(true);
+    // 仓位受 high risk 重压：BUY 9分基础7% × 波动1.0 × 风险0.3 = 2.1%
+    const action = result.rebalancer_output.actions.find(a => a.ticker === "SZ300319");
+    expect(action!.target_weight).toBeCloseTo(0.021, 2);
   });
 });
