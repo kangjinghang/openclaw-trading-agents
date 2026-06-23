@@ -7,6 +7,7 @@
 //       → 被跳过的候选简表 → 约束检查 → 执行顺序 → LLM 总结
 
 import type { RebalancePlanFile, StockReport, Action } from "./rebalance-types";
+import type { DataHealthReport, RollingStat } from "./data-health-aggregator";
 
 const ACTION_LABEL: Record<string, string> = {
   BUY: "买入", SELL: "清仓", ADD: "加仓", REDUCE: "减仓", HOLD: "持有",
@@ -139,6 +140,11 @@ export function formatPlanMarkdown(plan: RebalancePlanFile): string {
     lines.push("");
   }
 
+  // ── 数据源健康统计 ─────────────────────────────────────────────────
+  if (plan.data_health) {
+    lines.push(...renderDataHealth(plan.data_health));
+  }
+
   return lines.join("\n");
 }
 
@@ -207,4 +213,76 @@ function computeSectorSums(actions: Action[], reports: StockReport[]): Array<{ s
   return Array.from(sums.entries())
     .map(([sector, sum]) => ({ sector, sum }))
     .sort((a, b) => b.sum - a.sum);
+}
+
+// ── 数据源健康统计渲染 ──────────────────────────────────────────────────────
+
+function successIcon(rate: number): string {
+  if (rate >= 0.99) return "🟢";
+  if (rate >= 0.90) return "🟡";
+  return "🔴";
+}
+
+function rateStr(rate: number): string {
+  return `${(rate * 100).toFixed(1)}%`;
+}
+
+function durationStr(ms: number): string {
+  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${ms}ms`;
+}
+
+function renderRollingTable(stats: RollingStat[], label: string): string[] {
+  const lines: string[] = [];
+  if (stats.length === 0) return lines;
+  lines.push(`### ${label}`);
+  lines.push("");
+  lines.push("| 状态 | 子源 | 成功率 | 成功/失败 | 平均耗时 | 最近失败 |");
+  lines.push("|------|------|--------|----------|---------|---------|");
+  for (const s of stats) {
+    const icon = successIcon(s.success_rate);
+    const rate = rateStr(s.success_rate);
+    const counts = `${s.success}/${s.failure}`;
+    const dur = durationStr(s.avg_duration_ms);
+    const lastErr = s.last_error ? s.last_error.slice(0, 40) : "-";
+    lines.push(`| ${icon} | ${s.stage} | ${rate} | ${counts} | ${dur} | ${lastErr} |`);
+  }
+  lines.push("");
+  return lines;
+}
+
+/** 渲染数据源健康统计段。返回 markdown 行数组。 */
+function renderDataHealth(dh: DataHealthReport): string[] {
+  const lines: string[] = [];
+  lines.push("## 数据源健康状态");
+  lines.push("");
+
+  // 本次 run 概览
+  const totalCalls = dh.current_run.reduce((s, r) => s + r.total, 0);
+  const totalFailures = dh.current_run.reduce((s, r) => s + r.failure, 0);
+  const overallRate = totalCalls > 0 ? (totalCalls - totalFailures) / totalCalls : 1;
+  lines.push(`> ${successIcon(overallRate)} 本次运行：${totalCalls} 次调用，${totalFailures} 次失败，总成功率 ${rateStr(overallRate)}`);
+  lines.push("");
+
+  // 本次 run 详情
+  lines.push("### 本次运行");
+  lines.push("");
+  lines.push("| 状态 | 子源 | 成功/失败 | 平均耗时 | 最近错误 |");
+  lines.push("|------|------|----------|---------|---------|");
+  for (const s of dh.current_run) {
+    const icon = successIcon(s.success_rate);
+    const counts = s.failure > 0 ? `${s.success}/${s.failure}` : `${s.success}✓`;
+    const dur = durationStr(s.avg_duration_ms);
+    const lastErr = s.last_error ? s.last_error.slice(0, 50) : "-";
+    lines.push(`| ${icon} | ${s.stage} | ${counts} | ${dur} | ${lastErr} |`);
+  }
+  lines.push("");
+
+  // 7 天滚动
+  lines.push(...renderRollingTable(dh.rolling_7d, "7 天滚动（含本次）"));
+
+  // 30 天滚动
+  lines.push(...renderRollingTable(dh.rolling_30d, "30 天滚动（含本次）"));
+
+  return lines;
 }

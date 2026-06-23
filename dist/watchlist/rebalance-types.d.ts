@@ -134,6 +134,8 @@ export interface RebalancePlanFile {
     sector_warnings?: string[];
     /** 仓位计算器溯源（ticker → 可读字符串，如 "BUY：8分基础 5.0% × 波动率1.0 × 风险0.6 = 3.00%"） */
     position_traces?: Record<string, string>;
+    /** 数据源健康统计（子源级成功率 + 7天/30天滚动） */
+    data_health?: import("./data-health-aggregator").DataHealthReport;
 }
 export interface RebalanceConstraints {
     single_name: number;

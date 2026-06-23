@@ -36,10 +36,12 @@ def fetch_fundamentals(ticker, date):
                 "change_pct": q["change_pct"],
             }
         record_call("fundamentals/tencent", success=True,
-                    duration_ms=(time.monotonic() - start) * 1000)
+                    duration_ms=(time.monotonic() - start) * 1000,
+                    url=f"https://qt.gtimg.cn/q={code}")
     except Exception as e:
         record_call("fundamentals/tencent", success=False, error=str(e),
-                    duration_ms=(time.monotonic() - start) * 1000)
+                    duration_ms=(time.monotonic() - start) * 1000,
+                    url=f"https://qt.gtimg.cn/q={code}")
         data["valuation_error"] = str(e)
 
     # 2. mootdx: quarterly financial snapshot (expanded fields)
@@ -83,13 +85,15 @@ def fetch_fundamentals(ticker, date):
                 except (ZeroDivisionError, TypeError):
                     pass
 
-            if snapshot:
-                data["financial_snapshot"] = snapshot
+        if snapshot:
+            data["financial_snapshot"] = snapshot
         record_call("fundamentals/mootdx", success=True,
-                    duration_ms=(time.monotonic() - start) * 1000)
+                    duration_ms=(time.monotonic() - start) * 1000,
+                    url="mootdx://tdx/finance", response_size=len(str(snapshot)))
     except Exception as e:
         record_call("fundamentals/mootdx", success=False, error=str(e),
-                    duration_ms=(time.monotonic() - start) * 1000)
+                    duration_ms=(time.monotonic() - start) * 1000,
+                    url="mootdx://tdx/finance")
         data["financial_snapshot_error"] = str(e)
 
     # 3. Eastmoney Datacenter: basic stock info (industry, company name)
@@ -118,10 +122,13 @@ def fetch_fundamentals(ticker, date):
             if item.get("SECURITY_NAME_ABBR"):
                 info["name"] = item["SECURITY_NAME_ABBR"]
         record_call("fundamentals/em_datacenter", success=True,
-                    duration_ms=(time.monotonic() - start) * 1000)
+                    duration_ms=(time.monotonic() - start) * 1000,
+                    url=url, status_code=r.status_code, response_size=len(r.content),
+                    response_snippet=r.text)
     except Exception as e:
         record_call("fundamentals/em_datacenter", success=False, error=str(e),
-                    duration_ms=(time.monotonic() - start) * 1000)
+                    duration_ms=(time.monotonic() - start) * 1000,
+                    url=url)
         data["stock_info_error"] = str(e)
 
     if info:

@@ -1,5 +1,6 @@
 import type { AnalystReport, RiskFlag, RiskReport, StockReport } from "./rebalance-types";
 import type { CandidateMeta } from "./candidate-selector";
+import type { SourceCall } from "../types";
 import { applyQualityGate } from "./quality-gate";
 
 export type ShallowLlmCaller = (input: {
@@ -100,6 +101,9 @@ export interface StockData {
   /** 新闻时间分层数量（news.py layer_stats）。undefined = 无统计，不阻塞分析。
    *  shallow 用它判断热门/冷门 + 有无突发，是一行文本的成本换密度信号。 */
   news_layer_stats?: NewsLayerStats;
+  /** 4 个 Python 脚本的子源级调用记录（success/failure/duration_ms）。
+   *  用于跨 run 聚合数据源健康统计。undefined = 无记录（老版本兼容）。 */
+  calls?: SourceCall[];
 }
 
 const ANALYST_PROMPT_TEMPLATE = `# 角色

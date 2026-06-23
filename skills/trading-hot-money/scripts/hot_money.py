@@ -30,7 +30,10 @@ def _fetch_northbound():
         hgt = d.get("hgt", [])
         sgt = d.get("sgt", [])
         if not times:
-            record_call("hot_money/northbound", success=False, error="No data returned", duration_ms=(time.monotonic() - start) * 1000)
+            record_call("hot_money/northbound", success=False, error="No data returned",
+                        duration_ms=(time.monotonic() - start) * 1000,
+                        url=url, status_code=r.status_code, response_size=len(r.content),
+                        response_snippet=r.text)
             return None
         hgt_close = float(hgt[-1]) if hgt else 0
         sgt_close = float(sgt[-1]) if sgt else 0
@@ -45,7 +48,9 @@ def _fetch_northbound():
                 for i in range(max(0, len(times) - 10), len(times))
             ],
         }
-        record_call("hot_money/northbound", success=True, duration_ms=(time.monotonic() - start) * 1000)
+        record_call("hot_money/northbound", success=True, duration_ms=(time.monotonic() - start) * 1000,
+                    url=url, status_code=r.status_code, response_size=len(r.content),
+                    response_snippet=r.text)
         return result
     except Exception as e:
         record_call("hot_money/northbound", success=False, error=str(e), duration_ms=(time.monotonic() - start) * 1000)
@@ -95,30 +100,31 @@ def _fetch_fund_flow(code, date):
 
     try:
         # 主路：push2his 日 K（只要最新 1 根，lmt=1 省流量）
-        r = em_get(
-            "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get",
-            params={"secid": secid, "klt": 101, "lmt": 1,
-                    "fields1": "f1,f2,f3,f7", "fields2": "f51,f54,f56,f58"},
-            timeout=10,
-        )
+        url_main = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get"
+        params_main = {"secid": secid, "klt": 101, "lmt": 1,
+                       "fields1": "f1,f2,f3,f7", "fields2": "f51,f54,f56,f58"}
+        r = em_get(url_main, params=params_main, timeout=10)
         result = _parse_daykline(r.json())
         if result:
-            record_call("hot_money/fund_flow", success=True, duration_ms=(time.monotonic() - start) * 1000)
+            record_call("hot_money/fund_flow", success=True, duration_ms=(time.monotonic() - start) * 1000,
+                        url=url_main, status_code=r.status_code, response_size=len(r.content),
+                        response_snippet=r.text)
             return result
 
         # 降级：push2 分钟 K（em_get 内置限流会自动间隔，避免双发触发更严封禁）
-        r = em_get(
-            "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get",
-            params={"secid": secid, "klt": 1,
-                    "fields1": "f1,f2,f3,f7", "fields2": "f51,f52,f53,f54,f55,f56,f57"},
-            timeout=10,
-        )
+        url_fallback = "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get"
+        params_fallback = {"secid": secid, "klt": 1,
+                           "fields1": "f1,f2,f3,f7", "fields2": "f51,f52,f53,f54,f55,f56,f57"}
+        r = em_get(url_fallback, params=params_fallback, timeout=10)
         result = _parse_minkline(r.json())
         if result:
-            record_call("hot_money/fund_flow", success=True, duration_ms=(time.monotonic() - start) * 1000)
+            record_call("hot_money/fund_flow", success=True, duration_ms=(time.monotonic() - start) * 1000,
+                        url=url_fallback, status_code=r.status_code, response_size=len(r.content),
+                        response_snippet=r.text)
             return result
 
-        record_call("hot_money/fund_flow", success=False, error="No klines data (both push2his & push2)", duration_ms=(time.monotonic() - start) * 1000)
+        record_call("hot_money/fund_flow", success=False, error="No klines data (both push2his & push2)",
+                    duration_ms=(time.monotonic() - start) * 1000)
         return None
     except Exception as e:
         record_call("hot_money/fund_flow", success=False, error=str(e), duration_ms=(time.monotonic() - start) * 1000)
@@ -137,7 +143,10 @@ def _fetch_hot_stocks(date):
         r = http_get(url, headers=headers, timeout=10)
         data = r.json()
         if data.get("errocode", 0) != 0:
-            record_call("hot_money/hot_stocks", success=False, error="API error code: " + str(data.get("errocode")), duration_ms=(time.monotonic() - start) * 1000)
+            record_call("hot_money/hot_stocks", success=False, error="API error code: " + str(data.get("errocode")),
+                        duration_ms=(time.monotonic() - start) * 1000,
+                        url=url, status_code=r.status_code, response_size=len(r.content),
+                        response_snippet=r.text)
             return None
         rows = data.get("data") or []
         result = [
@@ -145,7 +154,9 @@ def _fetch_hot_stocks(date):
              "reason": row.get("reason", ""), "change_pct": row.get("zhangfu", "")}
             for row in rows[:20]
         ]
-        record_call("hot_money/hot_stocks", success=True, duration_ms=(time.monotonic() - start) * 1000)
+        record_call("hot_money/hot_stocks", success=True, duration_ms=(time.monotonic() - start) * 1000,
+                    url=url, status_code=r.status_code, response_size=len(r.content),
+                    response_snippet=r.text)
         return result
     except Exception as e:
         record_call("hot_money/hot_stocks", success=False, error=str(e), duration_ms=(time.monotonic() - start) * 1000)
@@ -209,11 +220,16 @@ def _fetch_sector_fund_flow(top_n=8):
         r = em_get(url, params=params, timeout=15)
         items = r.json().get("data", {}).get("diff", []) or []
     except Exception as e:
-        record_call("hot_money/sector_fund_flow", success=False, error=str(e), duration_ms=(time.monotonic() - start) * 1000)
+        record_call("hot_money/sector_fund_flow", success=False, error=str(e),
+                    duration_ms=(time.monotonic() - start) * 1000,
+                    url=url)
         return None
 
     if not items:
-        record_call("hot_money/sector_fund_flow", success=False, error="No items returned", duration_ms=(time.monotonic() - start) * 1000)
+        record_call("hot_money/sector_fund_flow", success=False, error="No items returned",
+                    duration_ms=(time.monotonic() - start) * 1000,
+                    url=url, status_code=r.status_code, response_size=len(r.content),
+                    response_snippet=r.text)
         return None
 
     boards = [
@@ -232,7 +248,9 @@ def _fetch_sector_fund_flow(top_n=8):
         "outflow_top": list(reversed(boards_sorted[-top_n:])),
         "total_boards": len(boards_sorted),
     }
-    record_call("hot_money/sector_fund_flow", success=True, duration_ms=(time.monotonic() - start) * 1000)
+    record_call("hot_money/sector_fund_flow", success=True, duration_ms=(time.monotonic() - start) * 1000,
+                url=url, status_code=r.status_code, response_size=len(r.content),
+                response_snippet=r.text)
     return result
 
 

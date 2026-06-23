@@ -323,19 +323,28 @@ async function fetchStockData(ticker, name, sector, rankerThesis) {
     const fund = fundR?.data ? parseFundamentals(fundR.data) : { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "", quarterly_trends: undefined, consensus_eps: undefined };
     // fund 先于 hot 解析：parseHotMoney 需要 industry 判板块轮动归属（主线/弱势/未上榜）
     const hot = hotR?.data ? parseHotMoney(hotR.data, fund.industry) : { ...exports.EMPTY_HOT_MONEY };
+    // 收集 4 个脚本的子源级调用记录（_calls），用于数据源健康统计
+    const allCalls = [
+        ...(klineR?.calls ?? []),
+        ...(newsR?.calls ?? []),
+        ...(hotR?.calls ?? []),
+        ...(fundR?.calls ?? []),
+    ];
     return {
         ticker, name, sector,
         kline, news,
         hot_money: hot,
         fundamentals: fund,
         ranker_thesis: rankerThesis,
-        vpa_text: vpaText, // kline.py 预计算的 VPA 量价背离结论，undefined 则不注入
-        news_layer_stats: newsLayerStats, // news.py layer_stats，undefined 则不注入
+        vpa_text: vpaText,
+        news_layer_stats: newsLayerStats,
+        calls: allCalls.length > 0 ? allCalls : undefined,
     };
 }
 /** 安全调用 execSkillScript，失败返回 null。
- *  返回 {data, vpa?} —— data 是脚本主输出，vpa 是 kline.py 额外的量价预计算文本
- *  （exec-python.ts:280 提到顶层）。非 kline 脚本无 vpa，该字段 undefined。 */
+ *  返回 {data, vpa?, calls?} —— data 是脚本主输出，vpa 是 kline.py 额外的量价预计算文本
+ *  （exec-python.ts:280 提到顶层），calls 是子源级调用记录。
+ *  非 kline 脚本无 vpa，该字段 undefined。 */
 async function safeCall(fn) {
     try {
         const result = await fn();
@@ -344,6 +353,7 @@ async function safeCall(fn) {
         return {
             data: result.data,
             vpa: typeof result.vpa === "string" ? result.vpa : undefined,
+            calls: Array.isArray(result.calls) ? result.calls : undefined,
         };
     }
     catch {

@@ -205,6 +205,14 @@ export interface SourceCall {
   error?: string | null;
   /** Call duration in ms (for slow-source detection). */
   duration_ms?: number | null;
+  /** HTTP URL that was called (for debugging). */
+  url?: string | null;
+  /** HTTP status code (for debugging). */
+  status_code?: number | null;
+  /** Response body size in bytes (for debugging). */
+  response_size?: number | null;
+  /** Full response body (for debugging). */
+  response_snippet?: string | null;
 }
 
 /** Result from a Python data script */

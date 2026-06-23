@@ -24,7 +24,8 @@ import requests
 _CALLS = []
 
 
-def record_call(stage, success, error=None, duration_ms=None):
+def record_call(stage, success, error=None, duration_ms=None,
+                url=None, status_code=None, response_size=None, response_snippet=None):
     """Record a per-source call result (success or failure).
 
     Args:
@@ -33,14 +34,27 @@ def record_call(stage, success, error=None, duration_ms=None):
         success: True if the call yielded usable data
         error: short error message if failed (truncated to 160 chars)
         duration_ms: optional call duration in ms (for slow-source detection)
+        url: optional HTTP URL that was called (for debugging)
+        status_code: optional HTTP status code (for debugging)
+        response_size: optional response body size in bytes (for debugging)
+        response_snippet: optional first 200 chars of response body (for debugging)
     """
     try:
-        _CALLS.append({
+        entry = {
             "stage": str(stage)[:60],
             "success": bool(success),
             "error": str(error)[:160] if error else None,
             "duration_ms": int(duration_ms) if duration_ms is not None else None,
-        })
+        }
+        if url is not None:
+            entry["url"] = str(url)[:200]
+        if status_code is not None:
+            entry["status_code"] = int(status_code)
+        if response_size is not None:
+            entry["response_size"] = int(response_size)
+        if response_snippet is not None:
+            entry["response_snippet"] = str(response_snippet)
+        _CALLS.append(entry)
     except Exception:
         pass  # never crash the script over a stats record
 

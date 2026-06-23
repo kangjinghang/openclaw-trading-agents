@@ -49,6 +49,8 @@ const shallow_analyzer_1 = require("./watchlist/shallow-analyzer");
 const atomic_json_1 = require("./watchlist/atomic-json");
 const data_fetcher_1 = require("./watchlist/data-fetcher");
 const plan_formatter_1 = require("./watchlist/plan-formatter");
+const data_health_aggregator_1 = require("./watchlist/data-health-aggregator");
+const data_trace_report_1 = require("./watchlist/data-trace-report");
 const DEFAULT_WATCHLIST_DIR = path.join(os.homedir(), ".openclaw", "watchlist");
 function argValue(args, key) {
     const idx = args.indexOf(key);
@@ -166,6 +168,18 @@ Options:
         shallowCaller, rebalanceCaller, dataByTicker,
         config: { top_n: topN },
     });
+    // 收集数据源健康统计：从 dataByTicker 里提取每个股的 calls，聚合为 run 级别
+    const allCalls = [];
+    for (const stockData of dataByTicker.values()) {
+        if (stockData.calls)
+            allCalls.push(...stockData.calls);
+    }
+    const dataHealth = (0, data_health_aggregator_1.generateDataHealthReport)(date, allCalls, rebalanceDir);
+    // 写 data-health.json（子源级调用记录，供历史聚合）
+    (0, atomic_json_1.writeAtomicJson)(path.join(rebalanceDir, "data-health.json"), {
+        run_date: date,
+        calls: allCalls,
+    });
     // 写 plan.json
     const planFile = {
         scan_date: date,
@@ -182,12 +196,22 @@ Options:
         execution_plan: result.execution_plan,
         sector_warnings: result.sector_warnings,
         position_traces: result.position_traces,
+        data_health: dataHealth,
     };
     (0, atomic_json_1.writeAtomicJson)(path.join(rebalanceDir, "plan.json"), planFile);
     (0, atomic_json_1.writeAtomicJson)(path.join(rebalanceDir, "holdings_snapshot.json"), holdings);
     // 写 plan.md（人类可读）
     const planMd = (0, plan_formatter_1.formatPlanMarkdown)(planFile);
     fs.writeFileSync(path.join(rebalanceDir, "plan.md"), planMd, "utf-8");
+    // 写 data-trace.md：选第一只股作为代表，展示完整的数据管道调试视图
+    if (result.reports.length > 0) {
+        const exampleReport = result.reports[0];
+        const exampleData = dataByTicker.get(exampleReport.ticker);
+        if (exampleData) {
+            const traceMd = (0, data_trace_report_1.generateDataTraceReport)(exampleReport.ticker, exampleReport.name, exampleData, exampleReport);
+            fs.writeFileSync(path.join(rebalanceDir, "data-trace.md"), traceMd, "utf-8");
+        }
+    }
     // 更新 last_rebalance.json
     if (result.rebalancer_output.actions.length > 0) {
         const newLast = {

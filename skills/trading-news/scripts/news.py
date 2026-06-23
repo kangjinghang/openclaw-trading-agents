@@ -59,7 +59,10 @@ def _fetch_news_eastmoney(code, page_size=50):
                 "source": item.get("mediaName", "东方财富"),
             })
         record_call("news/stock_em", success=True,
-                    duration_ms=(time.monotonic() - start) * 1000)
+                    duration_ms=(time.monotonic() - start) * 1000,
+                    url=url, status_code=resp.status_code,
+                    response_size=len(resp.content),
+                    response_snippet=resp.text)
         return articles
     except Exception as e:
         record_call("news/stock_em", success=False, error=str(e),
