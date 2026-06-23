@@ -70,6 +70,7 @@ function calculateCost(
     // default GLM models (which were absent from the table) and producing
     // a misleading total_cost_usd in run_summary / dashboard / CLI output.
     if (!_warnedMissingCost.has(model)) {
+      if (_warnedMissingCost.size > 100) _warnedMissingCost.clear();  // 防内存泄露
       _warnedMissingCost.add(model);
       console.error(`  [LLM] cost unknown for model "${model}" — reporting $0 (add an entry to MODEL_COSTS for accurate accounting)`);
     }

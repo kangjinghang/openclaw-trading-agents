@@ -42,12 +42,13 @@ function parseClaims(content: string, side: "bull" | "bear"): DebateClaim[] {
  * Extract summary section from debate output.
  */
 export function extractSummary(content: string): string {
-  const summaryRegex = /### (?:论据|风险)总结\s*\n([\s\S]*?)(?=\n<!--|$)/;
+  // Try multiple heading patterns: ## / ###, 论据/风险/观点, 总结/概括/小结
+  const summaryRegex = /#{2,3}\s*(?:论据|风险|观点)(?:总结|概括|小结)\s*\n([\s\S]*?)(?=\n<!--|$)/;
   const match = content.match(summaryRegex);
   if (match) return match[1].trim();
   // Fallback: strip HTML comment blocks (DEBATE_STATE / VERDICT / etc.) before
   // taking the tail, otherwise JSON-block remnants can pollute the summary
-  // when the LLM doesn't follow the "### 论据总结" convention.
+  // when the LLM doesn't follow the heading convention.
   const stripped = content.replace(/<!--[\s\S]*?-->/g, "").trim();
   return stripped.slice(-200).trim();
 }

@@ -249,7 +249,10 @@ def _fetch_stock_news_eastmoney(code, page_size=15):
     try:
         resp = em_get(url, params=params, headers=headers, timeout=15)
         text = resp.text
-        text = text[text.index("(") + 1: text.rindex(")")]
+        try:
+            text = text[text.index("(") + 1: text.rindex(")")]
+        except ValueError:
+            pass
         data = json.loads(text)
         articles = []
         for item in data.get("result", {}).get("cmsArticleWebOld", []):

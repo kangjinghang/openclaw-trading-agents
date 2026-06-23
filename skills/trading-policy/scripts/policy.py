@@ -51,7 +51,10 @@ def _fetch_policy_eastmoney(code, lookback_days=30):
         _http = dict(url=str(resp.url)[:200], status_code=resp.status_code,
                      response_size=len(resp.content), response_snippet=resp.text[:200])
         text = resp.text
-        text = text[text.index("(") + 1: text.rindex(")")]
+        try:
+            text = text[text.index("(") + 1: text.rindex(")")]
+        except ValueError:
+            pass
         data = json.loads(text)
         cutoff = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
         for item in data.get("result", {}).get("cmsArticleWebOld", []):

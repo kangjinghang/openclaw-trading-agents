@@ -48,7 +48,11 @@ def _fetch_news_eastmoney(code, page_size=50):
         }
         resp = em_get(url, params=params, headers=headers, timeout=15)
         text = resp.text
-        text = text[text.index("(") + 1: text.rindex(")")]
+        # JSONP: extract JSON from callback wrapper; fall back to raw JSON
+        try:
+            text = text[text.index("(") + 1: text.rindex(")")]
+        except ValueError:
+            pass  # no parentheses → try raw JSON
         data = json.loads(text)
         articles = []
         for item in data.get("result", {}).get("cmsArticleWebOld", []):
