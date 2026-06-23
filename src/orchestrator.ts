@@ -1205,7 +1205,8 @@ export async function runFullAnalysis(
     // remains as a hard numeric cap fallback in case the LLM ignores hard_constraints.
     tradingPlan = await runTrader(researchDecision, analystReports, quality.summary_text, config, openaiClient, traceLogger, ticker, date, riskAssessment.judge);
     if (riskAssessment.max_position_override) {
-      tradingPlan.position_pct = Math.min(tradingPlan.position_pct, riskAssessment.max_position_override);
+      const capped = Math.max(0, Math.min(100, riskAssessment.max_position_override));
+      tradingPlan.position_pct = Math.min(tradingPlan.position_pct, capped);
     }
     riskDebate = await runRiskDebate(tradingPlan, analystReports, config, openaiClient, traceLogger);
     riskAssessment = await runRiskManager(riskDebate, tradingPlan, config, openaiClient, traceLogger);
@@ -1226,9 +1227,12 @@ export async function runFullAnalysis(
   // this, a final judge saying "总仓位≤10%" never bound the final plan when
   // the loop didn't run (pass on first try) or exited revise-exhausted.
   // Regression: 600600 final judge said ≤10% but trader's 15% stood.
-  if (riskAssessment.max_position_override !== undefined && riskAssessment.max_position_override < tradingPlan.position_pct) {
-    log(`  风控硬约束：仓位 ${tradingPlan.position_pct}% → ${riskAssessment.max_position_override}%`);
-    tradingPlan = { ...tradingPlan, position_pct: riskAssessment.max_position_override };
+  if (riskAssessment.max_position_override !== undefined) {
+    const capped = Math.max(0, Math.min(100, riskAssessment.max_position_override));
+    if (capped < tradingPlan.position_pct) {
+      log(`  风控硬约束：仓位 ${tradingPlan.position_pct}% → ${capped}%`);
+      tradingPlan = { ...tradingPlan, position_pct: capped };
+    }
   }
 
   // Apply stop_loss constraint from risk hard_constraints.

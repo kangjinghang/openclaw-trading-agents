@@ -204,6 +204,8 @@ export async function runRiskDebate(
   const riskArguments: RiskArgument[] = new Array(RISK_ROLES.length);
   const concurrency = config.llm_concurrency || DEFAULT_LLM_CONCURRENCY;
   const rateLimitCoordinator = new RateLimitCoordinator();
+  let accumulatedTokens = 0;
+  let accumulatedCost = 0;
 
   await pool(
     RISK_ROLES,
@@ -235,6 +237,8 @@ export async function runRiskDebate(
         rateLimitCoordinator,
       });
 
+      accumulatedTokens += result.usage.total_tokens;
+      accumulatedCost += result.costUsd;
       riskArguments[idx] = parseRiskArgument(result.content, role);
     },
     concurrency,
@@ -244,8 +248,8 @@ export async function runRiskDebate(
   return {
     rounds: [riskArguments],
     risk_arguments: riskArguments,
-    total_tokens: 0,
-    total_cost_usd: 0,
+    total_tokens: accumulatedTokens,
+    total_cost_usd: accumulatedCost,
   };
 }
 
