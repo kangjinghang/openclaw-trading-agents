@@ -232,3 +232,106 @@ describe("runReplay", () => {
     expect(results[0].error).toBe("boom");
   });
 });
+
+import {
+  computeStability, formatReport,
+} from "../../src/watchlist/bench-runner";
+import type { ParsedOutput, SelectedTrace, BenchResults, ConfigStats, StabilityStats } from "../../src/watchlist/bench-types";
+
+// helper：构造稳定性测试用 BenchCallResult
+function makeStabCall(phase: string, configId: string, traceFile: string, parsed: ParsedOutput): BenchCallResult {
+  return {
+    trace_file: traceFile, config_id: configId, repeat: 0, ok: true,
+    duration_ms: 100, usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    cost_usd: 0, raw_content: "{}", parsed,
+  };
+}
+
+describe("computeStability", () => {
+  it("computes topK consistency + baseline score diff for rank phase", () => {
+    const calls: BenchCallResult[] = [
+      makeStabCall("rank", "c1", "t", { _parse_ok: true, ranked: [{ ticker: "a", score: 9 }, { ticker: "b", score: 8 }] }),
+      makeStabCall("rank", "c1", "t", { _parse_ok: true, ranked: [{ ticker: "a", score: 9 }, { ticker: "c", score: 7 }] }),
+    ];
+    const baseline: SelectedTrace = {
+      file: "t", path: "t", role: "long-ranker", phase: "rank", ticker: "long-ranker",
+      baseline_duration_ms: 0, baseline_parsed: { _parse_ok: true, ranked: [{ ticker: "a", score: 10 }, { ticker: "b", score: 9 }] },
+    };
+    const stab = computeStability("c1", baseline, calls);
+    expect(stab.numeric_cv).toBeNull();   // rank 不用 numeric CV
+    expect(stab.mode_consistency).toBeNull();
+    // top-K: [a,b] vs [a,c] overlap {a}=1, denom=min(3,min(2,2))=2 → 0.5
+    expect(stab.topk_consistency).toBeCloseTo(0.5, 2);
+    expect(stab.baseline_score_diff).not.toBeNull();
+  });
+
+  it("computes fitness CV for analyst-shallow", () => {
+    const calls: BenchCallResult[] = [
+      makeStabCall("rebalance", "c1", "t", { _parse_ok: true, fitness_score: 4 }),
+      makeStabCall("rebalance", "c1", "t", { _parse_ok: true, fitness_score: 5 }),
+      makeStabCall("rebalance", "c1", "t", { _parse_ok: true, fitness_score: 4 }),
+    ];
+    const baseline: SelectedTrace = {
+      file: "t", path: "t", role: "analyst-shallow", phase: "rebalance", ticker: "002167",
+      baseline_duration_ms: 0, baseline_parsed: { _parse_ok: true, fitness_score: 4 },
+    };
+    const stab = computeStability("c1", baseline, calls);
+    // values [4,5,4] mean=4.33 → CV 小正数
+    expect(stab.numeric_cv).not.toBeNull();
+    expect(stab.numeric_cv!).toBeGreaterThan(0);
+    expect(stab.topk_consistency).toBeNull();
+  });
+
+  it("computes mode consistency + flag-count CV for risk-shallow", () => {
+    const calls: BenchCallResult[] = [
+      makeStabCall("rebalance", "c1", "t", { _parse_ok: true, overall_risk: "high", risk_flags: [{ flag: "x", severity: "高" }] }),
+      makeStabCall("rebalance", "c1", "t", { _parse_ok: true, overall_risk: "high", risk_flags: [{ flag: "x", severity: "高" }, { flag: "y", severity: "中" }] }),
+    ];
+    const baseline: SelectedTrace = {
+      file: "t", path: "t", role: "risk-shallow", phase: "rebalance", ticker: "002167",
+      baseline_duration_ms: 0, baseline_parsed: { _parse_ok: true, overall_risk: "high" },
+    };
+    const stab = computeStability("c1", baseline, calls);
+    // overall_risk [high,high] → mode 1.0
+    expect(stab.mode_consistency).toBe(1);
+    // risk_flags counts [1,2] → numeric_cv 用 flag 数量
+    expect(stab.numeric_cv).not.toBeNull();
+  });
+});
+
+describe("formatReport", () => {
+  it("renders overview + stability + per-sample sections", () => {
+    const results: BenchResults = {
+      bench_name: "test-bench",
+      config_path: "bench/x.json",
+      started_at: "2026-06-24T00:00:00Z",
+      finished_at: "2026-06-24T00:01:00Z",
+      trace_count: 1, repeats: 2, config_count: 1, total_calls: 2,
+      traces: [{ file: "analyst-shallow-trace-1.json", role: "analyst-shallow", phase: "rebalance", ticker: "002167", baseline_duration_ms: 1000, baseline_parsed: { _parse_ok: true, fitness_score: 4 } }],
+      results: [
+        { trace_file: "analyst-shallow-trace-1.json", config_id: "c1", repeat: 0, ok: true, duration_ms: 500, usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 }, cost_usd: 0.01, raw_content: "{}", parsed: { _parse_ok: true, fitness_score: 4 } },
+        { trace_file: "analyst-shallow-trace-1.json", config_id: "c1", repeat: 1, ok: true, duration_ms: 600, usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 }, cost_usd: 0.01, raw_content: "{}", parsed: { _parse_ok: true, fitness_score: 5 } },
+      ],
+    };
+    const configStats: ConfigStats[] = [{
+      config_id: "c1", success_rate: 1, success_count: 2, expected_calls: 2,
+      duration_median_ms: 500, duration_p90_ms: 600, prompt_tokens_median: 100,
+      completion_tokens_median: 50, parse_success_rate: 1, total_cost_usd: 0.02,
+    }];
+    const stability: StabilityStats[] = [{
+      config_id: "c1", trace_file: "analyst-shallow-trace-1.json",
+      numeric_cv: 0.15, mode_consistency: null, topk_consistency: null,
+      baseline_score_diff: null, distribution: { "4": 1, "5": 1 },
+    }];
+
+    const md = formatReport(results, configStats, stability);
+    expect(md).toContain("# Bench: test-bench");
+    expect(md).toContain("## 概览");
+    expect(md).toContain("| c1 |");              // 概览表有 c1 行
+    expect(md).toContain("## 稳定性");
+    expect(md).toContain("CV=0.15");            // 稳定性表含 CV
+    expect(md).toContain("## 逐样本");
+    expect(md).toContain("002167");             // 逐样本块含 ticker
+    expect(md).toContain("f=4");                // 分数网格
+  });
+});

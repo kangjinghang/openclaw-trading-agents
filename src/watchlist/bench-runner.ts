@@ -224,3 +224,161 @@ export async function runReplay(
   return results;
 }
 
+/**
+ * 按 (config × trace) 聚合稳定性。按 trace.phase 和 role 决定用哪个指标：
+ * - rank: topK 一致率 + baseline 分数差；numeric_cv/mode=null
+ * - analyst-shallow: fitness_score 的 CV；topk/mode=null
+ * - risk-shallow: overall_risk 众数一致率 + risk_flags 数量的 CV
+ */
+export function computeStability(
+  configId: string,
+  trace: SelectedTrace,
+  calls: BenchCallResult[],
+): StabilityStats {
+  const okCalls = calls.filter(c => c.ok && c.parsed._parse_ok);
+  const distribution: Record<string, number> = {};
+
+  let numeric_cv: number | null = null;
+  let mode_consistency: number | null = null;
+  let topk_consistency: number | null = null;
+  let baseline_score_diff: number | null = null;
+
+  if (trace.phase === "rank") {
+    const lists = okCalls.map(c => (c.parsed.ranked || []).map(r => r.ticker));
+    topk_consistency = topKConsistency(lists, 3);
+    if (trace.baseline_parsed.ranked && trace.baseline_parsed.ranked.length > 0) {
+      const diffs = okCalls
+        .map(c => meanAbsScoreDiff(trace.baseline_parsed.ranked!, c.parsed.ranked || []))
+        .filter((v): v is number => v !== null);
+      baseline_score_diff = diffs.length > 0 ? diffs.reduce((s, v) => s + v, 0) / diffs.length : null;
+    }
+    // rank 的 ticker 分布
+    for (const c of okCalls) {
+      for (const r of c.parsed.ranked || []) {
+        distribution[r.ticker] = (distribution[r.ticker] || 0) + 1;
+      }
+    }
+  } else if (trace.role.includes("risk")) {
+    const risks = okCalls.map(c => c.parsed.overall_risk || "unknown");
+    mode_consistency = modeConsistency(risks);
+    const flagCounts = okCalls.map(c => (c.parsed.risk_flags || []).length);
+    numeric_cv = coefficientOfVariation(flagCounts);
+    for (const r of risks) distribution[r] = (distribution[r] || 0) + 1;
+  } else {
+    // analyst-shallow
+    const scores = okCalls
+      .map(c => c.parsed.fitness_score)
+      .filter((v): v is number => typeof v === "number");
+    numeric_cv = coefficientOfVariation(scores);
+    for (const s of scores.map(String)) distribution[s] = (distribution[s] || 0) + 1;
+  }
+
+  return {
+    config_id: configId,
+    trace_file: trace.file,
+    numeric_cv, mode_consistency, topk_consistency, baseline_score_diff,
+    distribution,
+  };
+}
+
+/** 秒格式化 */
+function fmtMs(ms: number | null): string {
+  if (ms === null) return "-";
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+/**
+ * 格式化 report.md：概览表 + 稳定性表 + 逐样本块。
+ * 逐样本块只放分数网格，thesis/ranked 全文不贴（在 results.json）。
+ */
+export function formatReport(
+  results: BenchResults,
+  configStats: ConfigStats[],
+  stability: StabilityStats[],
+): string {
+  const lines: string[] = [];
+  const failed = results.results.filter(r => !r.ok).length;
+  lines.push(`# Bench: ${results.bench_name}`);
+  lines.push(`${results.trace_count} traces × ${results.repeats} repeats × ${results.config_count} configs = ${results.total_calls} calls · 失败 ${failed}`);
+  lines.push("");
+
+  // ── 概览 ──
+  lines.push("## 概览（按 config 汇总）");
+  lines.push("");
+  lines.push("| config | 成功率 | 耗时中位数 | p90 耗时 | prompt tok 中位 | completion tok 中位 | 解析成功率 | cost |");
+  lines.push("|--------|--------|-----------|---------|----------------|--------------------|-----------|------|");
+  for (const s of configStats) {
+    const parsePct = s.parse_success_rate > 0 ? `${Math.round(s.parse_success_rate * 100)}%` : "-";
+    lines.push(`| ${s.config_id} | ${s.success_count}/${s.expected_calls} | ${fmtMs(s.duration_median_ms)} | ${fmtMs(s.duration_p90_ms)} | ${s.prompt_tokens_median ?? "-"} | ${s.completion_tokens_median ?? "-"} | ${parsePct} | $${s.total_cost_usd.toFixed(4)} |`);
+  }
+  lines.push("");
+
+  // ── 稳定性 ──
+  lines.push("## 稳定性（按 config × trace 汇总）");
+  lines.push("");
+  const traceFiles = results.traces.map(t => t.file);
+  const configIds = configStats.map(s => s.config_id);
+  const isRank = results.traces.some(t => t.phase === "rank");
+  const metricLabel = isRank ? "top-K 一致率" : "fitness CV / risk 众数";
+  const headerCells = traceFiles.map(f => {
+    const t = results.traces.find(x => x.file === f);
+    return t?.ticker ?? f;
+  });
+  lines.push(`| config | ${headerCells.join(" | ")} |`);
+  lines.push(`|--------|${traceFiles.map(() => "----").join("|")}|`);
+  for (const cid of configIds) {
+    const cells = traceFiles.map(tf => {
+      const s = stability.find(x => x.config_id === cid && x.trace_file === tf);
+      if (!s) return "-";
+      if (isRank) return s.topk_consistency !== null ? `top-K=${s.topk_consistency.toFixed(2)}` : "-";
+      if (s.mode_consistency !== null) return `众数=${(s.mode_consistency * 100).toFixed(0)}%`;
+      return s.numeric_cv !== null ? `CV=${s.numeric_cv.toFixed(2)}` : "-";
+    });
+    lines.push(`| ${cid} | ${cells.join(" | ")} |`);
+  }
+  lines.push(`（指标：${metricLabel}；数值越小越稳定 / 越大越一致）`);
+  lines.push("");
+
+  // ── 逐样本 ──
+  lines.push("## 逐样本");
+  lines.push("");
+  for (const trace of results.traces) {
+    lines.push(`### ${trace.ticker} (${trace.role})`);
+    if (trace.baseline_parsed.fitness_score !== undefined) {
+      lines.push(`trace 基线 fitness=${trace.baseline_parsed.fitness_score} (${fmtMs(trace.baseline_duration_ms)})`);
+    } else if (trace.baseline_parsed.overall_risk) {
+      lines.push(`trace 基线 risk=${trace.baseline_parsed.overall_risk} (${fmtMs(trace.baseline_duration_ms)})`);
+    } else if (trace.baseline_parsed.ranked && trace.baseline_parsed.ranked.length > 0) {
+      const top3 = trace.baseline_parsed.ranked.slice(0, 3).map((r, i) => `${i + 1}.${r.ticker}`).join(" ");
+      lines.push(`trace 基线 top-3: ${top3} (${fmtMs(trace.baseline_duration_ms)})`);
+    }
+    // 分数网格表头
+    let header = "| config |";
+    let sep = "|--------|";
+    for (let r = 0; r < results.repeats; r++) {
+      header += ` rep${r} |`;
+      sep += "----|";
+    }
+    lines.push(header);
+    lines.push(sep);
+    for (const cid of configIds) {
+      let row = `| ${cid} |`;
+      for (let r = 0; r < results.repeats; r++) {
+        const call = results.results.find(x => x.trace_file === trace.file && x.config_id === cid && x.repeat === r);
+        if (!call) row += " - |";
+        else if (!call.ok) row += " ✗ |";
+        else if (call.parsed.fitness_score !== undefined) row += ` f=${call.parsed.fitness_score} |`;
+        else if (call.parsed.overall_risk) row += ` ${call.parsed.overall_risk.slice(0, 3)} |`;
+        else if (call.parsed.ranked && call.parsed.ranked.length > 0) row += ` top=${call.parsed.ranked[0]?.ticker ?? "?"} |`;
+        else row += " ? |";
+      }
+      lines.push(row);
+    }
+    lines.push("（thesis / ranked 全文见 results.json 对应条目）");
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+
