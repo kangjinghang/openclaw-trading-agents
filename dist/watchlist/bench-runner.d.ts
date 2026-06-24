@@ -89,7 +89,10 @@ export declare function formatReport(results: BenchResults, configStats: ConfigS
  * prompt 按 trace 文件名缓存（同一 trace 的所有 config × repeat 读同一份文件，
  * 不必每次重读 12KB 的 rank user_message）。
  */
-export declare function makeCaller(clients: Record<string, OpenAI>, coordinators: Record<string, RateLimitCoordinator>): BenchCaller;
+export declare function makeCaller(clients: Record<string, OpenAI>, coordinators: Record<string, RateLimitCoordinator>): {
+    caller: BenchCaller;
+    tmpDir: string;
+};
 /**
  * bench 总入口：选 trace → 造 clients/coordinators → 回放 → 聚合 → 写产物。
  * 返回产物目录路径。dryRun=true 时只打印选中 trace 和调用数，不调 LLM。

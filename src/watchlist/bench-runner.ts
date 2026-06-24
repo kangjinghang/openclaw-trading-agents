@@ -427,12 +427,12 @@ function readTracePrompt(trace: SelectedTrace): { system: string; user: string }
 export function makeCaller(
   clients: Record<string, OpenAI>,
   coordinators: Record<string, RateLimitCoordinator>,
-): BenchCaller {
+): { caller: BenchCaller; tmpDir: string } {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "bench-trace-"));
   const traceLogger = new TraceLogger(tmpDir, "bench");
   const promptCache = new Map<string, { system: string; user: string }>();
 
-  return async ({ trace, config }): Promise<BenchCallOutcome> => {
+  const caller: BenchCaller = async ({ trace, config }): Promise<BenchCallOutcome> => {
     const client = clients[config.provider];
     const coordinator = coordinators[config.provider];
     const start = Date.now();
@@ -474,6 +474,8 @@ export function makeCaller(
       };
     }
   };
+
+  return { caller, tmpDir };
 }
 
 /**
@@ -515,46 +517,57 @@ export async function runBench(
   }
 
   const startedAt = new Date().toISOString();
-  const caller = makeCaller(clients, coordinators);
-  const callResults = await runReplay(traces, config.configs, config.repeats, caller);
-  const finishedAt = new Date().toISOString();
+  const { caller, tmpDir } = makeCaller(clients, coordinators);
+  try {
+    const callResults = await runReplay(traces, config.configs, config.repeats, caller);
+    const finishedAt = new Date().toISOString();
 
-  // 聚合
-  const expectedPerConfig = traces.length * config.repeats;
-  const configStats = config.configs.map(c =>
-    summarizeConfigStats(c.id, callResults.filter(r => r.config_id === c.id), expectedPerConfig));
-  const stability: StabilityStats[] = [];
-  for (const c of config.configs) {
-    for (const t of traces) {
-      stability.push(computeStability(c.id, t, callResults.filter(r => r.config_id === c.id && r.trace_file === t.file)));
+    // 聚合
+    const expectedPerConfig = traces.length * config.repeats;
+    const configStats = config.configs.map(c =>
+      summarizeConfigStats(c.id, callResults.filter(r => r.config_id === c.id), expectedPerConfig));
+    const stability: StabilityStats[] = [];
+    for (const c of config.configs) {
+      for (const t of traces) {
+        stability.push(computeStability(c.id, t, callResults.filter(r => r.config_id === c.id && r.trace_file === t.file)));
+      }
+    }
+
+    const results: BenchResults = {
+      bench_name: config.name,
+      config_path: configPath,
+      started_at: startedAt,
+      finished_at: finishedAt,
+      trace_count: traces.length,
+      repeats: config.repeats,
+      config_count: config.configs.length,
+      total_calls: callResults.length,
+      traces: traces.map(({ path: _path, ...rest }) => rest),  // 剥掉 path（results.json 不含完整路径）
+      results: callResults,
+    };
+
+    // 写产物
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    const outDir = path.join(watchlistDir, "bench", `${config.name}-${ts}`);
+    fs.mkdirSync(outDir, { recursive: true });
+    writeAtomicJson(path.join(outDir, "results.json"), results);
+    fs.writeFileSync(path.join(outDir, "report.md"), formatReport(results, configStats, stability), "utf-8");
+
+    console.log(`\n=== 完成 ===`);
+    console.log(`  调用: ${callResults.length}（失败 ${callResults.filter(r => !r.ok).length}）`);
+    console.log(`  输出: ${path.join(outDir, "report.md")}`);
+    console.log(`  输出: ${path.join(outDir, "results.json")}`);
+    return outDir;
+  } finally {
+    // 清理临时 TraceLogger 目录（makeCaller 的 mkdtempSync 产物）。
+    // 即使正常跑完也不清理就会泄漏——callLLM 写的 trace 文件 bench 用不到。
+    // 失败/超时也走 finally，不留残渣。
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // 清理失败不阻塞主流程（tmpdir 最终会被 OS 清）
     }
   }
-
-  const results: BenchResults = {
-    bench_name: config.name,
-    config_path: configPath,
-    started_at: startedAt,
-    finished_at: finishedAt,
-    trace_count: traces.length,
-    repeats: config.repeats,
-    config_count: config.configs.length,
-    total_calls: callResults.length,
-    traces: traces.map(({ path: _path, ...rest }) => rest),  // 剥掉 path（results.json 不含完整路径）
-    results: callResults,
-  };
-
-  // 写产物
-  const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  const outDir = path.join(watchlistDir, "bench", `${config.name}-${ts}`);
-  fs.mkdirSync(outDir, { recursive: true });
-  writeAtomicJson(path.join(outDir, "results.json"), results);
-  fs.writeFileSync(path.join(outDir, "report.md"), formatReport(results, configStats, stability), "utf-8");
-
-  console.log(`\n=== 完成 ===`);
-  console.log(`  调用: ${callResults.length}（失败 ${callResults.filter(r => !r.ok).length}）`);
-  console.log(`  输出: ${path.join(outDir, "report.md")}`);
-  console.log(`  输出: ${path.join(outDir, "results.json")}`);
-  return outDir;
 }
 
 
