@@ -196,6 +196,143 @@ def _fetch_reduce_em(code, date=None):
         return []
 
 
+# ── 融资融券（margin trading）────────────────────────────────────────
+# 数据源：东方财富 datacenter RPTA_WEB_RZRQ_GGMX（个股融资融券明细）。
+# 优势 vs aiagents-stock 的 stock_margin_underlying_info_szse：
+#   - 沪深全覆盖（szse 接口只覆盖深市，沪市 6 开头股完全拿不到）
+#   - 按 SCODE 精确过滤（后者拉全市场表再逐只筛，逐股查询低效）
+#   - 字段更全：含 3/5/10 日累计净买入、融资余额占流通市值比（踩踏风险关键指标）
+# 非"两融标的"的股票接口返回 success:false/result:null —— 这是合法结果（多数小盘股
+# 非标的），返回 None 让上游据实标注，不算源故障。接口异常才记 record_call 失败。
+
+_MARGIN_DAYS = 10  # 取近 10 个交易日明细做趋势
+
+
+def _to_float(val):
+    """Best-effort numeric coerce (东财字段偶有 None/字符串)."""
+    try:
+        return float(val) if val is not None else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _score_margin(rows):
+    """预计算多空杠杆信号（遵循 openclaw 约定：算术在脚本内完成，禁止 LLM 重算）。
+
+    Args:
+        rows: 东财明细列表，已按日期降序（rows[0] = 最新），字段为原始大写名。
+    Returns:
+        (signal dict, latest row dict)。rows 为空或字段缺失时 signal 各项为 None。
+    """
+    latest = rows[0] if rows else {}
+
+    def g(key):
+        return _to_float(latest.get(key))
+
+    rzye = g("RZYE")          # 融资余额（元）
+    rqye = g("RQYE")          # 融券余额（元）
+    rzyezb = g("RZYEZB")      # 融资余额占流通市值比（%）
+    rzjme = g("RZJME")        # 当日融资净买入（元）
+    rzjme_3d = g("RZJME3D")   # 近 3 日累计融资净买入（元）
+    rzjme_5d = g("RZJME5D")
+    rzjme_10d = g("RZJME10D")
+
+    signal = {
+        "margin_balance": rzye,
+        "short_balance": rqye,
+        "margin_pct_of_float": rzyezb,
+        "net_buy_1d": rzjme,
+        "net_buy_3d": rzjme_3d,
+        "net_buy_5d": rzjme_5d,
+        "net_buy_10d": rzjme_10d,
+    }
+
+    # 多空杠杆倾向：融资（看多杠杆）vs 融券（看空杠杆）。
+    # ratio>10 视为强看多杠杆，<3 偏平衡/看空（参考 aiagents-stock 阈值）。
+    if rzye is not None and rqye is not None and rqye > 0:
+        ratio = rzye / rqye
+        signal["long_short_ratio"] = ratio
+        if ratio > 10:
+            signal["leverage_bias"] = "看多杠杆强"
+        elif ratio > 3:
+            signal["leverage_bias"] = "偏看多"
+        else:
+            signal["leverage_bias"] = "多空相对平衡"
+
+    # 融资余额占流通市值比 → 踩踏风险预警。
+    # 经验阈值：>10% 高杠杆拥挤（下跌易触发强平连锁），5-10% 中等，<5% 偏低。
+    if rzyezb is not None:
+        if rzyezb >= 10:
+            signal["margin_pressure"] = "高杠杆拥挤（下跌易触发融资强平）"
+        elif rzyezb >= 5:
+            signal["margin_pressure"] = "中等杠杆"
+        else:
+            signal["margin_pressure"] = "杠杆偏低"
+
+    # 资金流向方向（近 3/5/10 日累计净买入正负）。
+    for win, key in (("3d", "net_buy_3d"), ("5d", "net_buy_5d"), ("10d", "net_buy_10d")):
+        v = signal[key]
+        if v is not None:
+            signal[f"flow_{win}"] = "净流入（杠杆资金看多）" if v > 0 else ("净流出（杠杆资金撤退）" if v < 0 else "持平")
+
+    return signal, latest
+
+
+def _fetch_margin(code):
+    """Fetch individual-stock margin trading data (融资融券明细).
+
+    Returns None if the stock is NOT a margin-eligible underlying (success:false
+    from the API — most small-caps aren't), which is a legitimate empty result.
+    Returns a dict with history + signal on success. Records a failed call only
+    on genuine API errors (so non-margin stocks don't pollute health stats).
+    """
+    start = time.monotonic()
+    try:
+        data = eastmoney_datacenter(
+            "RPTA_WEB_RZRQ_GGMX",
+            filter_str=f'(SCODE="{code}")',
+            page_size=_MARGIN_DAYS,
+            sort_columns="DATE",
+            sort_types="-1",
+        )
+    except Exception as e:
+        record_call("lockup/margin_em", success=False, error=str(e),
+                    duration_ms=(time.monotonic() - start) * 1000)
+        return None
+
+    if not data:
+        # 非"两融标的" → API returns success:false/result:null → eastmoney_datacenter
+        # returns []. 这是合法空结果，不计为源故障。
+        return None
+
+    signal, latest = _score_margin(data)
+    record_call("lockup/margin_em", success=True,
+                duration_ms=(time.monotonic() - start) * 1000)
+
+    # 输出：最近明细（归一为易读字段，数值转亿/万）+ 预计算信号。
+    history = []
+    for row in data:
+        rzye = _to_float(row.get("RZYE"))
+        rqye = _to_float(row.get("RQYE"))
+        history.append({
+            "date": str(row.get("DATE", ""))[:10],
+            "margin_balance": rzye,            # 融资余额（元）
+            "short_balance": rqye,             # 融券余额（元）
+            "margin_pct_of_float": _to_float(row.get("RZYEZB")),  # 占流通市值 %
+            "net_buy": _to_float(row.get("RZJME")),               # 当日融资净买入（元）
+            "net_buy_3d": _to_float(row.get("RZJME3D")),
+            "net_buy_5d": _to_float(row.get("RZJME5D")),
+            "net_buy_10d": _to_float(row.get("RZJME10D")),
+        })
+
+    return {
+        "latest_date": str(latest.get("DATE", ""))[:10],
+        "is_margin_underlying": True,
+        "history": history,
+        "signal": signal,
+    }
+
+
 def fetch_lockup(ticker, date):
     """Fetch all lockup data."""
     code = normalize_ticker(ticker)
@@ -206,6 +343,7 @@ def fetch_lockup(ticker, date):
     data["insider_transactions"] = _fetch_insider_transactions(code)
     data["announcements"] = _fetch_announcements(code, date)
     data["reduce_holdings"] = _fetch_reduce_em(code, date)
+    data["margin_trading"] = _fetch_margin(code)
 
     # Compute pressure rating
     upcoming = data.get("lockup_upcoming", [])
