@@ -3,15 +3,12 @@
 /** Maximum retries for empty LLM responses */
 export const LLM_MAX_RETRIES = 2;
 
-/** Timeout per single LLM call attempt (2 minutes).
+/** Timeout per single LLM call attempt (5 minutes).
  *
- * Was 5 minutes — but a single hung call blocking a worker for 5 min, then
- * retried up to 2 more times, made the worst case ~15 min (observed: 300681
- * full run took 36 min after one fundamentals call hung the full 5 min).
- * 2 min is generous for any model that is actually responding; a call that
- * hasn't returned by then is effectively hung and should abort so the retry
- * loop or the total deadline can take over. */
-export const LLM_TIMEOUT_MS = 2 * 60 * 1000;
+ * 2 min was too tight for reasoning models (GLM-5-turbo) whose first inference
+ * can take 60-150s due to reasoning_content generation. 5 min gives breathing
+ * room while the total deadline (8 min) still caps worst-case blocking. */
+export const LLM_TIMEOUT_MS = 5 * 60 * 1000;
 
 /** Total deadline across all retry attempts for one logical callLLM (8 minutes).
  *

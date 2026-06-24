@@ -19,9 +19,8 @@ import { writeAtomicJson } from "./watchlist/atomic-json";
 import type { CandidatesFile } from "./watchlist/types";
 
 const DEFAULT_WATCHLIST_DIR = path.join(os.homedir(), ".openclaw", "watchlist");
-// glm-4-flash 是当前智谱 coding 端点下唯一确认的非推理模型（glm-4.7/4.6/5-turbo/5.2
-// 均已升级为推理模型，会先生成 reasoning_content，shallow/rank 场景易超时或 max_tokens 被占满）。
-const DEFAULT_MODEL = "glm-4-flash";
+const DEFAULT_MODEL = "GLM-5-turbo";
+const DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
 
 function readJson<T>(fp: string): T | null {
   if (!fs.existsSync(fp)) return null;
@@ -112,7 +111,7 @@ Options:
   const apiKey =
     argValue(args, "--api-key") ?? pluginCfg.api_key ?? process.env.OPENAI_API_KEY;
   const baseUrl =
-    argValue(args, "--base-url") ?? pluginCfg.base_url ?? process.env.OPENAI_BASE_URL;
+    argValue(args, "--base-url") ?? pluginCfg.base_url ?? process.env.OPENAI_BASE_URL ?? DEFAULT_BASE_URL;
   const model = argValue(args, "--model") ?? pluginCfg.model ?? DEFAULT_MODEL;
 
   if (!apiKey) {

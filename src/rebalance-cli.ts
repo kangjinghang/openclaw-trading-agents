@@ -121,8 +121,8 @@ Options:
   // LLM 配置（优先级：CLI args > plugin config (openclaw.json) > env > 默认）
   const pluginCfg = loadPluginConfig();
   const apiKey = argValue(args, "--api-key") ?? pluginCfg.api_key ?? process.env.OPENAI_API_KEY;
-  const baseUrl = argValue(args, "--base-url") ?? pluginCfg.base_url ?? process.env.OPENAI_BASE_URL;
-  const model = argValue(args, "--model") ?? pluginCfg.model ?? "glm-4-flash";
+  const baseUrl = argValue(args, "--base-url") ?? pluginCfg.base_url ?? process.env.OPENAI_BASE_URL ?? "https://open.bigmodel.cn/api/coding/paas/v4";
+  const model = argValue(args, "--model") ?? pluginCfg.model ?? "GLM-5-turbo";
   if (!apiKey) {
     console.error(`error: 缺 API key`);
     process.exit(2);
