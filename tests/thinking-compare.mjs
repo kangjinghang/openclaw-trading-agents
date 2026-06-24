@@ -1,6 +1,9 @@
 // 对比有/无 thinking disabled 对 LLM 输出质量和速度的影响
 // 从 trace 文件提取 prompt 用两种 setting 回放调用 API
 //
+// ⚠️ 已被项目级工具取代：npm run bench -- --config bench/thinking-on-off.json
+//    （配置驱动、跨厂商、多次重复、统计+逐样本产物）。本文件保留作历史参考。
+//
 // Usage: node tests/thinking-compare.mjs
 
 import * as fs from "fs";

@@ -12,7 +12,7 @@ import { TraceLogger } from "../trace-logger";
 import { LLM_DEFAULT_MAX_TOKENS } from "../constants";
 import { writeAtomicJson } from "./atomic-json";
 import {
-  percentile, coefficientOfVariation, modeConsistency,
+  coefficientOfVariation, modeConsistency,
   topKConsistency, meanAbsScoreDiff, summarizeConfigStats,
 } from "./bench-stats";
 import type {
