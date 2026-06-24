@@ -1,11 +1,11 @@
 // src/watchlist/data-trace-report.ts
 //
-// 单股数据管道调试视图：从 API 请求 → 数据处理 → LLM prompt 的完整链路。
+// 单股数据管道调试视图：从 API 请求 → 数据处理 → LLM prompt → LLM 响应 → 下游决策。
 // 输出 data-trace.md，让用户看到"一只股的数据是怎么流转的"。
 
-import type { StockData } from "./shallow-analyzer";
-import { renderHotMoneySummary, renderQuarterlyTrends, renderConsensus, formatAnalystPrompt, formatRiskPrompt } from "./shallow-analyzer";
-import type { StockReport } from "./rebalance-types";
+import type { StockData, LockupData } from "./shallow-analyzer";
+import { renderHotMoneySummary, renderQuarterlyTrends, renderConsensus, renderLockup, renderMacd, formatAnalystPrompt, formatRiskPrompt } from "./shallow-analyzer";
+import type { StockReport, Action } from "./rebalance-types";
 
 // ── 辅助渲染 ────────────────────────────────────────────────────────────────
 
@@ -21,7 +21,7 @@ function section(title: string): string[] {
   return ["", `### ${title}`, ""];
 }
 
-// ── 4 个数据源的链路追踪 ────────────────────────────────────────────────────
+// ── 6 个数据源的链路追踪 ────────────────────────────────────────────────────
 
 function traceKline(d: StockData): string[] {
   const lines: string[] = [];
@@ -167,6 +167,125 @@ function traceFundamentals(d: StockData): string[] {
   return lines;
 }
 
+function traceVpaMacd(d: StockData): string[] {
+  const lines: string[] = [];
+  lines.push(...section("5. VPA 量价预计算 + MACD（kline.py 预计算）"));
+  lines.push("**来源**: `skills/trading-kline/scripts/kline.py`（与 K 线同一脚本）");
+  lines.push("**处理**: kline.py 预计算 VPA 文本 + MACD 结构化数据，通过 `vpa_text` / `macd` 字段注入 StockData");
+  lines.push("");
+
+  if (d.vpa_text) {
+    lines.push("**VPA 量价预计算（→ 注入 risk prompt）**:");
+    lines.push("```");
+    lines.push(d.vpa_text);
+    lines.push("```");
+  } else {
+    lines.push("**VPA**: _(无数据)_");
+  }
+  lines.push("");
+
+  if (d.macd) {
+    lines.push("**MACD 动量信号（→ 注入 risk prompt）**:");
+    lines.push("```");
+    lines.push(renderMacd(d.macd));
+    lines.push("```");
+  } else {
+    lines.push("**MACD**: _(无数据)_");
+  }
+  return lines;
+}
+
+function traceLockup(d: StockData): string[] {
+  const lines: string[] = [];
+  lines.push(...section("6. 解禁与减持（lockup.py）"));
+  lines.push("**脚本**: `skills/trading-lockup/scripts/lockup.py`");
+  lines.push("**API**: 3 个子源");
+  lines.push("| 子源 | API | 说明 |");
+  lines.push("|------|-----|------|");
+  lines.push("| ann_em | 东财 np-anotice-stock | 公告（解禁/减持/重大事项） |");
+  lines.push("| reduce_em | 东财 datacenter | 大股东减持明细 |");
+  lines.push("| margin_em | 东财 datacenter | 融资融券余额 |");
+  lines.push("");
+
+  if (d.lockup) {
+    lines.push("**parseLockup() 处理后**:");
+    lines.push("| 输出字段 | 值 |");
+    lines.push("|---------|-----|");
+    lines.push(fieldRow("pressure_rating", d.lockup.pressure_rating));
+    lines.push(fieldRow("upcoming 解禁数", d.lockup.upcoming.length, "笔"));
+    if (d.lockup.upcoming.length > 0) {
+      lines.push("");
+      lines.push("**解禁明细（未来 90 天）**:");
+      for (const u of d.lockup.upcoming.slice(0, 5)) {
+        lines.push(`- ${u.date} | ${u.type ?? "未知类型"} | 比例 ${u.ratio ?? "未知"}`);
+      }
+    }
+    lines.push(fieldRow("reduce_holdings 减持数", d.lockup.reduce_holdings.length, "笔"));
+    lines.push("");
+    lines.push("**→ 注入 prompt 的行**:");
+    lines.push("```");
+    lines.push(renderLockup(d.lockup));
+    lines.push("```");
+  } else {
+    lines.push("_(无解禁减持数据)_");
+  }
+  return lines;
+}
+
+function traceDecisionChain(
+  stockReport: StockReport,
+  action?: Action,
+  positionTrace?: string,
+): string[] {
+  const lines: string[] = [];
+  lines.push(...section("8. 下游决策链"));
+
+  // fitness 评分 + quality gate 钳制
+  lines.push("**Analyst 输出 → fitness 评分**:");
+  lines.push("| 字段 | 值 |");
+  lines.push("|------|-----|");
+  lines.push(fieldRow("fitness_score", stockReport.fitness_score));
+  lines.push(fieldRow("overall_risk", stockReport.overall_risk));
+  lines.push(fieldRow("deal_breaker", stockReport.deal_breaker));
+  if (stockReport.quality_notes && stockReport.quality_notes.length > 0) {
+    lines.push(fieldRow("quality_notes（钳制记录）", stockReport.quality_notes.join("; ")));
+  }
+  lines.push("");
+
+  // risk_flags → risk 评估
+  if (stockReport.risk_flags.length > 0) {
+    lines.push("**Risk flags（LLM 风险识别）**:");
+    for (const f of stockReport.risk_flags) {
+      lines.push(`- **${f.flag}** (${f.severity}): ${f.detail}`);
+    }
+    lines.push("");
+  }
+
+  // fitness + risk → rebalancer 判定
+  lines.push("**Rebalancer 判定（fitness + risk → action）**:");
+  if (action) {
+    lines.push("| 字段 | 值 |");
+    lines.push("|------|-----|");
+    lines.push(fieldRow("action", action.action));
+    lines.push(fieldRow("current_weight", `${(action.current_weight * 100).toFixed(1)}%`));
+    lines.push(fieldRow("target_weight", `${(action.target_weight * 100).toFixed(1)}%`));
+    lines.push(fieldRow("delta", `${(action.delta * 100).toFixed(1)}%`));
+    lines.push(fieldRow("reason", action.reason));
+  } else {
+    lines.push("_(无对应 action — 此股被跳过或在候选外)_");
+  }
+  lines.push("");
+
+  // 仓位计算溯源
+  if (positionTrace) {
+    lines.push("**仓位计算溯源（position_calculator）**:");
+    lines.push("```");
+    lines.push(positionTrace);
+    lines.push("```");
+  }
+  return lines;
+}
+
 // ── 主入口 ──────────────────────────────────────────────────────────────────
 
 /** 生成单股数据管道调试视图（markdown）。 */
@@ -175,11 +294,13 @@ export function generateDataTraceReport(
   name: string,
   stockData: StockData,
   stockReport?: StockReport,
+  action?: Action,
+  positionTrace?: string,
 ): string {
   const lines: string[] = [];
   lines.push(`# 数据管道调试视图：${ticker} ${name}`);
   lines.push("");
-  lines.push("> 这只股的数据从 API 请求 → 数据处理 → 发给 LLM 的 prompt 的完整链路。");
+  lines.push("> 这只股的数据从 API 请求 → 数据处理 → 发给 LLM 的 prompt → LLM 响应 → 下游决策的完整链路。");
   lines.push("");
 
   // 数据源调用记录
@@ -207,14 +328,16 @@ export function generateDataTraceReport(
     }
   }
 
-  // 4 个数据源链路
+  // 6 个数据源链路
   lines.push(...traceKline(stockData));
   lines.push(...traceNews(stockData));
   lines.push(...traceHotMoney(stockData));
   lines.push(...traceFundamentals(stockData));
+  lines.push(...traceVpaMacd(stockData));
+  lines.push(...traceLockup(stockData));
 
   // 完整 prompt 预览
-  lines.push(...section("5. 完整 analyst prompt（发给 LLM 的）"));
+  lines.push(...section("7. 完整 analyst prompt（发给 LLM 的）"));
   lines.push("> 以下就是 formatAnalystPrompt() 输出的完整内容，直接喂给 LLM。");
   lines.push("");
   lines.push("```markdown");
@@ -222,7 +345,7 @@ export function generateDataTraceReport(
   lines.push("```");
 
   if (stockReport) {
-    lines.push(...section("6. LLM 返回（analyst-role）"));
+    lines.push(...section("8. LLM 返回（analyst-role）"));
     lines.push("```json");
     lines.push(JSON.stringify({
       thesis: stockReport.thesis,
@@ -232,11 +355,10 @@ export function generateDataTraceReport(
     }, null, 2));
     lines.push("```");
 
-    lines.push(...section("7. 完整 risk prompt（发给 LLM 的）"));
+    lines.push(...section("9. 完整 risk prompt（发给 LLM 的）"));
     lines.push("> 以下就是 formatRiskPrompt() 输出的完整内容，直接喂给 LLM。");
     lines.push("");
     lines.push("```markdown");
-    // 构造一个最小的 AnalystReport 供 formatRiskPrompt 使用
     const mockAnalyst = {
       thesis: stockReport.thesis,
       fitness_score: stockReport.fitness_score,
@@ -246,6 +368,9 @@ export function generateDataTraceReport(
     };
     lines.push(formatRiskPrompt(stockData, mockAnalyst));
     lines.push("```");
+
+    // 下游决策链
+    lines.push(...traceDecisionChain(stockReport, action, positionTrace));
   }
 
   return lines.join("\n");

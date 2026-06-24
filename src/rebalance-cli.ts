@@ -287,8 +287,11 @@ Options:
     const exampleReport = result.reports[0];
     const exampleData = dataByTicker.get(exampleReport.ticker);
     if (exampleData) {
+      const exampleAction = result.rebalancer_output.actions.find(a => a.ticker === exampleReport.ticker);
+      const positionTrace = result.position_traces?.[exampleReport.ticker];
       const traceMd = generateDataTraceReport(
         exampleReport.ticker, exampleReport.name, exampleData, exampleReport,
+        exampleAction, positionTrace,
       );
       fs.writeFileSync(path.join(rebalanceDir, "data-trace.md"), traceMd, "utf-8");
     }
