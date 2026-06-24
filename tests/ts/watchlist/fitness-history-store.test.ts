@@ -70,12 +70,26 @@ describe("FitnessHistoryStore", () => {
       expect(fs.existsSync(path.join(tmpDir, "fitness-history.json"))).toBe(false);
     });
 
-    it("去重：同 (decision_date, ticker) 不重复追加", () => {
-      store.appendDecisions([makeRecord({ ticker: "A" })]);
-      store.appendDecisions([makeRecord({ ticker: "A" }), makeRecord({ ticker: "B" })]);
+    it("update-in-place：同 (date, ticker) 已存在时覆盖决策字段", () => {
+      store.appendDecisions([makeRecord({ ticker: "A", fitness: 8, action: "BUY" })]);
+      store.appendDecisions([makeRecord({ ticker: "A", fitness: 6, action: "HOLD" }), makeRecord({ ticker: "B" })]);
       const recs = store.read().records;
-      expect(recs).toHaveLength(2);  // A 只一次，B 一次
-      expect(recs.map(r => r.ticker).sort()).toEqual(["A", "B"]);
+      expect(recs).toHaveLength(2);
+      // A 的 fitness/action 被更新
+      const a = recs.find(r => r.ticker === "A")!;
+      expect(a.fitness).toBe(6);
+      expect(a.action).toBe("HOLD");
+    });
+
+    it("update-in-place：保留 status 和 return 字段（不被覆盖）", () => {
+      store.appendDecisions([makeRecord({ ticker: "A", fitness: 8 })]);
+      store.settleRecord("2026-06-01", "A", { return_7d: 5.0 });
+      // settled 的记录不被覆盖（只更新 open 的）
+      store.appendDecisions([makeRecord({ ticker: "A", fitness: 3, action: "SELL" })]);
+      const rec = store.read().records.find(r => r.ticker === "A")!;
+      expect(rec.status).toBe("settled");
+      expect(rec.return_7d).toBe(5.0);
+      expect(rec.fitness).toBe(8);  // 不变，settled 不覆盖
     });
 
     it("环形 buffer：超 BUFFER_SIZE 淘汰最老", () => {

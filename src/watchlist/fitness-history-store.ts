@@ -104,19 +104,34 @@ export class FitnessHistoryStore {
   }
 
   /**
-   * 追加一批决策快照记录。跳过空数组；去重（同 decision_date+ticker 不重复）。
+   * 追加一批决策快照记录。跳过空数组。
+   * 同 (decision_date, ticker) 已存在时 update-in-place：
+   *   覆盖 fitness/action/overall_risk/target_weight/fitness_raw/quality_notes；
+   *   不改 status/return_*（保留 open/settled 和事后收益）。
    * 写错吞掉只 stderr，绝不抛。
    */
   appendDecisions(records: FitnessRecord[]): void {
     if (records.length === 0) return;
     const state = this.read();
-    // 去重：已存在的 (decision_date, ticker) 跳过
-    const existing = new Set(state.records.map(r => `${r.decision_date}|${r.ticker}`));
+    // 建索引：key → record（只看 open 记录，settled 的不覆盖）
+    const openIndex = new Map<string, FitnessRecord>();
+    for (const r of state.records) {
+      if (r.status === "open") openIndex.set(`${r.decision_date}|${r.ticker}`, r);
+    }
     for (const rec of records) {
       const key = `${rec.decision_date}|${rec.ticker}`;
-      if (existing.has(key)) continue;
-      state.records.push(rec);
-      existing.add(key);
+      const existing = openIndex.get(key);
+      if (existing) {
+        // update-in-place：覆盖决策字段，保留 status + return 字段
+        existing.fitness = rec.fitness;
+        existing.action = rec.action;
+        existing.overall_risk = rec.overall_risk;
+        existing.target_weight = rec.target_weight;
+        existing.fitness_raw = rec.fitness_raw;
+        existing.quality_notes = rec.quality_notes;
+      } else {
+        state.records.push(rec);
+      }
     }
     // 环形 buffer：保留最近 BUFFER_SIZE 条
     if (state.records.length > BUFFER_SIZE) {
