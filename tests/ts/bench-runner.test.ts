@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { expandApiKey, validateConfig, parseOutput, extractTicker, selectTraces } from "../../src/watchlist/bench-runner";
+import { expandApiKey, validateConfig, validateConfigStructure, parseOutput, extractTicker, selectTraces } from "../../src/watchlist/bench-runner";
 import type { BenchConfig, BenchCallResult } from "../../src/watchlist/bench-types";
 
 describe("expandApiKey", () => {
@@ -56,6 +56,31 @@ describe("validateConfig", () => {
   it("throws when repeats <= 0", () => {
     const bad = { ...valid, repeats: 0 };
     expect(() => validateConfig(bad)).toThrow(/repeats/);
+  });
+});
+
+describe("validateConfigStructure", () => {
+  const valid: BenchConfig = {
+    name: "t",
+    traces: { phase: "rank", date: "2026-06-23" },
+    repeats: 3,
+    providers: { zhipu: { base_url: "https://x", api_key: "$UNSET_KEY_XYZ" } },
+    configs: [{ id: "c1", provider: "zhipu", model: "glm-5.2" }],
+  };
+
+  it("passes without expanding $ENV (dry-run safe, no real key needed)", () => {
+    // $UNSET_KEY_XYZ 未设也能通过——结构校验不碰 key
+    expect(() => validateConfigStructure(valid)).not.toThrow();
+  });
+
+  it("throws on bad provider reference", () => {
+    const bad: BenchConfig = { ...valid, configs: [{ id: "c1", provider: "nope", model: "m" }] };
+    expect(() => validateConfigStructure(bad)).toThrow(/provider.*nope/i);
+  });
+
+  it("throws on invalid phase", () => {
+    const bad = { ...valid, traces: { phase: "trading" } } as any;
+    expect(() => validateConfigStructure(bad)).toThrow(/phase/);
   });
 });
 

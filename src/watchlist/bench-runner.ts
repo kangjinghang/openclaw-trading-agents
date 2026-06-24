@@ -35,22 +35,30 @@ export function expandApiKey(raw: string): string {
 }
 
 /**
- * 校验配置完整性：provider 引用存在、phase 合法、repeats>0。
- * 同时把 $ENV 展开（副作用：可能抛错）。返回展开后的 providers。
+ * 校验配置结构（不碰 key）：phase 合法、repeats>0、provider 引用存在。
+ * 不展开 $ENV，所以 dry-run 也能用（无需真实 key）。
  */
-export function validateConfig(config: BenchConfig): Record<string, BenchProvider & { api_key: string }> {
+export function validateConfigStructure(config: BenchConfig): void {
   if (config.repeats <= 0) throw new Error("bench: repeats 必须 > 0");
   if (config.traces.phase !== "rank" && config.traces.phase !== "rebalance") {
     throw new Error(`bench: traces.phase 只能是 rank|rebalance，得到 "${config.traces.phase}"`);
   }
+  for (const c of config.configs) {
+    if (!config.providers[c.provider]) {
+      throw new Error(`bench: config "${c.id}" 引用了不存在的 provider "${c.provider}"`);
+    }
+  }
+}
+
+/**
+ * 校验配置完整性 + 展开 $ENV。结构校验通过后，把每个 provider 的 api_key 展开。
+ * 真实 run 用这个（强制 key 存在）；dry-run 用 validateConfigStructure。
+ */
+export function validateConfig(config: BenchConfig): Record<string, BenchProvider & { api_key: string }> {
+  validateConfigStructure(config);
   const expanded: Record<string, BenchProvider & { api_key: string }> = {};
   for (const [name, p] of Object.entries(config.providers)) {
     expanded[name] = { base_url: p.base_url, api_key: expandApiKey(p.api_key) };
-  }
-  for (const c of config.configs) {
-    if (!expanded[c.provider]) {
-      throw new Error(`bench: config "${c.id}" 引用了不存在的 provider "${c.provider}"`);
-    }
   }
   return expanded;
 }
@@ -452,7 +460,8 @@ export async function runBench(
   watchlistDir: string,
   dryRun: boolean = false,
 ): Promise<string | null> {
-  const providers = validateConfig(config);
+  // dry-run 只校验结构（不需要真实 key）；真实 run 校验结构 + 展开 key
+  validateConfigStructure(config);
   const traces = selectTraces(watchlistDir, config.traces);
 
   console.log(`\nbench: ${config.name}`);
@@ -470,7 +479,8 @@ export async function runBench(
     return null;
   }
 
-  // 造 clients + coordinators（按 provider 隔离）
+  // 真实 run：展开 key + 造 clients/coordinators（按 provider 隔离）
+  const providers = validateConfig(config);
   const clients: Record<string, OpenAI> = {};
   const coordinators: Record<string, RateLimitCoordinator> = {};
   for (const [name, p] of Object.entries(providers)) {

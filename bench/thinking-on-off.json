@@ -1,0 +1,41 @@
+{
+  "name": "thinking-on-off",
+  "note": "对比 GLM-5.2 开关 thinking 的 shallow-analyzer 质量（复刻原 thinking-compare 场景）",
+
+  "traces": {
+    "phase": "rebalance",
+    "date": "2026-06-23",
+    "roles": ["analyst-shallow", "risk-shallow"],
+    "limit": 4
+  },
+
+  "repeats": 5,
+
+  "providers": {
+    "zhipu": {
+      "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
+      "api_key": "$ZHIPU_API_KEY"
+    }
+  },
+
+  "configs": [
+    {
+      "id": "glm-thinking-on",
+      "provider": "zhipu",
+      "model": "glm-5.2",
+      "thinking": { "type": "enabled" },
+      "temperature": 0,
+      "max_tokens": 32000,
+      "responseFormat": { "type": "json_object" }
+    },
+    {
+      "id": "glm-thinking-off",
+      "provider": "zhipu",
+      "model": "glm-5.2",
+      "thinking": { "type": "disabled" },
+      "temperature": 0,
+      "max_tokens": 32000,
+      "responseFormat": { "type": "json_object" }
+    }
+  ]
+}
