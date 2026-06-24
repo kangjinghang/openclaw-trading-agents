@@ -46,6 +46,8 @@ OpenClaw plugin (`openclaw.plugin.json`) with 3 tools:
 4. Quality gate (deterministic Layer-1 + optional LLM Layer-2 credibility review)
 5. Mode-specific downstream: PM (quick) OR debate → research → trader → risk (full)
 
+**Rebalancer → QMT 执行桥** (`src/rebalance-cli.ts` + `src/watchlist/execution-bridge.ts`)：rebalancer 产出带 `order_id` + `execution:pending` + `execution_sequence` 的 `last_rebalance.json`，`syncPush` 推到 trading-state private repo；Win 云服务器的 QMT 执行器（Python + xtquant，独立项目）消费下单并字段级合并回写 holdings。Mac 开发机零依赖 xtquant。见 `docs/superpowers/specs/2026-06-25-qmt-execution-bridge-design.md`。
+
 **Entrypoints**: `src/index.ts` (plugin), `src/cli.ts` (standalone binary `trading-agents`).
 
 **`dist/` is committed** to git — `openclaw plugins install` needs the prebuilt artifact. Developers rebuild after TS changes and commit updated `dist/`.
@@ -64,6 +66,10 @@ OpenClaw plugin (`openclaw.plugin.json`) with 3 tools:
 | `src/pipeline-health.ts` | Runtime issue collector: abort/skip/warn severity; `hasAbort` stops pipeline |
 | `src/cross-stage-checks.ts` | Post-pipeline structural anomaly detection (wrong-side target, consensus conflict, conservative overruled) |
 | `src/debate.ts` / `research-manager.ts` / `trader.ts` / `risk.ts` | Full-mode phases via `<!-- DEBATE_STATE: {...} -->`, `<!-- RISK_JUDGE: {...} -->` protocols |
+| `src/watchlist/order-id.ts` | `computeOrderId()` 幂等键（date+sha256(actions) 前 6 位），让 QMT 执行器识别已执行订单 |
+| `src/watchlist/execution-schema.ts` | Execution 状态机：`isTerminal`/`isPending`/`makePendingExecution` |
+| `src/watchlist/holdings-merge.ts` | `mergeHoldings()` 持仓字段级合并契约（QMT 市场字段覆盖，本地 sector 保留） |
+| `src/watchlist/execution-bridge.ts` | `syncPush()` 推状态到 trading-state repo + 冲突仲裁（pending 撞已执行 → 拒绝） |
 
 ## Skills & Prompts
 

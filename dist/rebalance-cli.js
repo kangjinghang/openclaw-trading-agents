@@ -53,6 +53,8 @@ const data_health_aggregator_1 = require("./watchlist/data-health-aggregator");
 const data_trace_report_1 = require("./watchlist/data-trace-report");
 const fitness_history_store_1 = require("./watchlist/fitness-history-store");
 const fitness_backfiller_1 = require("./watchlist/fitness-backfiller");
+const order_id_1 = require("./watchlist/order-id");
+const execution_schema_1 = require("./watchlist/execution-schema");
 const DEFAULT_WATCHLIST_DIR = path.join(os.homedir(), ".openclaw", "watchlist");
 function argValue(args, key) {
     const idx = args.indexOf(key);
@@ -328,12 +330,19 @@ Options:
             if (new Date(d + "T00:00:00+08:00").getTime() < cutoffMs)
                 delete mergedSells[tick];
         }
+        const newActions = result.rebalancer_output.actions
+            .filter(a => a.action !== "HOLD")
+            .map(a => ({ action: a.action, ticker: a.ticker, weight: a.target_weight }));
         const newLast = {
             date,
-            actions: result.rebalancer_output.actions
-                .filter(a => a.action !== "HOLD")
-                .map(a => ({ action: a.action, ticker: a.ticker, weight: a.target_weight })),
+            order_id: (0, order_id_1.computeOrderId)(date, newActions),
+            actions: newActions,
+            // execution_sequence 由现有 buildExecutionPlan 算好（SELL→REDUCE→BUY→ADD），
+            // 云服务器 Python 直接读、不重算，避免排序逻辑双端漂移。
+            execution_sequence: result.execution_plan.execution_sequence,
             recent_sells: mergedSells,
+            // execution 信封：开发机产 pending 占位，云服务器执行后回填。
+            execution: (0, execution_schema_1.makePendingExecution)(),
         };
         (0, atomic_json_1.writeAtomicJson)(path.join(watchlistDir, "last_rebalance.json"), newLast);
     }
