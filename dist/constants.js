@@ -18,7 +18,7 @@ exports.LLM_TIMEOUT_MS = 5 * 60 * 1000;
  * deterministically rather than compound slow retries into a long stall. */
 exports.LLM_TOTAL_DEADLINE_MS = 8 * 60 * 1000;
 /** Default max tokens for LLM responses */
-exports.LLM_DEFAULT_MAX_TOKENS = 16000;
+exports.LLM_DEFAULT_MAX_TOKENS = 32000;
 /** Base delay before LLM retry (ms), actual = base + random(0, base) */
 exports.LLM_RETRY_DELAY_MS = 1000;
 /** Timeout for Python data scripts (30 seconds) */

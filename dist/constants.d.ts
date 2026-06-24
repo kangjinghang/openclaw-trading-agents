@@ -14,7 +14,7 @@ export declare const LLM_TIMEOUT_MS: number;
  * deterministically rather than compound slow retries into a long stall. */
 export declare const LLM_TOTAL_DEADLINE_MS: number;
 /** Default max tokens for LLM responses */
-export declare const LLM_DEFAULT_MAX_TOKENS = 16000;
+export declare const LLM_DEFAULT_MAX_TOKENS = 32000;
 /** Base delay before LLM retry (ms), actual = base + random(0, base) */
 export declare const LLM_RETRY_DELAY_MS = 1000;
 /** Timeout for Python data scripts (30 seconds) */

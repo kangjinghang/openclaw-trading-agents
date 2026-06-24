@@ -19,7 +19,7 @@ export const LLM_TIMEOUT_MS = 5 * 60 * 1000;
 export const LLM_TOTAL_DEADLINE_MS = 8 * 60 * 1000;
 
 /** Default max tokens for LLM responses */
-export const LLM_DEFAULT_MAX_TOKENS = 16000;
+export const LLM_DEFAULT_MAX_TOKENS = 32000;
 
 /** Base delay before LLM retry (ms), actual = base + random(0, base) */
 export const LLM_RETRY_DELAY_MS = 1000;
