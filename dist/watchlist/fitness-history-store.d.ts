@@ -62,7 +62,10 @@ export declare class FitnessHistoryStore {
     /** 取所有 status=open 的记录（供 backfiller 懒结算）。 */
     getOpenRecords(): FitnessRecord[];
     /**
-     * 追加一批决策快照记录。跳过空数组；去重（同 decision_date+ticker 不重复）。
+     * 追加一批决策快照记录。跳过空数组。
+     * 同 (decision_date, ticker) 已存在时 update-in-place：
+     *   覆盖 fitness/action/overall_risk/target_weight/fitness_raw/quality_notes；
+     *   不改 status/return_*（保留 open/settled 和事后收益）。
      * 写错吞掉只 stderr，绝不抛。
      */
     appendDecisions(records: FitnessRecord[]): void;
