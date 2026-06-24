@@ -1,0 +1,40 @@
+{
+  "name": "glm5turbo-ranker-thinking",
+  "note": "B类：rank 环节 ranker thinking on/off。thinking-on 整盘 >5min/次，压到 limit=1 repeats=1 先探单次耗时",
+
+  "traces": {
+    "phase": "rank",
+    "date": "2026-06-23",
+    "limit": 1
+  },
+
+  "repeats": 1,
+
+  "providers": {
+    "zhipu": {
+      "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
+      "api_key": "$ZHIPU_API_KEY"
+    }
+  },
+
+  "configs": [
+    {
+      "id": "ranker-thinking-on",
+      "provider": "zhipu",
+      "model": "glm-5-turbo",
+      "thinking": { "type": "enabled" },
+      "temperature": 0,
+      "max_tokens": 32000,
+      "responseFormat": { "type": "json_object" }
+    },
+    {
+      "id": "ranker-thinking-off",
+      "provider": "zhipu",
+      "model": "glm-5-turbo",
+      "thinking": { "type": "disabled" },
+      "temperature": 0,
+      "max_tokens": 32000,
+      "responseFormat": { "type": "json_object" }
+    }
+  ]
+}

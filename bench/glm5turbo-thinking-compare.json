@@ -1,0 +1,41 @@
+{
+  "name": "glm5turbo-thinking-compare",
+  "note": "对比：glm-5-turbo thinking on/off，3 analyst shallow × 2 repeats = 12 calls（控时长 < 10min）",
+
+  "traces": {
+    "phase": "rebalance",
+    "date": "2026-06-23",
+    "roles": ["analyst-shallow"],
+    "limit": 3
+  },
+
+  "repeats": 2,
+
+  "providers": {
+    "zhipu": {
+      "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
+      "api_key": "$ZHIPU_API_KEY"
+    }
+  },
+
+  "configs": [
+    {
+      "id": "turbo-thinking-on",
+      "provider": "zhipu",
+      "model": "glm-5-turbo",
+      "thinking": { "type": "enabled" },
+      "temperature": 0,
+      "max_tokens": 32000,
+      "responseFormat": { "type": "json_object" }
+    },
+    {
+      "id": "turbo-thinking-off",
+      "provider": "zhipu",
+      "model": "glm-5-turbo",
+      "thinking": { "type": "disabled" },
+      "temperature": 0,
+      "max_tokens": 32000,
+      "responseFormat": { "type": "json_object" }
+    }
+  ]
+}

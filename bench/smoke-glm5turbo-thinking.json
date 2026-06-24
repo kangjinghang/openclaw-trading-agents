@@ -1,0 +1,41 @@
+{
+  "name": "smoke-glm5turbo-thinking",
+  "note": "冒烟：glm-5-turbo thinking on/off 探耗时（1 trace × 2 config × 2 repeat = 4 calls）",
+
+  "traces": {
+    "phase": "rebalance",
+    "date": "2026-06-23",
+    "roles": ["analyst-shallow"],
+    "limit": 1
+  },
+
+  "repeats": 2,
+
+  "providers": {
+    "zhipu": {
+      "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
+      "api_key": "$ZHIPU_API_KEY"
+    }
+  },
+
+  "configs": [
+    {
+      "id": "turbo-thinking-on",
+      "provider": "zhipu",
+      "model": "glm-5-turbo",
+      "thinking": { "type": "enabled" },
+      "temperature": 0,
+      "max_tokens": 32000,
+      "responseFormat": { "type": "json_object" }
+    },
+    {
+      "id": "turbo-thinking-off",
+      "provider": "zhipu",
+      "model": "glm-5-turbo",
+      "thinking": { "type": "disabled" },
+      "temperature": 0,
+      "max_tokens": 32000,
+      "responseFormat": { "type": "json_object" }
+    }
+  ]
+}

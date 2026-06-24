@@ -1,0 +1,38 @@
+{
+  "name": "glm5turbo-rebalancer-thinking",
+  "note": "B类：rebalance 环节 portfolio-rebalancer thinking on/off，1 trace × 3 repeats = 6 calls（稳定性指标空，人工读 judgment）",
+
+  "traces": {
+    "phase": "rebalance",
+    "date": "2026-06-23",
+    "roles": ["portfolio-rebalancer"]
+  },
+
+  "repeats": 3,
+
+  "providers": {
+    "zhipu": {
+      "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
+      "api_key": "$ZHIPU_API_KEY"
+    }
+  },
+
+  "configs": [
+    {
+      "id": "rebalancer-thinking-on",
+      "provider": "zhipu",
+      "model": "glm-5-turbo",
+      "thinking": { "type": "enabled" },
+      "temperature": 0,
+      "max_tokens": 32000
+    },
+    {
+      "id": "rebalancer-thinking-off",
+      "provider": "zhipu",
+      "model": "glm-5-turbo",
+      "thinking": { "type": "disabled" },
+      "temperature": 0,
+      "max_tokens": 32000
+    }
+  ]
+}
