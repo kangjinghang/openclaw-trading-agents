@@ -3,13 +3,14 @@
 
 import argparse
 import json
+import re
 import sys
 import os
 import time
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
-from http_helpers import em_get, output_json, normalize_ticker, record_call, pywencai_query
+from http_helpers import em_get, http_get, output_json, normalize_ticker, record_call, pywencai_query
 
 _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
@@ -157,10 +158,15 @@ def _fetch_global_news_akshare(limit=10):
 
 _NBS_INDICATORS = {
     # key: (akshare_fn, value-extractor, label)
+    # 全部走金十数据中心 datacenter-api.jin10.com（同一源），列名统一为"今值"。
     "gdp_yoy": ("macro_china_gdp_yearly", "今值", "GDP当季同比"),
     "cpi_yoy": ("macro_china_cpi_monthly", "今值", "CPI同比"),
     "ppi_yoy": ("macro_china_ppi_yearly", "今值", "PPI同比"),
     "manufacturing_pmi": ("macro_china_pmi_yearly", "今值", "制造业PMI"),
+    # 财新制造业 PMI：与官方 PMI 形成双口径——官方 PMI 偏大国企样本、
+    # 财新 PMI 偏中小企业样本，两者背离（如官方>50 而财新<50）是重要结构信号，
+    # 指示景气分化。同走金十源（attr_id=73），列名同为"今值"。
+    "caixin_pmi": ("macro_china_cx_pmi_yearly", "今值", "财新制造业PMI"),
     "non_manufacturing_pmi": ("macro_china_non_man_pmi", "今值", "非制造业PMI"),
 }
 
@@ -231,6 +237,86 @@ def _fetch_macro_nbs():
     return result
 
 
+# ── 大宗商品（国际周期定价锚）─────────────────────────────────────────
+# 新浪期货主力连续日K（金AU0/油SC0/铜CU0），补齐 openclaw 宏观缺的国际周期视角。
+# 这三个品种是美林时钟/康波周期分析的核心定价锚：黄金（避险/实际利率）、
+# 原油（通胀/需求）、铜（全球工业需求"铜博士"）。source: aiagents-stock
+# macro_cycle_data 的 futures_main_sina 同接口。新浪响应开头有反爬注释
+# /*<script>...</script>*/，需正则取 ([...]) 内的 JSON。
+
+_COMMODITIES = {
+    # akshare symbol: 中文 label
+    "AU0": "黄金",
+    "SC0": "原油",
+    "CU0": "铜",
+}
+
+
+def _price_change_pct(closes, n):
+    """近 n 日涨跌幅 %（预计算，禁止 LLM 重算）。closes 按时间升序（旧→新）。
+    不足 n+1 根返回 None。"""
+    if len(closes) < n + 1:
+        return None
+    return round((closes[-1] / closes[-1 - n] - 1) * 100, 2)
+
+
+def _fetch_commodities():
+    """Fetch gold/oil/copper main-continuous futures (新浪) for cycle analysis.
+
+    Returns {symbol: {label, latest_price, chg_5d, chg_20d, trend, as_of}}.
+    Each symbol independent try/except — one failure doesn't block others.
+    Returns {} if all fail (caller graceful-degrades).
+    """
+    result = {}
+    for symbol, label in _COMMODITIES.items():
+        start = time.monotonic()
+        url = (f"https://stock2.finance.sina.com.cn/futures/api/jsonp.php"
+               f"/var%20_{symbol}2021_08_17=/InnerFuturesNewService.getDailyKLine"
+               f"?symbol={symbol}&_=2021_08_17")
+        try:
+            r = http_get(url, timeout=15, headers={"User-Agent": _UA})
+            m = re.search(r"=\((\[.*\])\)", r.text, re.S)
+            if not m:
+                record_call(f"news/commodity_{symbol}", success=False,
+                            error="jsonp parse failed",
+                            duration_ms=(time.monotonic() - start) * 1000, url=url,
+                            status_code=r.status_code, response_snippet=r.text[:200])
+                continue
+            bars = json.loads(m.group(1))
+            if not bars:
+                record_call(f"news/commodity_{symbol}", success=False,
+                            error="empty kline", duration_ms=(time.monotonic() - start) * 1000, url=url)
+                continue
+            closes = [float(b["c"]) for b in bars if b.get("c")]
+            chg_5d = _price_change_pct(closes, 5)
+            chg_20d = _price_change_pct(closes, 20)
+            # 趋势标签：5日与20日同向 → 趋势确立，背离 → 震荡/拐点
+            if chg_5d is not None and chg_20d is not None:
+                if chg_5d > 0 and chg_20d > 0:
+                    trend = "上行"
+                elif chg_5d < 0 and chg_20d < 0:
+                    trend = "下行"
+                else:
+                    trend = "震荡/拐点"
+            else:
+                trend = None
+            result[symbol] = {
+                "label": label,
+                "latest_price": closes[-1] if closes else None,
+                "as_of": bars[-1].get("d", ""),
+                "chg_5d": chg_5d,
+                "chg_20d": chg_20d,
+                "trend": trend,
+            }
+            record_call(f"news/commodity_{symbol}", success=True,
+                        duration_ms=(time.monotonic() - start) * 1000, url=url,
+                        status_code=r.status_code, response_size=len(r.content))
+        except Exception as e:
+            record_call(f"news/commodity_{symbol}", success=False, error=str(e),
+                        duration_ms=(time.monotonic() - start) * 1000, url=url)
+    return result
+
+
 # ── Rule-based macro → sector mapping engine ────────────────────────
 # Borrowed from aiagents-stock's build_rule_based_sector_view, adapted to our
 # {key: {"latest": val}} indicator shape (aiagents-stock uses {"value"}). Maps
@@ -248,13 +334,18 @@ _SECTOR_RULES = {
     "食品饮料": [("cpi_yoy", 1, 1, "通胀温和")],
     "家电": [("cpi_yoy", 1, 1, "通胀温和")],
     "工程机械": [("manufacturing_pmi", 50, 2, "制造业景气改善"),
-              ("manufacturing_pmi", None, -1, "制造业景气仍在荣枯线下")],
+              ("manufacturing_pmi", None, -1, "制造业景气仍在荣枯线下"),
+              ("caixin_pmi", 50, 1, "财新PMI确认中小企业景气改善")],
     "有色金属": [("manufacturing_pmi", 50, 2, "制造业景气改善"),
+               ("caixin_pmi", 50, 1, "财新PMI确认景气改善"),
                ("ppi_yoy", None, -1, "工业品价格承压")],
     "半导体": [("manufacturing_pmi", 50, 2, "制造业景气改善"),
-              ("manufacturing_pmi", None, -1, "制造业景气仍在荣枯线下")],
-    "算力AI": [("manufacturing_pmi", 50, 2, "制造业景气改善")],
-    "软件信创": [("manufacturing_pmi", 50, 2, "制造业景气改善")],
+              ("manufacturing_pmi", None, -1, "制造业景气仍在荣枯线下"),
+              ("caixin_pmi", 50, 1, "财新PMI确认景气改善")],
+    "算力AI": [("manufacturing_pmi", 50, 2, "制造业景气改善"),
+              ("caixin_pmi", 50, 1, "财新PMI确认景气改善")],
+    "软件信创": [("manufacturing_pmi", 50, 2, "制造业景气改善"),
+               ("caixin_pmi", 50, 1, "财新PMI确认景气改善")],
     "房地产": [("lpr_5y", 4.0, 2, "房贷利率偏低利好购房需求", "below")],
     "煤炭": [("ppi_yoy", None, -1, "工业品价格承压")],
     "石油石化": [("ppi_yoy", None, -1, "工业品价格承压")],
@@ -320,6 +411,7 @@ def _build_macro_sector_view(indicators):
     # Market view: derived from the macro tilt
     growth_signals = 0
     mfg = indicators.get("manufacturing_pmi", {}).get("latest")
+    cx = indicators.get("caixin_pmi", {}).get("latest")
     gdp = indicators.get("gdp_yoy", {}).get("latest")
     lpr1y = indicators.get("lpr_1y", {}).get("latest")
     if gdp is not None and gdp >= 4.5:
@@ -329,6 +421,19 @@ def _build_macro_sector_view(indicators):
     if lpr1y is not None and lpr1y < 3.5:
         growth_signals += 1
 
+    # 财新PMI 双口径共振/背离：官方与财新同时 ≥50 → 共振向上；同时 <50 →
+    # 共振向下；一上一下 → 景气分化（结构信号，倾向"结构性机会"而非单边）。
+    pmi_signal = None
+    if mfg is not None and cx is not None:
+        if mfg >= 50 and cx >= 50:
+            pmi_signal = "官方与财新PMI双口径共振向上"
+            growth_signals += 1
+        elif mfg < 50 and cx < 50:
+            pmi_signal = "官方与财新PMI双口径共振向下"
+            growth_signals -= 1
+        else:
+            pmi_signal = f"PMI双口径分化（官方{mfg}/财新{cx}，景气结构性分裂）"
+
     if growth_signals >= 2:
         market_view = "震荡偏多"
     elif growth_signals <= -1:
@@ -336,7 +441,7 @@ def _build_macro_sector_view(indicators):
     else:
         market_view = "结构性机会为主"
 
-    return {
+    view = {
         "total_score": total_score,
         "market_view": market_view,
         "bullish_sectors": [b["sector"] for b in bullish],
@@ -344,6 +449,9 @@ def _build_macro_sector_view(indicators):
         "indicators_used": indicators_used,
         "sector_scores": dict(sorted(sector_scores.items(), key=lambda x: x[1], reverse=True)[:10]),
     }
+    if pmi_signal:
+        view["pmi_signal"] = pmi_signal
+    return view
 
 
 def _parse_news_time(time_str):
@@ -464,9 +572,9 @@ def fetch_news(ticker, date, lookback_days=7, skip_macro=False):
     data["macro_news"] = macro_articles
     data["macro_news_source"] = macro_source
 
-    # NBS 宏观指标 + 板块映射：仅在 lookback_days >= 14 时触发（policy 角色用 14/30，
+    # NBS 宏观指标 + 大宗商品 + 板块映射：仅在 lookback_days >= 14 时触发（policy 角色用 14/30，
     # 默认 news 角色用 7 不触发）。宏观是政策/周期判断的骨架，但对短线新闻面是噪音，
-    # 故按窗口门控。拉取失败 graceful degrade（不输出 macro_indicators/sector_view）。
+    # 故按窗口门控。拉取失败 graceful degrade（不输出对应字段）。
     if lookback_days >= 14:
         try:
             indicators = _fetch_macro_nbs()
@@ -475,6 +583,14 @@ def fetch_news(ticker, date, lookback_days=7, skip_macro=False):
                 data["sector_view"] = _build_macro_sector_view(indicators)
         except Exception as e:
             data["macro_indicators_error"] = str(e)
+
+        # 大宗商品（金/油/铜）：国际周期定价锚，与国内宏观指标互补。
+        try:
+            commodities = _fetch_commodities()
+            if commodities:
+                data["commodities"] = commodities
+        except Exception as e:
+            data["commodities_error"] = str(e)
 
     return data
 

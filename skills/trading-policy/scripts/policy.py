@@ -14,7 +14,7 @@ from http_helpers import em_get, output_json, normalize_ticker, record_call
 # news.py lives in a sibling skill dir; import it to reuse _fetch_macro_nbs /
 # _build_macro_sector_view (single source of truth for the macro→sector engine).
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "trading-news", "scripts"))
-from news import _fetch_macro_nbs, _build_macro_sector_view  # noqa: E402
+from news import _fetch_macro_nbs, _build_macro_sector_view, _fetch_commodities  # noqa: E402
 
 _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
@@ -148,7 +148,7 @@ def fetch_policy(ticker, date, lookback_days=30):
     data["macro_policy_news"] = macro_articles
     data["macro_policy_source"] = macro_source
 
-    # NBS 宏观指标 + 板块映射：lookback_days >= 14 时触发（policy 默认 30）。
+    # NBS 宏观指标 + 大宗商品 + 板块映射：lookback_days >= 14 时触发（policy 默认 30）。
     # 复用 news.py 的引擎（单一真相源），政策分析师据此判断宏观环境对板块的
     # 结构性影响。拉取失败 graceful degrade（不输出 macro_indicators/sector_view）。
     if lookback_days >= 14:
@@ -159,6 +159,15 @@ def fetch_policy(ticker, date, lookback_days=30):
                 data["sector_view"] = _build_macro_sector_view(indicators)
         except Exception as e:
             data["macro_indicators_error"] = str(e)
+
+        # 大宗商品（金/油/铜）：国际周期定价锚，政策分析师据此判断全球通胀/
+        # 需求周期对国内政策空间（如油价上行→输入性通胀→制约货币宽松）。
+        try:
+            commodities = _fetch_commodities()
+            if commodities:
+                data["commodities"] = commodities
+        except Exception as e:
+            data["commodities_error"] = str(e)
 
     return data
 
