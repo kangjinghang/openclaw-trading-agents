@@ -7,7 +7,8 @@
 // Usage:
 //   npm run rank
 //   npm run rank -- --date 2026-06-17 --top 15 --long-top 7 --short-top 8
-//   npm run rank -- --model glm-4-flash --api-key xxx --base-url https://...
+//   npm run rank -- --model glm-5-turbo --api-key xxx --base-url https://...
+// 可用模型: glm-5.2, glm-5.1, glm-5-turbo, glm-5, glm-4.7, glm-4.7-flash, glm-4.7-flashx, glm-4.6, glm-4.5-air, glm-4.5-airx, glm-4.5-flash
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -54,7 +55,7 @@ const trace_logger_1 = require("./trace-logger");
 const ranker_1 = require("./watchlist/ranker");
 const atomic_json_1 = require("./watchlist/atomic-json");
 const DEFAULT_WATCHLIST_DIR = path.join(os.homedir(), ".openclaw", "watchlist");
-const DEFAULT_MODEL = "GLM-5-turbo";
+const DEFAULT_MODEL = "glm-5-turbo";
 const DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
 function readJson(fp) {
     if (!fs.existsSync(fp))

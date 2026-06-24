@@ -78,7 +78,7 @@ rebalancer: 读 holdings.json + scan.json → 调仓方案 (plan.json + plan.md)
 Options:
   --date <D>         扫描日（默认最新 scan）
   --top-n <N>        从 ranker 取前 N 候选（默认 10）
-  --model <M>        模型（默认 glm-4.7）
+  --model <M>        模型（默认 glm-5-turbo）可选: glm-5.2, glm-5.1, glm-5-turbo, glm-5, glm-4.7, glm-4.7-flash, glm-4.7-flashx, glm-4.6, glm-4.5-air, glm-4.5-airx, glm-4.5-flash
   --api-key <K>      API key（默认 OPENAI_API_KEY env）
   --base-url <U>     base URL（默认 OPENAI_BASE_URL env）
   --help             显示本帮助
@@ -122,7 +122,7 @@ Options:
   const pluginCfg = loadPluginConfig();
   const apiKey = argValue(args, "--api-key") ?? pluginCfg.api_key ?? process.env.OPENAI_API_KEY;
   const baseUrl = argValue(args, "--base-url") ?? pluginCfg.base_url ?? process.env.OPENAI_BASE_URL ?? "https://open.bigmodel.cn/api/coding/paas/v4";
-  const model = argValue(args, "--model") ?? pluginCfg.model ?? "GLM-5-turbo";
+  const model = argValue(args, "--model") ?? pluginCfg.model ?? "glm-5-turbo";
   if (!apiKey) {
     console.error(`error: 缺 API key`);
     process.exit(2);
