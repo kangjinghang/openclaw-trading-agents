@@ -381,4 +381,145 @@ export function formatReport(
   return lines.join("\n");
 }
 
+/** 从 trace 文件读原始 system_prompt + user_message（回放必须用原 prompt，绝不重新生成）。 */
+function readTracePrompt(trace: SelectedTrace): { system: string; user: string } {
+  const t = JSON.parse(fs.readFileSync(trace.path, "utf-8"));
+  return {
+    system: t.request?.system_prompt ?? "",
+    user: t.request?.user_message ?? "",
+  };
+}
+
+/**
+ * 生产用 caller：用 callLLM 回放单条 trace。
+ * 给整个 run 一个临时 TraceLogger（写 tmpdir，仅满足 callLLM 签名，bench 不读其 trace）。
+ * 同 provider 的 config 共享一个 RateLimitCoordinator（429 协调）。
+ */
+export function makeCaller(
+  clients: Record<string, OpenAI>,
+  coordinators: Record<string, RateLimitCoordinator>,
+): BenchCaller {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "bench-trace-"));
+  const traceLogger = new TraceLogger(tmpDir, "bench");
+
+  return async ({ trace, config }): Promise<BenchCallOutcome> => {
+    const client = clients[config.provider];
+    const coordinator = coordinators[config.provider];
+    const start = Date.now();
+    try {
+      if (coordinator) await coordinator.waitIfNeeded();
+      // prompt 原样从 trace 读——绝不重新生成
+      const prompt = readTracePrompt(trace);
+      const result = await callLLM(client, {
+        model: config.model,
+        systemPrompt: prompt.system,
+        userMessage: prompt.user,
+        phase: trace.phase,
+        role: trace.role,
+        traceLogger,
+        rateLimitCoordinator: coordinator,
+        ...(config.thinking ? { thinking: config.thinking } : {}),
+        ...(config.responseFormat ? { responseFormat: config.responseFormat } : {}),
+        temperature: config.temperature,
+        maxTokens: config.max_tokens ?? LLM_DEFAULT_MAX_TOKENS,
+      });
+      return {
+        ok: result.content.trim().length > 0,
+        duration_ms: Date.now() - start,
+        usage: result.usage,
+        cost_usd: result.costUsd,
+        raw_content: result.content,
+        parsed: parseOutput(result.content),
+      };
+    } catch (e) {
+      return {
+        ok: false, duration_ms: Date.now() - start,
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        cost_usd: 0, raw_content: "", parsed: { _parse_ok: false },
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
+  };
+}
+
+/**
+ * bench 总入口：选 trace → 造 clients/coordinators → 回放 → 聚合 → 写产物。
+ * 返回产物目录路径。dryRun=true 时只打印选中 trace 和调用数，不调 LLM。
+ */
+export async function runBench(
+  config: BenchConfig,
+  configPath: string,
+  watchlistDir: string,
+  dryRun: boolean = false,
+): Promise<string | null> {
+  const providers = validateConfig(config);
+  const traces = selectTraces(watchlistDir, config.traces);
+
+  console.log(`\nbench: ${config.name}`);
+  console.log(`  traces: ${traces.length}（${config.traces.phase}${config.traces.date ? ` / ${config.traces.date}` : " / 最新"}）`);
+  console.log(`  configs: ${config.configs.length} × repeats ${config.repeats} = ${traces.length * config.configs.length * config.repeats} 次调用`);
+
+  if (traces.length === 0) {
+    console.error(`  error: 没有匹配的 trace，检查 traces.phase/date/roles`);
+    return null;
+  }
+
+  if (dryRun) {
+    console.log(`  [dry-run] 不调用 LLM。选中 trace:`);
+    for (const t of traces) console.log(`    - ${t.file} (${t.role}, ticker=${t.ticker})`);
+    return null;
+  }
+
+  // 造 clients + coordinators（按 provider 隔离）
+  const clients: Record<string, OpenAI> = {};
+  const coordinators: Record<string, RateLimitCoordinator> = {};
+  for (const [name, p] of Object.entries(providers)) {
+    clients[name] = new OpenAI({ apiKey: p.api_key, baseURL: p.base_url });
+    coordinators[name] = new RateLimitCoordinator();
+  }
+
+  const startedAt = new Date().toISOString();
+  const caller = makeCaller(clients, coordinators);
+  const callResults = await runReplay(traces, config.configs, config.repeats, caller);
+  const finishedAt = new Date().toISOString();
+
+  // 聚合
+  const expectedPerConfig = traces.length * config.repeats;
+  const configStats = config.configs.map(c =>
+    summarizeConfigStats(c.id, callResults.filter(r => r.config_id === c.id), expectedPerConfig));
+  const stability: StabilityStats[] = [];
+  for (const c of config.configs) {
+    for (const t of traces) {
+      stability.push(computeStability(c.id, t, callResults.filter(r => r.config_id === c.id && r.trace_file === t.file)));
+    }
+  }
+
+  const results: BenchResults = {
+    bench_name: config.name,
+    config_path: configPath,
+    started_at: startedAt,
+    finished_at: finishedAt,
+    trace_count: traces.length,
+    repeats: config.repeats,
+    config_count: config.configs.length,
+    total_calls: callResults.length,
+    traces: traces.map(({ path: _path, ...rest }) => rest),  // 剥掉 path（results.json 不含完整路径）
+    results: callResults,
+  };
+
+  // 写产物
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  const outDir = path.join(watchlistDir, "bench", `${config.name}-${ts}`);
+  fs.mkdirSync(outDir, { recursive: true });
+  writeAtomicJson(path.join(outDir, "results.json"), results);
+  fs.writeFileSync(path.join(outDir, "report.md"), formatReport(results, configStats, stability), "utf-8");
+
+  console.log(`\n=== 完成 ===`);
+  console.log(`  调用: ${callResults.length}（失败 ${callResults.filter(r => !r.ok).length}）`);
+  console.log(`  输出: ${path.join(outDir, "report.md")}`);
+  console.log(`  输出: ${path.join(outDir, "results.json")}`);
+  return outDir;
+}
+
+
 
