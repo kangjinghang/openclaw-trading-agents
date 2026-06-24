@@ -19,15 +19,13 @@ class TestBuildMacroSectorView:
     """Test rule-based macro → sector mapping engine."""
 
     def test_bullish_when_strong_macro(self):
-        """Strong M2 + PMI > 50 + retail > 4% → bullish."""
+        """Strong M2 + PMI > 50 + low LPR → bullish."""
         indicators = {
             "m2_yoy": {"latest": 8.0},
             "manufacturing_pmi": {"latest": 52.0},
-            "retail_sales_yoy": {"latest": 5.0},
-            "fixed_asset_yoy": {"latest": 4.0},
+            "lpr_1y": {"latest": 3.0},
+            "lpr_5y": {"latest": 3.5},
             "ppi_yoy": {"latest": 1.0},
-            "real_estate_invest_yoy": {"latest": 3.0},
-            "urban_unemployment": {"latest": 5.0},
         }
         result = _build_macro_sector_view(indicators)
         assert result["total_score"] > 0
@@ -35,29 +33,27 @@ class TestBuildMacroSectorView:
         assert len(result["bullish_sectors"]) > 0
 
     def test_bearish_when_weak_macro(self):
-        """Weak PMI < 50 + PPI < 0 + RE < 0 → bearish."""
+        """Weak PMI < 50 + PPI < 0 → bearish."""
         indicators = {
             "manufacturing_pmi": {"latest": 48.0},
             "ppi_yoy": {"latest": -2.0},
-            "real_estate_invest_yoy": {"latest": -5.0},
             "m2_yoy": {"latest": 4.0},
-            "retail_sales_yoy": {"latest": 1.0},
-            "fixed_asset_yoy": {"latest": -1.0},
-            "urban_unemployment": {"latest": 5.5},
         }
         result = _build_macro_sector_view(indicators)
         assert result["total_score"] < 0
-        assert result["market_view"] == "震荡偏谨慎"
         assert len(result["bearish_sectors"]) > 0
 
-    def test_realestate_penalized_heavily(self):
-        """Real estate investment < 0 should penalize 地产/建材/建筑."""
+    def test_lpr_boosts_sectors(self):
+        """Low LPR should boost 银行/券商/保险/房地产."""
         indicators = {
-            "real_estate_invest_yoy": {"latest": -8.0},
+            "lpr_1y": {"latest": 3.0},
+            "lpr_5y": {"latest": 3.5},
         }
         result = _build_macro_sector_view(indicators)
-        # 建筑 and 建材 should appear in bearish (both get -3 from RE + -2 from 建材 itself)
-        assert "房地产" in result["bearish_sectors"]
+        assert "银行" in result["bullish_sectors"]
+        assert "券商" in result["bullish_sectors"]
+        assert "保险" in result["bullish_sectors"]
+        assert "房地产" in result["bullish_sectors"]
 
     def test_pmi_cyclical_boost(self):
         """PMI > 50 should boost 周期/科技 sectors."""

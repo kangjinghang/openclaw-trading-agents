@@ -151,12 +151,9 @@ def _fetch_global_news_akshare(limit=10):
 
 
 # ── NBS macro indicators via akshare ────────────────────────────────
-# Mirrors aiagents-stock's macro_analysis_data (13 core indicators), but
-# sources from akshare (no need to maintain NBS series codes). akshare's macro
-# interfaces are inconsistent (some return 商品/日期/今值, M2 returns 月份/...),
-# so each indicator has its own adapter. Indicators akshare doesn't expose
-# (社零/固投/地产/失业) are simply absent — _build_macro_sector_view skips
-# missing keys. Returns {indicator_key: {"latest": float, "label": str}}.
+# Fetches 7 macro indicators via akshare. M2 and LPR have non-standard
+# column shapes and are handled separately. Returns
+# {indicator_key: {"latest": float, "label": str}}.
 
 _NBS_INDICATORS = {
     # key: (akshare_fn, value-extractor, label)
@@ -213,6 +210,21 @@ def _fetch_macro_nbs():
     except Exception:
         pass
 
+    # LPR (Loan Prime Rate) — column shape differs (TRADE_DATE/LPR1Y/LPR5Y/...)
+    try:
+        df = ak.macro_china_lpr()
+        if df is not None and len(df) > 0:
+            lpr1y = df["LPR1Y"].iloc[-1]
+            lpr5y = df["LPR5Y"].iloc[-1]
+            lpr1y = float(lpr1y) if lpr1y is not None and str(lpr1y) != "nan" else None
+            lpr5y = float(lpr5y) if lpr5y is not None and str(lpr5y) != "nan" else None
+            if lpr1y is not None:
+                result["lpr_1y"] = {"latest": lpr1y, "label": "1年期LPR"}
+            if lpr5y is not None:
+                result["lpr_5y"] = {"latest": lpr5y, "label": "5年期LPR"}
+    except Exception:
+        pass
+
     record_call("news/macro_nbs", success=bool(result),
                 error=None if result else "all macro indicators unavailable",
                 duration_ms=(time.monotonic() - start) * 1000)
@@ -222,44 +234,44 @@ def _fetch_macro_nbs():
 # ── Rule-based macro → sector mapping engine ────────────────────────
 # Borrowed from aiagents-stock's build_rule_based_sector_view, adapted to our
 # {key: {"latest": val}} indicator shape (aiagents-stock uses {"value"}). Maps
-# the 7 indicators the engine cares about to 24 sector scores, then derives
+# the indicators the engine cares about to 15 sector scores, then derives
 # market_view + bullish/bearish sectors. Pure function, network-free.
 
 _SECTOR_RULES = {
-    # sector: list of (indicator_key, threshold, score_delta, reason)
-    "银行": [("m2_yoy", 7, 2, "流动性保持充裕"), ("cpi_yoy", 1, 1, "通胀温和为估值修复留出空间")],
-    "券商": [("m2_yoy", 7, 2, "流动性保持充裕")],
-    "保险": [("m2_yoy", 7, 2, "流动性保持充裕")],
+    # sector: list of (indicator_key, threshold, score_delta, reason [, direction])
+    # direction defaults to "above" (val >= threshold); use "below" for lower-is-better
+    "银行": [("m2_yoy", 7, 2, "流动性保持充裕"), ("cpi_yoy", 1, 1, "通胀温和为估值修复留出空间", "below"),
+             ("lpr_1y", 3.5, 1, "利率偏低利好信贷扩张", "below")],
+    "券商": [("m2_yoy", 7, 2, "流动性保持充裕"), ("lpr_1y", 3.5, 1, "低利率环境利好市场交投", "below")],
+    "保险": [("m2_yoy", 7, 2, "流动性保持充裕"), ("lpr_5y", 4.0, 1, "长端利率偏低提升债券投资价值", "below")],
     "公用事业": [("m2_yoy", 7, 2, "流动性保持充裕"), ("cpi_yoy", 1, 1, "通胀温和")],
-    "食品饮料": [("cpi_yoy", 1, 1, "通胀温和"), ("retail_sales_yoy", 4, 2, "消费数据偏强")],
-    "家电": [("cpi_yoy", 1, 1, "通胀温和"), ("retail_sales_yoy", 4, 2, "消费数据偏强")],
-    "工程机械": [("manufacturing_pmi", 50, 2, "制造业景气改善"), ("fixed_asset_yoy", 3, 2, "投资端有托底"),
+    "食品饮料": [("cpi_yoy", 1, 1, "通胀温和")],
+    "家电": [("cpi_yoy", 1, 1, "通胀温和")],
+    "工程机械": [("manufacturing_pmi", 50, 2, "制造业景气改善"),
               ("manufacturing_pmi", None, -1, "制造业景气仍在荣枯线下")],
-    "有色金属": [("manufacturing_pmi", 50, 2, "制造业景气改善"), ("fixed_asset_yoy", 3, 2, "投资端有托底"),
+    "有色金属": [("manufacturing_pmi", 50, 2, "制造业景气改善"),
                ("ppi_yoy", None, -1, "工业品价格承压")],
     "半导体": [("manufacturing_pmi", 50, 2, "制造业景气改善"),
               ("manufacturing_pmi", None, -1, "制造业景气仍在荣枯线下")],
     "算力AI": [("manufacturing_pmi", 50, 2, "制造业景气改善")],
     "软件信创": [("manufacturing_pmi", 50, 2, "制造业景气改善")],
-    "旅游酒店": [("retail_sales_yoy", 4, 2, "消费数据偏强")],
-    "汽车整车": [("retail_sales_yoy", 4, 2, "消费数据偏强")],
-    "电网设备": [("fixed_asset_yoy", 3, 2, "投资端有托底")],
-    "房地产": [("real_estate_invest_yoy", None, -3, "地产投资仍弱")],
-    "建材家居": [("real_estate_invest_yoy", None, -3, "地产投资仍弱")],
+    "房地产": [("lpr_5y", 4.0, 2, "房贷利率偏低利好购房需求", "below")],
     "煤炭": [("ppi_yoy", None, -1, "工业品价格承压")],
     "石油石化": [("ppi_yoy", None, -1, "工业品价格承压")],
-    "可选消费": [("urban_unemployment", 5.3, -1, "就业压力抑制可选消费")],
 }
 
 
-def _apply_sector_rule(val, threshold, delta):
+def _apply_sector_rule(val, threshold, delta, direction="above"):
     """Return (applied: bool, score: int). threshold=None means unconditional
-    apply when val is not None (used for penalty rules that fire on any value)."""
+    apply when val is not None. direction='above' → val >= threshold triggers;
+    direction='below' → val <= threshold triggers."""
     if val is None:
         return False, 0
     if threshold is None:
         return True, delta
-    if delta > 0 and val >= threshold:
+    if direction == "below" and val <= threshold:
+        return True, delta
+    if direction == "above" and val >= threshold:
         return True, delta
     if delta < 0 and val < threshold:
         return True, delta
@@ -283,9 +295,11 @@ def _build_macro_sector_view(indicators):
     for sector, rules in _SECTOR_RULES.items():
         score = 0
         reasons = []
-        for ind_key, threshold, delta, reason in rules:
+        for rule in rules:
+            ind_key, threshold, delta, reason = rule[0], rule[1], rule[2], rule[3]
+            direction = rule[4] if len(rule) > 4 else "above"
             val = indicators.get(ind_key, {}).get("latest")
-            applied, s = _apply_sector_rule(val, threshold, delta)
+            applied, s = _apply_sector_rule(val, threshold, delta, direction)
             if applied:
                 score += s
                 reasons.append(reason)
@@ -306,20 +320,14 @@ def _build_macro_sector_view(indicators):
     # Market view: derived from the macro tilt
     growth_signals = 0
     mfg = indicators.get("manufacturing_pmi", {}).get("latest")
-    re = indicators.get("real_estate_invest_yoy", {}).get("latest")
-    retail = indicators.get("retail_sales_yoy", {}).get("latest")
     gdp = indicators.get("gdp_yoy", {}).get("latest")
+    lpr1y = indicators.get("lpr_1y", {}).get("latest")
     if gdp is not None and gdp >= 4.5:
         growth_signals += 1
     if mfg is not None and mfg >= 50:
         growth_signals += 1
-    if retail is not None and retail >= 4:
+    if lpr1y is not None and lpr1y < 3.5:
         growth_signals += 1
-    if re is not None and re < 0:
-        growth_signals -= 1
-    if indicators.get("urban_unemployment", {}).get("latest") is not None \
-            and indicators["urban_unemployment"]["latest"] >= 5.3:
-        growth_signals -= 1
 
     if growth_signals >= 2:
         market_view = "震荡偏多"
