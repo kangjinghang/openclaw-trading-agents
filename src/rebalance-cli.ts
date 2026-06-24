@@ -150,6 +150,7 @@ Options:
     const result = await callLLM(client, {
       model, systemPrompt, userMessage,
       phase: "rebalance", role: `${role}-shallow`, traceLogger, temperature: 0,
+      thinking: { type: "disabled" },
       responseFormat: { type: "json_object" },
     });
     return result.content;
@@ -158,7 +159,7 @@ Options:
     const result = await callLLM(client, {
       model, systemPrompt: "A 股投资组合管理者", userMessage,
       phase: "rebalance", role: "portfolio-rebalancer", traceLogger, temperature: 0,
-      responseFormat: { type: "json_object" },
+      thinking: { type: "disabled" },
     });
     return result.content;
   };

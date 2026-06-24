@@ -177,6 +177,7 @@ Options:
             role: `${group.toLowerCase()}-ranker`,
             traceLogger,
             temperature: 0.3,
+            thinking: { type: "disabled" },
             responseFormat: { type: "json_object" },
         });
         return result.content;
