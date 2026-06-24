@@ -295,6 +295,34 @@ describe("applyPositions 批量改写 plan", () => {
     expect(traces.get("X")).toContain("deal_breaker");
   });
 
+  it("REDUCE 小仓位清仓（≤3%）→ action 升级为 SELL（一致性：target=0 即退出）", () => {
+    // 持仓 X 仅 2%（≤3%），REDUCE → target=0（清仓）→ action 应升级为 SELL
+    // 否则 rebalance-cli 的 recent_sells 追踪（只看 action==="SELL"）会漏记，
+    // anti-churn 买锁失效；execution-planner 也按 SELL 优先级=1 先释放资金
+    const reports = [makeReport({ ticker: "X", fitness_score: 8, overall_risk: "low" })];
+    const volMap = new Map([["X", 0.015]]);
+    const plan = makePlan([
+      makeAction({ ticker: "X", action: "REDUCE", current_weight: 0.02, target_weight: 0.99 }),
+    ]);
+    const { plan: newPlan, traces } = applyPositions(plan, buildApplyContext(reports, volMap, C, 0.80));
+    expect(newPlan.actions[0].target_weight).toBe(0);
+    expect(newPlan.actions[0].action).toBe("SELL");
+    expect(newPlan.actions[0].priority).toBe(1);  // SELL 优先级=1
+    expect(traces.get("X")).toContain("≤3%");
+  });
+
+  it("REDUCE 正常减仓（>3%）→ action 保持 REDUCE（不误升级）", () => {
+    // 持仓 X 10%（>3%），REDUCE 减半 → target=5%，action 保持 REDUCE
+    const reports = [makeReport({ ticker: "X", fitness_score: 8, overall_risk: "low" })];
+    const volMap = new Map([["X", 0.015]]);
+    const plan = makePlan([
+      makeAction({ ticker: "X", action: "REDUCE", current_weight: 0.10, target_weight: 0.99 }),
+    ]);
+    const { plan: newPlan, traces } = applyPositions(plan, buildApplyContext(reports, volMap, C, 0.80));
+    expect(newPlan.actions[0].target_weight).toBeCloseTo(0.05, 5);
+    expect(newPlan.actions[0].action).toBe("REDUCE");  // 非 0 不升级
+  });
+
   it("不改原 plan（返回新对象）", () => {
     const reports = [makeReport({ ticker: "A", fitness_score: 9 })];
     const volMap = new Map([["A", 0.015]]);

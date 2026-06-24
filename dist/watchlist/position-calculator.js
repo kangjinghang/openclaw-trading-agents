@@ -151,11 +151,14 @@ function applyPositions(plan, ctx) {
             volatility,
             singleNameCap,
         });
-        // 根据计算结果对齐 action 类型（防 validator 规则 8 误报）：
+        // 根据计算结果对齐 action 类型（防 validator 规则 8 误报 + 下游一致性）：
         // - deal_breaker 强制 target=0 → 改 action 为 SELL
+        // - REDUCE 小仓位清仓（target=0）→ 改 action 为 SELL（与 deal_breaker 同语义：
+        //   target=0 即退出，应记入 recent_sells 防 anti-churn 买锁漏判，execution-planner
+        //   也按 SELL 优先级=1 先释放资金）
         // - 其他情况保持 AI 给的方向
         let resolvedAction = a.action;
-        if (report.deal_breaker && result.targetWeight === 0) {
+        if (result.targetWeight === 0 && (report.deal_breaker || a.action === "REDUCE")) {
             resolvedAction = "SELL";
         }
         const newAction = {

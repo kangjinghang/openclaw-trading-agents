@@ -597,13 +597,47 @@ def fetch_news(ticker, date, lookback_days=7, skip_macro=False):
 
 def main():
     parser = argparse.ArgumentParser(description="Fetch news for A-share stocks")
-    parser.add_argument("--ticker", required=True, help="Stock ticker code")
-    parser.add_argument("--date", required=True, help="Analysis date YYYY-MM-DD")
+    # --macro-only 时不需要 ticker（全市场宏观信号），故 ticker/date 设为非必需，
+    # 在非 macro-only 分支手动校验，保持原有 required 语义。
+    parser.add_argument("--ticker", required=False, default=None, help="Stock ticker code")
+    parser.add_argument("--date", required=False, default=None, help="Analysis date YYYY-MM-DD")
     parser.add_argument("--lookback-days", type=int, default=7, help="Days to look back")
     parser.add_argument("--skip-macro", action="store_true",
                         help="Skip macro news fetch (CLS+akshare). For shallow-analyzer "
                              "batch scenarios where macro is unused and per-ticker duplicate.")
+    parser.add_argument("--macro-only", action="store_true",
+                        help="Only fetch macro data (NBS indicators + commodities + "
+                             "sector_view), skip per-stock news. For rebalancer pipeline "
+                             "where macro is a one-time market-wide fetch injected into the "
+                             "portfolio-decision layer (avoids N redundant per-ticker calls).")
     args = parser.parse_args()
+
+    # ── --macro-only 分支：全市场宏观，一次性抓取 ──
+    # 用于 watchlist rebalancer 第 5 层（组合决策），宏观与具体股票无关，抓 1 次即可。
+    # 复用 _fetch_macro_nbs / _fetch_commodities / _build_macro_sector_view，零重复逻辑。
+    # 失败 graceful degrade（对应字段不输出），不抛异常。
+    if args.macro_only:
+        date = args.date or datetime.now().strftime("%Y-%m-%d")
+        data = {"ticker": "MACRO", "date": date}
+        try:
+            indicators = _fetch_macro_nbs()
+            if indicators:
+                data["macro_indicators"] = indicators
+                data["sector_view"] = _build_macro_sector_view(indicators)
+        except Exception as e:
+            data["macro_indicators_error"] = str(e)
+        try:
+            commodities = _fetch_commodities()
+            if commodities:
+                data["commodities"] = commodities
+        except Exception as e:
+            data["commodities_error"] = str(e)
+        output_json(True, data=data, source="macro-only")
+        return
+
+    # ── 常规分支：个股新闻 + （可选）宏观 ──
+    if not args.ticker or not args.date:
+        parser.error("--ticker and --date are required unless --macro-only is set")
 
     try:
         data = fetch_news(args.ticker, args.date, args.lookback_days,

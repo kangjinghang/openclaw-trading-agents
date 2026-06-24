@@ -58,6 +58,39 @@ export declare function parseFundamentals(raw: any): {
  *  shares/ratio 在脚本侧是字符串，原样透传（不强转，避免 parse 失败丢信息，LLM 直接读字符串）。
  *  全程容忍字段缺失。pressure_rating 缺失 → "未知"。upcoming/reduce_holdings 全空且无评级 → null（无数据）。 */
 export declare function parseLockup(raw: any): LockupData | null;
+/** 全市场宏观视图（来自 news.py --macro-only，一次性抓取）。
+ *
+ *  宏观与具体股票无关（财新PMI/大宗/NBS/LPR 都是全市场信号），故 rebalancer 每次跑
+ *  只抓 1 次注入组合决策层，而非每股抓 1 次（data-fetcher 每股 news.py 仍 --skip-macro）。
+ *  字段全部可选——拉取失败或部分指标不可用时 graceful degrade（对应字段 undefined，
+ *  renderMacroSection 据此省略分句）。
+ *
+ *  - market_view：news.py _build_macro_sector_view 推导的总体倾向
+ *    （"震荡偏多"|"震荡偏谨慎"|"结构性机会为主"）
+ *  - pmi_signal：官方与财新 PMI 双口径共振/背离结论
+ *  - bullish_sectors / bearish_sectors：规则引擎推导的景气/承压板块名
+ *  - sector_scores：板块 → 宏观得分（正=景气，负=承压）
+ *  - commodities：金/油/铜主力连续（新浪期货），含 5/20 日涨跌幅 + 趋势标签
+ *  - indicators_used：本次实际取到的宏观指标 key（判断数据完整度） */
+export interface MacroView {
+    market_view?: string;
+    pmi_signal?: string;
+    bullish_sectors?: string[];
+    bearish_sectors?: string[];
+    sector_scores?: Record<string, number>;
+    commodities?: Record<string, {
+        label: string;
+        chg_5d?: number;
+        chg_20d?: number;
+        trend?: string;
+    }>;
+    indicators_used?: string[];
+}
+/** 从 news.py --macro-only 输出解析 MacroView。
+ *  容忍字段缺失——sector_view / commodities 任一缺失则对应字段 undefined。
+ *  全空（拉取失败）返回 null，让调用方据此省略宏观段。 */
+export declare function parseMacroView(raw: any): MacroView | null;
+export declare function fetchMacroData(date: string): Promise<MacroView | null>;
 /** 单股并行跑 5 个 script（kline/news/hot_money/fundamentals/lockup）。失败的 script 返回 null 字段（容忍）。 */
 export declare function fetchStockData(ticker: string, name: string, sector: string, rankerThesis?: string): Promise<StockData | null>;
 /** 跨股并行 fetch（concurrency=5）。失败的股跳过。 */

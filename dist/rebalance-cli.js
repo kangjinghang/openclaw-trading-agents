@@ -203,12 +203,28 @@ Options:
     console.log(`  拉数据: ${dedupMetas.length} 只股 × 4 scripts（并行 5）`);
     const dataByTicker = await (0, data_fetcher_1.fetchAllStockData)(dedupMetas, 5);
     console.log(`  数据就绪: ${dataByTicker.size}/${dedupMetas.length} 只`);
+    // 宏观环境（全市场信号，一次性抓取，注入 rebalancer 组合决策层）。
+    // 宏观与 ticker 无关，抓 1 次即可（不是每股抓 1 次），失败 graceful degrade。
+    let macroView = null;
+    try {
+        macroView = await (0, data_fetcher_1.fetchMacroData)(date);
+        if (macroView) {
+            console.log(`  宏观环境: ${macroView.market_view ?? "(倾向未知)"}${macroView.pmi_signal ? " / " + macroView.pmi_signal : ""}`);
+        }
+        else {
+            console.log(`  宏观环境: (拉取失败，跳过)`);
+        }
+    }
+    catch (e) {
+        console.error(`  [macro] 抓取跳过: ${e instanceof Error ? e.message : e}`);
+    }
     // 跑 pipeline
     // shallow_concurrency：plugin config > 默认（DEFAULT_REBALANCE_CONFIG.shallow_concurrency=2）
     const shallowConcurrency = pluginCfg.shallow_concurrency;
     const result = await (0, rebalancer_1.rebalancePipeline)({
         scan, holdings, lastRebalance, currentDate: date,
         shallowCaller, rebalanceCaller, dataByTicker,
+        macroView,
         config: {
             top_n: topN,
             ...(shallowConcurrency !== undefined ? { shallow_concurrency: shallowConcurrency } : {}),
@@ -243,6 +259,7 @@ Options:
         sector_warnings: result.sector_warnings,
         position_traces: result.position_traces,
         data_health: dataHealth,
+        ...(macroView ? { macro_view: macroView } : {}),
     };
     (0, atomic_json_1.writeAtomicJson)(path.join(rebalanceDir, "plan.json"), planFile);
     (0, atomic_json_1.writeAtomicJson)(path.join(rebalanceDir, "holdings_snapshot.json"), holdings);

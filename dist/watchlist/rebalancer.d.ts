@@ -3,8 +3,9 @@ import { type ValidationContext } from "./constraint-validator";
 import { type ShallowLlmCaller, type StockData } from "./shallow-analyzer";
 import { buildExecutionPlan } from "./execution-planner";
 import { type ApplyPositionsContext } from "./position-calculator";
+import type { MacroView } from "./data-fetcher";
 import type { ScanSummary } from "./types";
-export declare function formatRebalancerPrompt(reports: StockReport[], holdings: Holdings, lastRebalance: LastRebalance | null, c: RebalanceConstraints, antiChurnDays: number): string;
+export declare function formatRebalancerPrompt(reports: StockReport[], holdings: Holdings, lastRebalance: LastRebalance | null, c: RebalanceConstraints, antiChurnDays: number, macroView?: MacroView | null): string;
 /** 解析 rebalancer 输出。过滤幻觉 ticker。失败返回 null。 */
 export declare function parseRebalancePlan(content: string, validTickers: Set<string>): RebalancePlan | null;
 export type RebalanceLlmCaller = (input: {
@@ -35,6 +36,9 @@ export interface RebalancePipelineInput {
     rebalanceCaller: RebalanceLlmCaller;
     dataByTicker?: Map<string, StockData>;
     config?: Partial<RebalanceConfig>;
+    /** 全市场宏观视图（一次性抓取，注入组合决策层）。
+     *  null/undefined → rebalancer prompt 省略宏观段（向后兼容）。 */
+    macroView?: MacroView | null;
 }
 export interface RebalancePipelineResult {
     reports: StockReport[];

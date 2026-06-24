@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseKline, parseNews, parseNewsLayerStats, parseHotMoney, parseFundamentals, computeVolumeRatio, parseLockup } from "../../../src/watchlist/data-fetcher";
+import { parseKline, parseNews, parseNewsLayerStats, parseHotMoney, parseFundamentals, computeVolumeRatio, parseLockup, parseMacroView, fetchMacroData } from "../../../src/watchlist/data-fetcher";
 
 describe("parseKline", () => {
   it("解析 data 对象数组（kline.py 真实结构）→ pct_5d/pct_20d/support/resistance/volatility_20d/volume_ratio_5_20", () => {
@@ -516,5 +516,101 @@ describe("parseLockup", () => {
     });
     expect(l!.upcoming).toHaveLength(1);
     expect(l!.upcoming[0].date).toBe("2026-08-15");
+  });
+});
+
+// ── parseMacroView + fetchMacroData：宏观一次性抓取解析 ───────────────
+describe("parseMacroView", () => {
+  it("完整 sector_view + commodities → MacroView 解析", () => {
+    const raw = {
+      sector_view: {
+        market_view: "震荡偏多",
+        pmi_signal: "官方与财新PMI双口径共振向上",
+        bullish_sectors: ["银行", "工程机械"],
+        bearish_sectors: ["煤炭"],
+        sector_scores: { 银行: 3, 工程机械: 2, 煤炭: -1 },
+        indicators_used: ["manufacturing_pmi", "m2_yoy"],
+      },
+      commodities: {
+        AU0: { label: "黄金", chg_5d: 2.1, chg_20d: 5.3, trend: "上行" },
+        SC0: { label: "原油", chg_5d: -1.0, chg_20d: -3.0, trend: "下行" },
+      },
+    };
+    const v = parseMacroView(raw);
+    expect(v).not.toBeNull();
+    expect(v!.market_view).toBe("震荡偏多");
+    expect(v!.pmi_signal).toBe("官方与财新PMI双口径共振向上");
+    expect(v!.bullish_sectors).toEqual(["银行", "工程机械"]);
+    expect(v!.bearish_sectors).toEqual(["煤炭"]);
+    expect(v!.sector_scores!["银行"]).toBe(3);
+    expect(v!.commodities!["AU0"]).toMatchObject({ label: "黄金", chg_5d: 2.1, trend: "上行" });
+  });
+
+  it("只有 commodities（无 sector_view）→ 仍返回有效 MacroView", () => {
+    const v = parseMacroView({ commodities: { AU0: { label: "黄金" } } });
+    expect(v).not.toBeNull();
+    expect(v!.commodities!["AU0"].label).toBe("黄金");
+    expect(v!.market_view).toBeUndefined();
+  });
+
+  it("全空（无 sector_view 无 commodities）→ null", () => {
+    expect(parseMacroView({})).toBeNull();
+    expect(parseMacroView(null)).toBeNull();
+    expect(parseMacroView({ sector_view: {} })).toBeNull();  // 无 market_view + 无 commodities
+  });
+
+  it("commodities 元素缺 chg → 只保留 label（容忍）", () => {
+    const v = parseMacroView({ commodities: { CU0: { label: "铜" } } });
+    expect(v!.commodities!["CU0"]).toEqual({ label: "铜" });
+    expect(v!.commodities!["CU0"].chg_5d).toBeUndefined();
+  });
+});
+
+describe("fetchMacroData", () => {
+  beforeEach(() => {
+    vi.mocked(execSkillScript).mockReset();
+  });
+
+  it("execSkillScript 返回 macro JSON → 解析为 MacroView", async () => {
+    const mocked = vi.mocked(execSkillScript);
+    mocked.mockResolvedValueOnce({
+      success: true,
+      data: {
+        sector_view: { market_view: "结构性机会为主", bullish_sectors: ["半导体"] },
+        commodities: { AU0: { label: "黄金", trend: "上行", chg_5d: 1.5 } },
+      },
+    } as any);
+    const v = await fetchMacroData("2026-06-20");
+    expect(v).not.toBeNull();
+    expect(v!.market_view).toBe("结构性机会为主");
+    expect(v!.bullish_sectors).toEqual(["半导体"]);
+    // 验证调用参数：--macro-only --date（mock 是全局共享，按 skillName 找本次调用）
+    const macroCall = mocked.mock.calls.find(c => c[0] === "trading-news" && (c[3] as string[]).includes("--macro-only"));
+    expect(macroCall).toBeDefined();
+    const args = macroCall![3] as string[];
+    expect(args).toContain("--macro-only");
+    expect(args).toContain("--date");
+    expect(args).toContain("2026-06-20");
+  });
+
+  it("execSkillScript 失败 → null（graceful degrade）", async () => {
+    const mocked = vi.mocked(execSkillScript);
+    mocked.mockResolvedValueOnce({ success: false, error: "boom" } as any);
+    const v = await fetchMacroData("2026-06-20");
+    expect(v).toBeNull();
+  });
+
+  it("execSkillScript 抛异常 → null（不阻塞主流程）", async () => {
+    const mocked = vi.mocked(execSkillScript);
+    mocked.mockRejectedValueOnce(new Error("spawn failed"));
+    const v = await fetchMacroData("2026-06-20");
+    expect(v).toBeNull();
+  });
+
+  it("返回全空 macro → null", async () => {
+    const mocked = vi.mocked(execSkillScript);
+    mocked.mockResolvedValueOnce({ success: true, data: {} } as any);
+    const v = await fetchMacroData("2026-06-20");
+    expect(v).toBeNull();
   });
 });

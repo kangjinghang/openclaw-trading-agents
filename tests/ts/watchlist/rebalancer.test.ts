@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { formatRebalancerPrompt, parseRebalancePlan, rebalancePipeline } from "../../../src/watchlist/rebalancer";
 import type { StockReport, Holdings, LastRebalance, RebalanceConstraints } from "../../../src/watchlist/rebalance-types";
+import type { MacroView } from "../../../src/watchlist/data-fetcher";
 
 const C: RebalanceConstraints = { single_name: 0.15, single_sector: 0.30, daily_turnover: 0.30, cash_reserve: 0.10 };
 
@@ -33,6 +34,44 @@ describe("formatRebalancerPrompt", () => {
     const prompt = formatRebalancerPrompt([], { updated_at: "x", cash_pct: 1, positions: [] }, last, C, 7);
     expect(prompt).toContain("SH600519");
     expect(prompt).toContain("SELL");
+  });
+
+  it("macroView 注入：含市场倾向 + 景气/承压板块 + 大宗 + 引导语", () => {
+    const macro: MacroView = {
+      market_view: "震荡偏多",
+      pmi_signal: "官方与财新PMI双口径共振向上",
+      bullish_sectors: ["银行", "工程机械"],
+      bearish_sectors: ["煤炭"],
+      commodities: {
+        AU0: { label: "黄金", chg_5d: 2.1, trend: "上行" },
+        SC0: { label: "原油", chg_5d: -1.0, trend: "下行" },
+        CU0: { label: "铜", chg_5d: 0.5, trend: "震荡/拐点" },
+      },
+    };
+    const prompt = formatRebalancerPrompt([makeReport()], { updated_at: "x", cash_pct: 1, positions: [] }, null, C, 7, macro);
+    expect(prompt).toContain("今日宏观环境");
+    expect(prompt).toContain("震荡偏多");
+    expect(prompt).toContain("官方与财新PMI双口径共振向上");
+    expect(prompt).toContain("景气板块：银行、工程机械");
+    expect(prompt).toContain("承压板块：煤炭");
+    expect(prompt).toContain("黄金上行(+2.1%)");
+    expect(prompt).toContain("宏观逆风的行业应谨慎加仓");
+  });
+
+  it("macroView=null → prompt 不含宏观段（向后兼容）", () => {
+    const prompt = formatRebalancerPrompt([makeReport()], { updated_at: "x", cash_pct: 1, positions: [] }, null, C, 7, null);
+    expect(prompt).not.toContain("今日宏观环境");
+  });
+
+  it("macroView 只有大宗（无 sector_view）→ 只渲染大宗段", () => {
+    const macro: MacroView = {
+      commodities: { AU0: { label: "黄金", trend: "上行", chg_5d: 3.0 } },
+    };
+    const prompt = formatRebalancerPrompt([makeReport()], { updated_at: "x", cash_pct: 1, positions: [] }, null, C, 7, macro);
+    expect(prompt).toContain("今日宏观环境");
+    expect(prompt).toContain("黄金上行(+3%)");
+    expect(prompt).not.toContain("市场倾向");
+    expect(prompt).not.toContain("景气板块");
   });
 });
 

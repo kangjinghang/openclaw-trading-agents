@@ -323,6 +323,90 @@ export function parseLockup(raw: any): LockupData | null {
   return { pressure_rating: rating, upcoming, reduce_holdings: reduceHoldings };
 }
 
+/** 全市场宏观视图（来自 news.py --macro-only，一次性抓取）。
+ *
+ *  宏观与具体股票无关（财新PMI/大宗/NBS/LPR 都是全市场信号），故 rebalancer 每次跑
+ *  只抓 1 次注入组合决策层，而非每股抓 1 次（data-fetcher 每股 news.py 仍 --skip-macro）。
+ *  字段全部可选——拉取失败或部分指标不可用时 graceful degrade（对应字段 undefined，
+ *  renderMacroSection 据此省略分句）。
+ *
+ *  - market_view：news.py _build_macro_sector_view 推导的总体倾向
+ *    （"震荡偏多"|"震荡偏谨慎"|"结构性机会为主"）
+ *  - pmi_signal：官方与财新 PMI 双口径共振/背离结论
+ *  - bullish_sectors / bearish_sectors：规则引擎推导的景气/承压板块名
+ *  - sector_scores：板块 → 宏观得分（正=景气，负=承压）
+ *  - commodities：金/油/铜主力连续（新浪期货），含 5/20 日涨跌幅 + 趋势标签
+ *  - indicators_used：本次实际取到的宏观指标 key（判断数据完整度） */
+export interface MacroView {
+  market_view?: string;
+  pmi_signal?: string;
+  bullish_sectors?: string[];
+  bearish_sectors?: string[];
+  sector_scores?: Record<string, number>;
+  commodities?: Record<string, { label: string; chg_5d?: number; chg_20d?: number; trend?: string }>;
+  indicators_used?: string[];
+}
+
+/** 从 news.py --macro-only 输出解析 MacroView。
+ *  容忍字段缺失——sector_view / commodities 任一缺失则对应字段 undefined。
+ *  全空（拉取失败）返回 null，让调用方据此省略宏观段。 */
+export function parseMacroView(raw: any): MacroView | null {
+  if (!raw || typeof raw !== "object") return null;
+  const sv = raw.sector_view;
+  const view: MacroView = {};
+  if (sv && typeof sv === "object") {
+    if (typeof sv.market_view === "string" && sv.market_view) view.market_view = sv.market_view;
+    if (typeof sv.pmi_signal === "string" && sv.pmi_signal) view.pmi_signal = sv.pmi_signal;
+    if (Array.isArray(sv.bullish_sectors)) view.bullish_sectors = sv.bullish_sectors.filter((s: any) => typeof s === "string");
+    if (Array.isArray(sv.bearish_sectors)) view.bearish_sectors = sv.bearish_sectors.filter((s: any) => typeof s === "string");
+    if (sv.sector_scores && typeof sv.sector_scores === "object" && !Array.isArray(sv.sector_scores)) {
+      view.sector_scores = sv.sector_scores as Record<string, number>;
+    }
+    if (Array.isArray(sv.indicators_used)) view.indicators_used = sv.indicators_used.filter((s: any) => typeof s === "string");
+  }
+  if (raw.commodities && typeof raw.commodities === "object" && !Array.isArray(raw.commodities)) {
+    view.commodities = {};
+    for (const [sym, val] of Object.entries(raw.commodities)) {
+      if (val && typeof val === "object") {
+        const c = val as any;
+        const item: { label: string; chg_5d?: number; chg_20d?: number; trend?: string } = {
+          label: typeof c.label === "string" ? c.label : sym,
+        };
+        if (typeof c.chg_5d === "number") item.chg_5d = c.chg_5d;
+        if (typeof c.chg_20d === "number") item.chg_20d = c.chg_20d;
+        if (typeof c.trend === "string" && c.trend) item.trend = c.trend;
+        (view.commodities as Record<string, any>)[sym] = item;
+      }
+    }
+  }
+  // 全空（无 market_view 且无 commodities）视为拉取失败
+  return view.market_view || view.commodities ? view : null;
+}
+
+/** 一次性抓取全市场宏观视图（news.py --macro-only）。
+ *  用于 rebalancer 组合决策层——宏观与 ticker 无关，每次 rebalance 抓 1 次即可。
+ *  失败返回 null（graceful degrade，rebalancer prompt 据此省略宏观段，不阻塞主流程）。
+ *
+ *  超时设 90s：宏观块要拉 NBS×7（akshare）+ M2 + LPR + 大宗×3（sina）≈10 路 HTTP，
+ *  默认 30s 在网络抖动时不够（实测正常 16s，但上游慢时会被 exec-python 的 30s 超时
+ *  + 重试一次共 60s，仍可能不够）。90s 给足余量，拉取本身 graceful degrade 不会阻塞。 */
+const MACRO_FETCH_TIMEOUT_MS = 90_000;
+
+export async function fetchMacroData(date: string): Promise<MacroView | null> {
+  try {
+    const result = await execSkillScript("trading-news", "news", PROJECT_ROOT, ["--macro-only", "--date", date], null, MACRO_FETCH_TIMEOUT_MS);
+    if (!result || !result.success || !result.data) {
+      const detail = result?.error ?? "(no result / unknown error)";
+      console.error(`[data-fetcher] macro fetch failed: ${detail}`);
+      return null;
+    }
+    return parseMacroView(result.data);
+  } catch (e) {
+    console.error(`[data-fetcher] macro fetch threw: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+}
+
 /** 单股并行跑 5 个 script（kline/news/hot_money/fundamentals/lockup）。失败的 script 返回 null 字段（容忍）。 */
 export async function fetchStockData(
   ticker: string,

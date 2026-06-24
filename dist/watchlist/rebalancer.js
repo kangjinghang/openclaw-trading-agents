@@ -88,8 +88,10 @@ const REBALANCER_PROMPT_TEMPLATE = `# 角色
 {last_rebalance_json}
 
 # 候选股报告（N 只）
-{per_stock_reports}`;
-function formatRebalancerPrompt(reports, holdings, lastRebalance, c, antiChurnDays) {
+{per_stock_reports}
+
+{macro_section}`;
+function formatRebalancerPrompt(reports, holdings, lastRebalance, c, antiChurnDays, macroView) {
     const holdingsStr = JSON.stringify({
         cash_pct: holdings.cash_pct,
         positions: holdings.positions.map(p => ({
@@ -108,7 +110,54 @@ function formatRebalancerPrompt(reports, holdings, lastRebalance, c, antiChurnDa
         .replace(/\{anti_churn_days_sub\}/g, String(Math.max(antiChurnDays - 1, 0)))
         .replace("{holdings_json}", holdingsStr)
         .replace("{last_rebalance_json}", lastStr)
-        .replace("{per_stock_reports}", reportsStr);
+        .replace("{per_stock_reports}", reportsStr)
+        .replace("{macro_section}", renderMacroSection(macroView));
+}
+/** 把全市场宏观视图渲染成 rebalancer prompt 的一段（组合层上下文）。
+ *
+ *  宏观与具体股票无关（财新PMI/大宗/NBS/LPR 都是全市场信号），只在组合决策层注入一次。
+ *  让 LLM 据此判断："宏观逆风的行业应谨慎加仓 / PMI 共振向上倾向景气制造链 / 大宗
+ *  上行利好资源股"——这是组合视角的 beta 判断，单股 shallow-analyzer 看不到。
+ *  macroView 为 null/undefined → 空串（该段省略，向后兼容；拉取失败不阻塞）。 */
+function renderMacroSection(macroView) {
+    if (!macroView)
+        return "";
+    const lines = ["# 今日宏观环境（组合层上下文，影响整体 beta 判断）"];
+    // 市场倾向 + PMI 双口径信号
+    const parts = [];
+    if (macroView.market_view)
+        parts.push(`市场倾向：${macroView.market_view}`);
+    if (macroView.pmi_signal)
+        parts.push(macroView.pmi_signal);
+    if (parts.length > 0)
+        lines.push(parts.join("；"));
+    // 景气/承压板块（规则引擎推导，让 LLM 判断行业顺/逆风）
+    if (macroView.bullish_sectors && macroView.bullish_sectors.length > 0) {
+        lines.push(`景气板块：${macroView.bullish_sectors.join("、")}`);
+    }
+    if (macroView.bearish_sectors && macroView.bearish_sectors.length > 0) {
+        lines.push(`承压板块：${macroView.bearish_sectors.join("、")}`);
+    }
+    // 大宗商品周期锚（金/油/铜）
+    if (macroView.commodities) {
+        const cm = macroView.commodities;
+        const fmt = (sym) => {
+            const c = cm[sym];
+            if (!c)
+                return "";
+            const trend = c.trend ? c.trend : "";
+            const chg = typeof c.chg_5d === "number" ? `${c.chg_5d > 0 ? "+" : ""}${c.chg_5d}%` : "";
+            const label = c.label || sym;
+            return `${label}${trend ? trend : ""}${chg ? `(${chg})` : ""}`;
+        };
+        const cmParts = ["AU0", "SC0", "CU0"].map(fmt).filter(Boolean);
+        if (cmParts.length > 0)
+            lines.push(`大宗：${cmParts.join(" / ")}`);
+    }
+    if (lines.length <= 1)
+        return ""; // 只有标题行 → 视为无有效数据，省略整段
+    lines.push("（参考：宏观逆风的行业应谨慎加仓，PMI 共振向上倾向景气制造链，大宗上行利好资源股）");
+    return lines.join("\n");
 }
 function formatReportLine(r) {
     const flagStr = r.risk_flags.length > 0
@@ -363,7 +412,7 @@ async function rebalancePipeline(input) {
         fitnessByTicker,
     };
     // 4. rebalancer + revise（接入确定性仓位计算器）
-    const prompt = formatRebalancerPrompt(reports, input.holdings, input.lastRebalance, config.constraints, config.anti_churn_days);
+    const prompt = formatRebalancerPrompt(reports, input.holdings, input.lastRebalance, config.constraints, config.anti_churn_days, input.macroView);
     // 4a. 构造仓位计算器上下文：波动率（来自 data-fetcher）+ reports + 约束
     const volatilityByTicker = new Map();
     for (const [ticker, data] of dataByTicker) {

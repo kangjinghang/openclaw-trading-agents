@@ -139,6 +139,9 @@ export interface RebalancePlanFile {
     position_traces?: Record<string, string>;
     /** 数据源健康统计（子源级成功率 + 7天/30天滚动） */
     data_health?: import("./data-health-aggregator").DataHealthReport;
+    /** 全市场宏观视图（一次性抓取，注入组合决策层）。
+     *  拉取失败时不写该字段。详见 data-fetcher.ts 的 MacroView。 */
+    macro_view?: import("./data-fetcher").MacroView;
 }
 export interface RebalanceConstraints {
     single_name: number;

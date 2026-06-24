@@ -752,3 +752,23 @@ def _fetch_market_sentiment_extra(code, date):
         }
 
     return result if result else None
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Fetch fundamental data for A-share stocks")
+    parser.add_argument("--ticker", required=True, help="Stock ticker code (e.g. SH600519)")
+    parser.add_argument("--date", required=True, help="Analysis date YYYY-MM-DD")
+    args = parser.parse_args()
+
+    try:
+        data = fetch_fundamentals(args.ticker, args.date)
+        if data is None:
+            output_json(False, error="fetch_fundamentals returned no data")
+        else:
+            output_json(True, data=data, source="tencent+mootdx+eastmoney+akshare+pywencai")
+    except Exception as e:
+        output_json(False, error=str(e))
+
+
+if __name__ == "__main__":
+    main()
