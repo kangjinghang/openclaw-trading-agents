@@ -8,6 +8,7 @@ import {
   RiskJudge,
 } from "../../src/types";
 import OpenAI from "openai";
+import { LLM_DEFAULT_MAX_TOKENS } from "../../src/constants";
 
 // Mock prompt-loader to avoid disk I/O in unit tests
 vi.mock("../../src/prompt-loader", () => ({
@@ -376,7 +377,8 @@ Standard.
     const callArgs = mockCreate.mock.calls[0][0] as any;
     expect(callArgs.model).toBe("gpt-4o");
     expect(callArgs.temperature).toBe(0.3);
-    expect(callArgs.max_tokens).toBe(16000);
+    // 引用常量而非硬编码，避免 LLM_DEFAULT_MAX_TOKENS 调整时再次脱节
+    expect(callArgs.max_tokens).toBe(LLM_DEFAULT_MAX_TOKENS);
     expect(callArgs.messages[0].content).toContain(
       "A-share trader creating specific execution plans"
     );
