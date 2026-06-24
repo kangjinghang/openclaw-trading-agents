@@ -38,6 +38,9 @@ export interface LLMCallOptions {
   rateLimitCoordinator?: RateLimitCoordinator;
   /** Optional thinking mode (e.g. { type: "disabled" }) for GLM models */
   thinking?: { type: string };
+  /** JSON output mode. Pass { type: "json_object" } when the model supports it.
+   *  Parse functions always fall back to extractJson() for non-supporting models. */
+  responseFormat?: { type: "json_object" };
 }
 
 export interface LLMCallResult {
@@ -163,6 +166,7 @@ export async function callLLM(
     role,
     traceLogger,
     thinking,
+    responseFormat,
   } = options;
 
   let lastError: unknown;
@@ -200,6 +204,7 @@ export async function callLLM(
           temperature,
           max_tokens: maxTokens,
           ...(thinking ? { thinking } : {}),
+          ...(responseFormat ? { response_format: responseFormat } : {}),
         };
         response = await client.chat.completions.create(body as any, { signal: controller.signal });
       } finally {

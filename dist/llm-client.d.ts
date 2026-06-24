@@ -28,6 +28,11 @@ export interface LLMCallOptions {
     thinking?: {
         type: string;
     };
+    /** JSON output mode. Pass { type: "json_object" } when the model supports it.
+     *  Parse functions always fall back to extractJson() for non-supporting models. */
+    responseFormat?: {
+        type: "json_object";
+    };
 }
 export interface LLMCallResult {
     content: string;
