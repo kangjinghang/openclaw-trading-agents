@@ -109,6 +109,8 @@ export interface StabilityStats {
   numeric_cv: number | null;
   // risk: overall_risk 众数一致率；其余: null
   mode_consistency: number | null;
+  // risk: deal_breaker true 占比；其余: null
+  deal_breaker_true_rate: number | null;
   // rank: top-3 一致率；其余: null
   topk_consistency: number | null;
   // rank: 与 baseline 分数差均值；其余: null

@@ -93,7 +93,12 @@ export function parseOutput(rawContent: string): ParsedOutput {
     if (typeof d.fitness_score === "number") out.fitness_score = d.fitness_score;
     if (typeof d.thesis === "string") out.thesis = d.thesis;
     if (typeof d.overall_risk === "string") out.overall_risk = d.overall_risk;
-    if (Array.isArray(d.risk_flags)) out.risk_flags = d.risk_flags;
+    if (Array.isArray(d.risk_flags)) {
+      // 只保留结构合法的 flag 项（flag/severity 是字符串），避免脏 JSON 让类型失真
+      out.risk_flags = d.risk_flags
+        .filter((f: any) => f && typeof f.flag === "string" && typeof f.severity === "string")
+        .map((f: any) => ({ flag: f.flag, severity: f.severity }));
+    }
     if (typeof d.deal_breaker === "boolean") out.deal_breaker = d.deal_breaker;
     return out;
   } catch {
@@ -139,7 +144,9 @@ export function selectTraces(
 
   let files = fs.readdirSync(traceDir).filter(f => f.endsWith(".json")).sort();
   if (sel.roles && sel.roles.length > 0) {
-    files = files.filter(f => sel.roles!.some(r => f.startsWith(r + "-") || f.startsWith(r)));
+    // role 作为文件名前缀（= `${role}-trace-...`）。用 `${r}-` 精确匹配，
+    // 避免 "analyst" 误匹配到 "analyst-shallow"（roles 是完整 role 名）。
+    files = files.filter(f => sel.roles!.some(r => f.startsWith(r + "-")));
   }
   if (sel.limit && sel.limit > 0) files = files.slice(0, sel.limit);
 
@@ -248,6 +255,7 @@ export function computeStability(
 
   let numeric_cv: number | null = null;
   let mode_consistency: number | null = null;
+  let deal_breaker_true_rate: number | null = null;
   let topk_consistency: number | null = null;
   let baseline_score_diff: number | null = null;
 
@@ -271,6 +279,13 @@ export function computeStability(
     mode_consistency = modeConsistency(risks);
     const flagCounts = okCalls.map(c => (c.parsed.risk_flags || []).length);
     numeric_cv = coefficientOfVariation(flagCounts);
+    // deal_breaker true 占比（true 出现次数 / 总数）
+    const dealBreakers = okCalls
+      .map(c => c.parsed.deal_breaker)
+      .filter((v): v is boolean => typeof v === "boolean");
+    deal_breaker_true_rate = dealBreakers.length > 0
+      ? dealBreakers.filter(Boolean).length / dealBreakers.length
+      : null;
     for (const r of risks) distribution[r] = (distribution[r] || 0) + 1;
   } else {
     // analyst-shallow
@@ -284,7 +299,7 @@ export function computeStability(
   return {
     config_id: configId,
     trace_file: trace.file,
-    numeric_cv, mode_consistency, topk_consistency, baseline_score_diff,
+    numeric_cv, mode_consistency, deal_breaker_true_rate, topk_consistency, baseline_score_diff,
     distribution,
   };
 }
@@ -339,7 +354,10 @@ export function formatReport(
       const s = stability.find(x => x.config_id === cid && x.trace_file === tf);
       if (!s) return "-";
       if (isRank) return s.topk_consistency !== null ? `top-K=${s.topk_consistency.toFixed(2)}` : "-";
-      if (s.mode_consistency !== null) return `众数=${(s.mode_consistency * 100).toFixed(0)}%`;
+      if (s.mode_consistency !== null) {
+        const db = s.deal_breaker_true_rate !== null ? ` / dealbreaker=${(s.deal_breaker_true_rate * 100).toFixed(0)}%` : "";
+        return `众数=${(s.mode_consistency * 100).toFixed(0)}%${db}`;
+      }
       return s.numeric_cv !== null ? `CV=${s.numeric_cv.toFixed(2)}` : "-";
     });
     lines.push(`| ${cid} | ${cells.join(" | ")} |`);
@@ -402,6 +420,9 @@ function readTracePrompt(trace: SelectedTrace): { system: string; user: string }
  * 生产用 caller：用 callLLM 回放单条 trace。
  * 给整个 run 一个临时 TraceLogger（写 tmpdir，仅满足 callLLM 签名，bench 不读其 trace）。
  * 同 provider 的 config 共享一个 RateLimitCoordinator（429 协调）。
+ *
+ * prompt 按 trace 文件名缓存（同一 trace 的所有 config × repeat 读同一份文件，
+ * 不必每次重读 12KB 的 rank user_message）。
  */
 export function makeCaller(
   clients: Record<string, OpenAI>,
@@ -409,6 +430,7 @@ export function makeCaller(
 ): BenchCaller {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "bench-trace-"));
   const traceLogger = new TraceLogger(tmpDir, "bench");
+  const promptCache = new Map<string, { system: string; user: string }>();
 
   return async ({ trace, config }): Promise<BenchCallOutcome> => {
     const client = clients[config.provider];
@@ -416,8 +438,12 @@ export function makeCaller(
     const start = Date.now();
     try {
       if (coordinator) await coordinator.waitIfNeeded();
-      // prompt 原样从 trace 读——绝不重新生成
-      const prompt = readTracePrompt(trace);
+      // prompt 原样从 trace 读——绝不重新生成；按文件名缓存避免重复读盘
+      let prompt = promptCache.get(trace.file);
+      if (!prompt) {
+        prompt = readTracePrompt(trace);
+        promptCache.set(trace.file, prompt);
+      }
       const result = await callLLM(client, {
         model: config.model,
         systemPrompt: prompt.system,
