@@ -24,12 +24,44 @@ export interface LastRebalanceAction {
   weight: number;
 }
 
+export interface Fill {
+  ticker: string;
+  action: "BUY" | "SELL" | "ADD" | "REDUCE";
+  /** QMT 委托号，溯源/撤单用。pending 时为空串。 */
+  order_sys_id: string;
+  filled_price: number;
+  filled_volume: number;             // 实际成交股数
+  intended_volume: number;           // 计划股数，部分成交时对比
+  status: "filled" | "partial" | "rejected" | "cancelled";
+}
+
+export type ExecStatus = "pending" | "executing" | "filled" | "partial" | "failed";
+
+export interface Execution {
+  status: ExecStatus;
+  /** ISO timestamp，云服务器回填。pending/executing 时为 null。 */
+  executed_at: string | null;
+  /** 执行时总资产（元），对账溯源用（下单换算用实时查的值）。pending 时为 null。 */
+  account_total_asset: number | null;
+  fills: Fill[];
+  errors: string[];
+}
+
 export interface LastRebalance {
   date: string;
+  /** 幂等键：date + "-" + sha256(canonicalize(actions)).slice(0,6)。
+   *  旧版无此字段（视为 pending 旧订单）。 */
+  order_id?: string;
   actions: LastRebalanceAction[];
+  /** Mac 算好的下单顺序（SELL→REDUCE→BUY→ADD，按 |delta| 降序）。
+   *  供云服务器 Python 直接读、不重算。旧版无此字段。 */
+  execution_sequence?: ExecutionStep[];
   /** ticker → 最近卖出日期（YYYY-MM-DD）。跨多次 rebalance 累积，用于 anti-churn 买锁。
    *  旧版 last_rebalance.json 无此字段（向后兼容：undefined 视为空）。 */
   recent_sells?: Record<string, string>;
+  /** 订单执行状态机。云服务器执行后回填。开发机产出时写 pending 占位。
+   *  旧版无此字段（视为从未执行）。 */
+  execution?: Execution;
 }
 
 // ═══ shallow-analyzer 产物 ═══
