@@ -153,3 +153,74 @@ export function selectTraces(
     };
   });
 }
+
+/** 单次回放的入参（传给 caller） */
+export interface BenchCallArgs {
+  trace: SelectedTrace;
+  config: BenchConfigEntry;
+  configId: string;
+  repeat: number;
+}
+
+/** 单次回放的返回（caller 实现生产=callLLM，测试=mock）。 */
+export interface BenchCallOutcome {
+  ok: boolean;
+  duration_ms: number;
+  usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  cost_usd: number;
+  raw_content: string;
+  parsed: ParsedOutput;
+  error?: string;
+}
+
+/** 注入点：runner 不直接调 callLLM，由 CLI 注入（生产）或测试 mock。 */
+export type BenchCaller = (args: BenchCallArgs) => Promise<BenchCallOutcome>;
+
+/**
+ * 回放执行器：对每个 trace × config × repeat 调 caller。
+ * 失败不中断——单次失败记 ok:false，继续后续。
+ * 不同 config 间并行（Promise.all），同 config 内 traces×repeats 串行
+ * （caller 内部限流协调负责同 provider 退避）。
+ */
+export async function runReplay(
+  traces: SelectedTrace[],
+  configs: BenchConfigEntry[],
+  repeats: number,
+  caller: BenchCaller,
+): Promise<BenchCallResult[]> {
+  const results: BenchCallResult[] = [];
+
+  await Promise.all(configs.map(async (config) => {
+    for (const trace of traces) {
+      for (let repeat = 0; repeat < repeats; repeat++) {
+        try {
+          const outcome = await caller({ trace, config, configId: config.id, repeat });
+          results.push({
+            trace_file: trace.file,
+            config_id: config.id,
+            repeat,
+            ok: outcome.ok,
+            duration_ms: outcome.duration_ms,
+            usage: outcome.usage,
+            cost_usd: outcome.cost_usd,
+            raw_content: outcome.raw_content,
+            parsed: outcome.parsed,
+            ...(outcome.error ? { error: outcome.error } : {}),
+          });
+        } catch (e) {
+          // caller 自身抛错（不该发生，但兜底）——记失败继续
+          results.push({
+            trace_file: trace.file, config_id: config.id, repeat,
+            ok: false, duration_ms: 0,
+            usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+            cost_usd: 0, raw_content: "", parsed: { _parse_ok: false },
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
+    }
+  }));
+
+  return results;
+}
+

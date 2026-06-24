@@ -175,3 +175,60 @@ describe("selectTraces", () => {
     expect(selected[0].path).toContain("2026-06-23");
   });
 });
+
+import { runReplay, type BenchCaller } from "../../src/watchlist/bench-runner";
+
+describe("runReplay", () => {
+  let tmpRoot: string;
+  beforeEach(() => { tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bench-")); });
+  afterEach(() => { fs.rmSync(tmpRoot, { recursive: true, force: true }); });
+
+  it("runs traces × configs × repeats, records ok and failures without aborting", async () => {
+    // 1 trace, 2 configs, 2 repeats = 4 calls
+    const traceDir = path.join(tmpRoot, "scan", "2026-06-23", "traces");
+    fs.mkdirSync(traceDir, { recursive: true });
+    writeTrace(traceDir, "long-ranker-trace-1.json", "long-ranker", "rank", "x", "{}");
+
+    const traces = selectTraces(tmpRoot, { phase: "rank", date: "2026-06-23" });
+    const configs = [
+      { id: "c1", provider: "p", model: "m1" },
+      { id: "c2", provider: "p", model: "m2" },
+    ];
+
+    // mock caller: c1 总成功；c2 第 0 次 repeat 失败
+    const caller: BenchCaller = async (args) => {
+      if (args.configId === "c2" && args.repeat === 0) {
+        return { ok: false, error: "429 exhausted", duration_ms: 100, usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }, cost_usd: 0, raw_content: "", parsed: { _parse_ok: false } };
+      }
+      return {
+        ok: true, duration_ms: 500, cost_usd: 0.01,
+        usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+        raw_content: JSON.stringify({ ranked: [{ ticker: "a", score: 9 }] }),
+        parsed: { _parse_ok: true, ranked: [{ ticker: "a", score: 9 }] },
+      };
+    };
+
+    const results = await runReplay(traces, configs, 2, caller);
+    expect(results).toHaveLength(4);   // 1 trace × 2 config × 2 repeat
+    const failed = results.filter(r => !r.ok);
+    expect(failed).toHaveLength(1);
+    expect(failed[0].config_id).toBe("c2");
+    expect(failed[0].repeat).toBe(0);
+    expect(failed[0].error).toBe("429 exhausted");
+    // 每条都有 trace_file / config_id / repeat
+    expect(results[0].trace_file).toBe("long-ranker-trace-1.json");
+  });
+
+  it("survives caller throwing (records as failure, continues)", async () => {
+    const traceDir = path.join(tmpRoot, "scan", "2026-06-23", "traces");
+    fs.mkdirSync(traceDir, { recursive: true });
+    writeTrace(traceDir, "long-ranker-trace-1.json", "long-ranker", "rank", "x", "{}");
+    const traces = selectTraces(tmpRoot, { phase: "rank", date: "2026-06-23" });
+
+    const caller: BenchCaller = async () => { throw new Error("boom"); };
+    const results = await runReplay(traces, [{ id: "c1", provider: "p", model: "m" }], 1, caller);
+    expect(results).toHaveLength(1);
+    expect(results[0].ok).toBe(false);
+    expect(results[0].error).toBe("boom");
+  });
+});
