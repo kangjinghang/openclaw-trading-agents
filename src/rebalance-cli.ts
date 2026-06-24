@@ -18,6 +18,8 @@ import { generateDataTraceReport } from "./watchlist/data-trace-report";
 import { FitnessHistoryStore, type FitnessRecord } from "./watchlist/fitness-history-store";
 import { backfillReturns } from "./watchlist/fitness-backfiller";
 import type { LastRebalance, RebalancePlanFile, ActionType } from "./watchlist/rebalance-types";
+import { computeOrderId } from "./watchlist/order-id";
+import { makePendingExecution } from "./watchlist/execution-schema";
 import type { ScanSummary } from "./watchlist/types";
 import type { SourceCall } from "./types";
 
@@ -313,12 +315,20 @@ Options:
       if (new Date(d + "T00:00:00+08:00").getTime() < cutoffMs) delete mergedSells[tick];
     }
 
+    const newActions = result.rebalancer_output.actions
+      .filter(a => a.action !== "HOLD")
+      .map(a => ({ action: a.action as "BUY" | "SELL" | "ADD" | "REDUCE", ticker: a.ticker, weight: a.target_weight }));
+
     const newLast: LastRebalance = {
       date,
-      actions: result.rebalancer_output.actions
-        .filter(a => a.action !== "HOLD")
-        .map(a => ({ action: a.action as "BUY" | "SELL" | "ADD" | "REDUCE", ticker: a.ticker, weight: a.target_weight })),
+      order_id: computeOrderId(date, newActions),
+      actions: newActions,
+      // execution_sequence 由现有 buildExecutionPlan 算好（SELL→REDUCE→BUY→ADD），
+      // 云服务器 Python 直接读、不重算，避免排序逻辑双端漂移。
+      execution_sequence: result.execution_plan.execution_sequence,
       recent_sells: mergedSells,
+      // execution 信封：开发机产 pending 占位，云服务器执行后回填。
+      execution: makePendingExecution(),
     };
     writeAtomicJson(path.join(watchlistDir, "last_rebalance.json"), newLast);
   }
