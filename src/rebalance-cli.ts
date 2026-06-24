@@ -179,7 +179,7 @@ Options:
   const seen = new Set<string>();
   const dedupMetas = metasForFetch.filter(m => seen.has(m.ticker) ? false : (seen.add(m.ticker), true));
   console.log(`  拉数据: ${dedupMetas.length} 只股 × 4 scripts（并行 5）`);
-  const dataByTicker = await fetchAllStockData(dedupMetas, 5);
+  const { dataByTicker, globalCalls } = await fetchAllStockData(dedupMetas, 5);
   console.log(`  数据就绪: ${dataByTicker.size}/${dedupMetas.length} 只`);
 
   // 宏观环境（全市场信号，一次性抓取，注入 rebalancer 组合决策层）。
@@ -209,8 +209,9 @@ Options:
     },
   });
 
-  // 收集数据源健康统计：从 dataByTicker 里提取每个股的 calls，聚合为 run 级别
-  const allCalls: SourceCall[] = [];
+  // 收集数据源健康统计：全局 hot_money 源（northbound/sector_fund_flow/hot_stocks）只记录一次，
+  // 各股的 calls 不再包含这 3 个全局源（由 fetchAllStockData 预取注入）。
+  const allCalls: SourceCall[] = [...globalCalls];
   for (const stockData of dataByTicker.values()) {
     if (stockData.calls) allCalls.push(...stockData.calls);
   }

@@ -1,4 +1,5 @@
 import type { StockData, NewsItem, NewsLayerStats, HotMoneyData, QuarterlyTrend, ConsensusEps, LockupData } from "./shallow-analyzer";
+import type { SourceCall } from "../types";
 /** 量比：近 recentDays 日均量 / 前 windowDays 日均量。
  *  典型用法：computeVolumeRatio(volumes, 5) = 近5日均量 / 20日均量。
  *  - ratio < 0.8 → 缩量（趋势可能衰竭，量价背离风险）
@@ -92,12 +93,29 @@ export interface MacroView {
 export declare function parseMacroView(raw: any): MacroView | null;
 export declare function fetchMacroData(date: string): Promise<MacroView | null>;
 /** 单股并行跑 5 个 script（kline/news/hot_money/fundamentals/lockup）。失败的 script 返回 null 字段（容忍）。 */
-export declare function fetchStockData(ticker: string, name: string, sector: string, rankerThesis?: string): Promise<StockData | null>;
-/** 跨股并行 fetch（concurrency=5）。失败的股跳过。 */
+export declare function fetchStockData(ticker: string, name: string, sector: string, rankerThesis?: string, options?: {
+    globalHotMoneyJson?: string;
+    date?: string;
+}): Promise<StockData | null>;
+/** 一次性拉取 hot_money 全局源（northbound / sector_fund_flow / hot_stocks），
+ *  返回预取数据 + 子源级调用记录。失败返回 null（graceful degrade）。 */
+export declare function fetchGlobalHotMoneyData(date: string): Promise<{
+    globalHotMoney: {
+        northbound: any;
+        sector_fund_flow: any;
+        hot_stocks: any;
+    } | null;
+    calls: SourceCall[];
+}>;
+/** 跨股并行 fetch（concurrency=5）。失败的股跳过。
+ *  返回 dataByTicker + globalCalls（全局 hot_money 源的调用记录，供 data-health 聚合）。 */
 export declare function fetchAllStockData(metas: Array<{
     ticker: string;
     name: string;
     sector: string;
     ranker_thesis?: string;
-}>, concurrency?: number): Promise<Map<string, StockData>>;
+}>, concurrency?: number): Promise<{
+    dataByTicker: Map<string, StockData>;
+    globalCalls: SourceCall[];
+}>;
 //# sourceMappingURL=data-fetcher.d.ts.map

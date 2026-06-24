@@ -377,15 +377,28 @@ def _fetch_sector_fund_flow(top_n=8):
     return result
 
 
-def fetch_hot_money(ticker, date):
-    """Fetch all hot money data."""
+def fetch_hot_money(ticker, date, global_data=None):
+    """Fetch all hot money data.
+
+    Args:
+        global_data: Optional pre-fetched global data dict with keys
+            northbound/sector_fund_flow/hot_stocks. When provided, these 3
+            sources are NOT fetched again (saving N-1 duplicate HTTP calls).
+            Per-stock sources (fund_flow, dragon_tiger) are always fetched.
+    """
     code = normalize_ticker(ticker)
     data = {"ticker": code, "date": date}
 
-    data["northbound"] = _fetch_northbound()
+    if global_data:
+        data["northbound"] = global_data.get("northbound")
+        data["sector_fund_flow"] = global_data.get("sector_fund_flow")
+        data["hot_stocks"] = global_data.get("hot_stocks")
+    else:
+        data["northbound"] = _fetch_northbound()
+        data["sector_fund_flow"] = _fetch_sector_fund_flow()
+        data["hot_stocks"] = _fetch_hot_stocks(date)
+
     data["fund_flow"] = _fetch_fund_flow(code, date)
-    data["sector_fund_flow"] = _fetch_sector_fund_flow()
-    data["hot_stocks"] = _fetch_hot_stocks(date)
     data["dragon_tiger"] = _fetch_dragon_tiger(code, date)
     # 5-dimension quality scoring of dragon-tiger appearances (None when no
     # appearances — downstream should treat absence as "no signal", not an error).
@@ -394,14 +407,43 @@ def fetch_hot_money(ticker, date):
     return data
 
 
+def fetch_global_only(date):
+    """Fetch only global (non-ticker-specific) hot money sources.
+
+    Returns dict with northbound/sector_fund_flow/hot_stocks for injection
+    into per-stock calls via --global-data.
+    """
+    return {
+        "northbound": _fetch_northbound(),
+        "sector_fund_flow": _fetch_sector_fund_flow(),
+        "hot_stocks": _fetch_hot_stocks(date),
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Fetch hot money data for A-share stocks")
     parser.add_argument("--ticker", required=True, help="Stock ticker code")
     parser.add_argument("--date", required=True, help="Analysis date YYYY-MM-DD")
+    parser.add_argument("--global-only", action="store_true",
+                        help="Only fetch global sources (northbound/sector_fund_flow/hot_stocks)")
+    parser.add_argument("--global-data", type=str, default=None,
+                        help="Pre-fetched global data JSON (skip redundant global fetches)")
     args = parser.parse_args()
 
     try:
-        data = fetch_hot_money(args.ticker, args.date)
+        if args.global_only:
+            data = fetch_global_only(args.date)
+            output_json(True, data=data, source="eastmoney+10jqka+hexin")
+            return
+
+        global_data = None
+        if args.global_data:
+            try:
+                global_data = json.loads(args.global_data)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        data = fetch_hot_money(args.ticker, args.date, global_data=global_data)
         output_json(True, data=data, source="eastmoney+10jqka+hexin")
     except Exception as e:
         output_json(False, error=str(e))

@@ -413,6 +413,7 @@ export async function fetchStockData(
   name: string,
   sector: string,
   rankerThesis?: string,
+  options?: { globalHotMoneyJson?: string; date?: string },
 ): Promise<StockData | null> {
   // news.py 的 --ticker/--date 是 required（skills/trading-news/scripts/news.py:262-263），
   // 老实现只传 [ticker] 位置参数 → argparse 报错 → news 恒为 []。
@@ -420,15 +421,19 @@ export async function fetchStockData(
   // --skip-macro：shallow 不消费宏观新闻（与 ticker 无关、N 股重复拉取纯浪费），
   // 省掉 CLS+akshare 两路 HTTP（实测单股 1.27s→0.37s，-71%）。
   // 用北京时间（UTC+8）而非 UTC，避免北京 0-8 点日期早一天
-  const today = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
+  const today = options?.date ?? new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
   // 5 个脚本的 CLI 参数（--ticker/--date 均为 argparse 命名参数，required=True）：
   // 老实现只传 [ticker] 裸位置参数 → argparse 报错 exit 2 → safeCall 恒返回 null → 全零默认值。
   // 历史上 commit 56444b0 只修了 news.py，kline/hot_money/fundamentals 漏修，本批一并补齐。
+  // hot_money: --global-data 注入预取的全局源（northbound/sector_fund_flow/hot_stocks），
+  // 避免每股重复拉取全市场数据（N→1）。
+  const hotMoneyArgs = ["--ticker", ticker, "--date", today];
+  if (options?.globalHotMoneyJson) hotMoneyArgs.push("--global-data", options.globalHotMoneyJson);
   const tasks = [
     // kline.py: --ticker required，--date 可选（default=""，kline 不消费日期）
     safeCall(() => execSkillScript("trading-kline", "kline", PROJECT_ROOT, ["--ticker", ticker])),
     safeCall(() => execSkillScript("trading-news", "news", PROJECT_ROOT, ["--ticker", ticker, "--date", today, "--lookback-days", "7", "--skip-macro"])),
-    safeCall(() => execSkillScript("trading-hot-money", "hot_money", PROJECT_ROOT, ["--ticker", ticker, "--date", today])),
+    safeCall(() => execSkillScript("trading-hot-money", "hot_money", PROJECT_ROOT, hotMoneyArgs)),
     safeCall(() => execSkillScript("trading-fundamentals", "fundamentals", PROJECT_ROOT, ["--ticker", ticker, "--date", today])),
     // lockup.py：--ticker/--date 均 required，解禁区间 [date, date+90]。全量接入（含 mootdx F10），
     // 慢（5-8s，F10 是瓶颈），但未来 90 天解禁是 rebalancer 中期组合的硬风险。
@@ -499,11 +504,50 @@ async function safeCall(fn: () => Promise<any>): Promise<{ data: any; vpa?: stri
   }
 }
 
-/** 跨股并行 fetch（concurrency=5）。失败的股跳过。 */
+/** 一次性拉取 hot_money 全局源（northbound / sector_fund_flow / hot_stocks），
+ *  返回预取数据 + 子源级调用记录。失败返回 null（graceful degrade）。 */
+export async function fetchGlobalHotMoneyData(date: string): Promise<{
+  globalHotMoney: { northbound: any; sector_fund_flow: any; hot_stocks: any } | null;
+  calls: SourceCall[];
+}> {
+  try {
+    const result = await execSkillScript(
+      "trading-hot-money", "hot_money", PROJECT_ROOT,
+      ["--ticker", "_global", "--date", date, "--global-only"],
+    );
+    if (!result?.success) return { globalHotMoney: null, calls: [] };
+    return {
+      globalHotMoney: {
+        northbound: result.data?.northbound ?? null,
+        sector_fund_flow: result.data?.sector_fund_flow ?? null,
+        hot_stocks: result.data?.hot_stocks ?? null,
+      },
+      calls: Array.isArray(result.calls) ? result.calls as SourceCall[] : [],
+    };
+  } catch {
+    return { globalHotMoney: null, calls: [] };
+  }
+}
+
+/** 跨股并行 fetch（concurrency=5）。失败的股跳过。
+ *  返回 dataByTicker + globalCalls（全局 hot_money 源的调用记录，供 data-health 聚合）。 */
 export async function fetchAllStockData(
   metas: Array<{ ticker: string; name: string; sector: string; ranker_thesis?: string }>,
   concurrency: number = 5,
-): Promise<Map<string, StockData>> {
+): Promise<{ dataByTicker: Map<string, StockData>; globalCalls: SourceCall[] }> {
+  // 用北京时间（UTC+8）避免北京 0-8 点日期早一天
+  const today = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
+
+  // 一次性拉取全局 hot_money 数据（northbound / sector_fund_flow / hot_stocks），
+  // 之后每股调用 hot_money.py 时通过 --global-data 注入，省掉 N-1 次重复 HTTP 请求。
+  const { globalHotMoney, calls: globalCalls } = await fetchGlobalHotMoneyData(today);
+  const globalJson = globalHotMoney ? JSON.stringify(globalHotMoney) : undefined;
+  if (globalHotMoney) {
+    console.log(`  hot_money 全局源: 预取成功（northbound/sector_fund_flow/hot_stocks × 1）`);
+  } else {
+    console.log(`  hot_money 全局源: 预取失败，每股独立拉取（退化为旧行为）`);
+  }
+
   const result = new Map<string, StockData>();
   const queue = [...metas];
   const workers: Promise<void>[] = [];
@@ -512,7 +556,10 @@ export async function fetchAllStockData(
       while (queue.length > 0) {
         const meta = queue.shift()!;
         try {
-          const data = await fetchStockData(meta.ticker, meta.name, meta.sector, meta.ranker_thesis);
+          const data = await fetchStockData(meta.ticker, meta.name, meta.sector, meta.ranker_thesis, {
+            globalHotMoneyJson: globalJson,
+            date: today,
+          });
           if (data) result.set(meta.ticker, data);
         } catch {
           // 跳过失败的股
@@ -521,5 +568,5 @@ export async function fetchAllStockData(
     })());
   }
   await Promise.all(workers);
-  return result;
+  return { dataByTicker: result, globalCalls };
 }
