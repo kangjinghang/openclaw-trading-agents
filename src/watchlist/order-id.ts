@@ -12,7 +12,11 @@ import type { LastRebalanceAction } from "./rebalance-types";
 
 /** 规范化 actions 到稳定字符串：按 ticker 排序，weight 四舍五入到 4 位。 */
 export function canonicalizeActions(actions: LastRebalanceAction[]): string {
-  const sorted = [...actions].sort((a, b) => a.ticker.localeCompare(b.ticker));
+  // 用字节比较而非 localeCompare：order_id 可能跨多台开发机计算，需保证
+  // 排序结果与 Node ICU 数据无关（不同机器/Node 构建可能 locale 行为不同）。
+  // ticker 都是 ASCII，简单 < / > 比较即可确定且无歧义。
+  const sorted = [...actions].sort((a, b) =>
+    a.ticker < b.ticker ? -1 : a.ticker > b.ticker ? 1 : 0);
   return JSON.stringify(sorted.map(a => ({
     action: a.action,
     ticker: a.ticker,

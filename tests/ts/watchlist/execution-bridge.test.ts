@@ -59,6 +59,10 @@ describe("syncPush — 正常流程", () => {
   });
 });
 
+// 注意：本文件 mock 了 fs + child_process，只验证 syncPush 的控制流
+// （复制顺序、abort 时机、git 命令序列）。它**不能**验证真实 git 的
+// fast-forward/push 行为——"后写胜出"在真实 git 下是否成功 push 由
+// execution-bridge-git.test.ts（真实临时 git repo）覆盖。
 describe("syncPush — 冲突仲裁", () => {
   it("本地 pending 撞远端 filled → 抛 ConflictAbortedError", async () => {
     const remoteFilled = JSON.stringify({
