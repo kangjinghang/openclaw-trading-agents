@@ -310,7 +310,12 @@ function enrichRanked(llmRanked, lookup) {
         }
         return {
             ticker: r.ticker,
-            name: r.name,
+            // 用候选池的权威 name 覆盖 LLM 输出 —— LLM 偶尔会把另一只股票的名称/理由
+            // 串到真实存在的 ticker 上（如把"大元泵业"的液冷泵理由挂到 SH603259，而
+            // 603259 实为药明康德）。parseRankResponse 只校验 ticker 真实性，无法发现
+            // 这类 ticker-name 错配；候选池的 name 来自 candidates（雪球原始数据），
+            // 是权威来源，用它覆盖可阻断串号向下游 rebalance 传播。
+            name: c.name,
             score: r.score,
             percent: c.range.percent,
             days: c.days,
@@ -552,12 +557,18 @@ async function rankGroup(group, pool, totalPreFilter, totalPostCommon, topN, sca
     // LLM 成功：补齐字段，尊重 LLM 实际选出的数量（不足 topN 不补齐）
     const lookup = new Map(pool.map((c) => [c.ticker, c]));
     const ranked = enrichRanked(llmResult.ranked, lookup);
+    // excluded 同样用候选池权威 name 覆盖（同 enrichRanked 的 ticker-name 串号防护）
+    const excluded = llmResult.excluded.map((e) => ({
+        ticker: e.ticker,
+        name: lookup.get(e.ticker)?.name ?? e.name,
+        reason: e.reason,
+    }));
     return {
         ...base,
         ranked_count: ranked.length,
-        excluded_count: llmResult.excluded.length,
+        excluded_count: excluded.length,
         ranked,
-        excluded: llmResult.excluded,
+        excluded,
     };
 }
 /** 合并 scan.json。top_picks 跨组按 score 降序。 */

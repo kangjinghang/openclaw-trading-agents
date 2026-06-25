@@ -273,6 +273,7 @@ describe("enrichRanked", () => {
   it("LLM 返回字段 + 候选股反查 → 补 percent/days/range_kind", () => {
     const c = makeCandidate({
       ticker: "SZ000001",
+      name: "测试股",
       range: { ...DEFAULT_RANGE, percent: 371.9 },
       days: 86,
       range_kind: "new",
@@ -284,7 +285,8 @@ describe("enrichRanked", () => {
     );
     expect(out[0]).toEqual({
       ticker: "SZ000001",
-      name: "x",
+      // name 取候选池权威值（makeCandidate 设的"测试股"），非 LLM 的"x"
+      name: "测试股",
       score: 9.0,
       percent: 371.9,
       days: 86,
@@ -300,6 +302,22 @@ describe("enrichRanked", () => {
     );
     expect(out[0].percent).toBe(0);
     expect(out[0].days).toBe(0);
+  });
+
+  it("LLM 串号（ticker 真实但 name 错配）时用候选池权威 name 覆盖", () => {
+    // 复现真实 bug：candidates 里 SH603259=药明康德（权威），但 LLM 把
+    // 大元泵业（真实代码 SH603757）的理由串到了 SH603259。parseRankResponse
+    // 只校验 ticker 真实性，放行了这类错配；enrichRanked 必须用候选池 name 纠正。
+    const lookup = new Map([
+      ["SH603259", makeCandidate({ ticker: "SH603259", name: "药明康德" })],
+    ]);
+    const out = enrichRanked(
+      [{ ticker: "SH603259", name: "大元泵业", score: 9.5, reason: "谷歌液冷泵订单" }],
+      lookup,
+    );
+    expect(out[0].name).toBe("药明康德");
+    // reason 是 LLM 的分析，保留不覆盖（即便串号，理由本身可能仍可读）
+    expect(out[0].reason).toBe("谷歌液冷泵订单");
   });
 });
 
