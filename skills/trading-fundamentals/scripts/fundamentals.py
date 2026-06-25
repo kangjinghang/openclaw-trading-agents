@@ -11,7 +11,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
 from http_helpers import tencent_quote, em_get, output_json, normalize_ticker, record_error, record_call, pywencai_query
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 
 
 # ── 同花顺问财 8 项能力评分 ──────────────────────────────────────────
@@ -661,15 +661,18 @@ def _calc_arbr(df, period=26):
     AR = SUM(H-O, period) / SUM(O-L, period) * 100
     BR = SUM(H-prev_close, period) / SUM(prev_close-L, period) * 100
 
+    兼容英文列名（mootdx: open/high/low/close）和中文列名（akshare: 开盘/最高/最低/收盘）。
     Returns dict with ar, br, signals, and historical stats.
     """
     if df is None or len(df) < period + 1:
         return None
     try:
-        h = df["最高"].astype(float).values
-        o = df["开盘"].astype(float).values
-        l = df["最低"].astype(float).values
-        c = df["收盘"].astype(float).values
+        def pick(key_en, key_cn):
+            return df[key_en] if key_en in df.columns else df[key_cn]
+        h = pick("high", "最高").astype(float).values
+        o = pick("open", "开盘").astype(float).values
+        l = pick("low", "最低").astype(float).values
+        c = pick("close", "收盘").astype(float).values
     except (KeyError, ValueError):
         return None
 
@@ -711,20 +714,18 @@ def _fetch_market_sentiment_extra(code, date):
     """Fetch ARBR(26日) + turnover interpretation for cross-validation.
 
     Returns dict with arbr and turnover fields, or None on total failure.
-    """
-    try:
-        import akshare as ak
-    except ImportError:
-        return None
 
+    ARBR 用 mootdx（通达信 TCP，稳定）拉日K——旧实现用 ak.stock_zh_a_hist（新浪 HTTP）
+    被持续封禁导致 ARBR 恒失败；mootdx 与 kline.py 同源，0.1s 拿 160 根日K。
+    """
     result = {}
 
-    # ARBR: need ~150 daily bars
+    # ARBR: mootdx 日K（~160 根，覆盖 26 日周期 + 余量）
     try:
-        end = date
-        start = (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=200)).strftime("%Y-%m-%d")
-        df = ak.stock_zh_a_hist(symbol=code, period="daily",
-                                start_date=start, end_date=end, adjust="qfq")
+        from mootdx.quotes import Quotes
+        market = 1 if code.startswith("6") else 0
+        quotes = Quotes.factory(market=market, timeout=10)
+        df = quotes.bars(symbol=code, category=9, start=0, offset=160)
         if df is not None and len(df) >= 30:
             arbr = _calc_arbr(df, period=26)
             if arbr:
@@ -732,11 +733,12 @@ def _fetch_market_sentiment_extra(code, date):
     except Exception:
         pass
 
-    # Turnover: from tencent_quote already fetched in valuation
-    # Include interpretation bands for LLM context
+    # Turnover: from tencent_quote（与 valuation 阶段同源）
+    # 注意：tencent_quote 返回 (dict, http_stats) 元组，必须解包两个值。
+    # 老实现 `tq = tencent_quote([code])` 漏解包 → tq 是元组 → `code in tq` 恒 false → 换手率恒缺失
     valuation = None
     try:
-        tq = tencent_quote([code])
+        tq, _ = tencent_quote([code])
         if code in tq:
             valuation = tq[code]
     except Exception:

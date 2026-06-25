@@ -74,28 +74,6 @@ function findLatestCandidates(dir) {
         .sort();
     return dates.length > 0 ? dates[dates.length - 1] : null;
 }
-/** 从 ~/.openclaw/openclaw.json 读 plugin config（可选；缺则用 env / 默认）。 */
-function loadPluginConfig() {
-    const openclawJson = path.join(os.homedir(), ".openclaw", "openclaw.json");
-    if (!fs.existsSync(openclawJson))
-        return {};
-    try {
-        const root = JSON.parse(fs.readFileSync(openclawJson, "utf-8"));
-        const cfg = root?.plugins?.entries?.["trading-agents"]?.config;
-        if (!cfg)
-            return {};
-        return {
-            api_key: cfg.api_key,
-            base_url: cfg.base_url,
-            // ranker 用决策层强模型（多候选排序对注意力要求高，弱模型易串号）；
-            // 优先 decision_deep > ranker > analyst
-            model: cfg.models?.decision_deep ?? cfg.models?.ranker ?? cfg.models?.analyst,
-        };
-    }
-    catch {
-        return {};
-    }
-}
 function argValue(args, key) {
     const idx = args.indexOf(key);
     return idx >= 0 && args[idx + 1] ? args[idx + 1] : undefined;
@@ -115,9 +93,9 @@ Options:
   --top <N>          总精选数（默认 15，仅参考；实际以 long-top+short-top 为准）
   --long-top <N>     LONG 组精选（默认 7）
   --short-top <N>    SHORT 组精选（默认 8）
-  --model <M>        模型名（默认 ${DEFAULT_MODEL}，或读 openclaw.json 的 config.models.decision_deep/ranker/analyst）
-  --api-key <K>      OpenAI 兼容 API key（默认读 openclaw.json 或 OPENAI_API_KEY）
-  --base-url <U>     OpenAI 兼容 base URL（默认读 openclaw.json 或 OPENAI_BASE_URL）
+  --model <M>        模型名（默认 ${DEFAULT_MODEL}）
+  --api-key <K>      OpenAI 兼容 API key（默认 OPENAI_API_KEY）
+  --base-url <U>     OpenAI 兼容 base URL（默认 ${DEFAULT_BASE_URL}）
   --help             显示本帮助
   WATCHLIST_DIR      存储路径（默认 ${DEFAULT_WATCHLIST_DIR}）
 `);
@@ -138,13 +116,12 @@ Options:
         console.error(`请先运行 npm run candidates -- --date ${date}`);
         process.exit(1);
     }
-    // 配置优先级：CLI args > openclaw.json > env > 默认
-    const pluginCfg = loadPluginConfig();
-    const apiKey = argValue(args, "--api-key") ?? pluginCfg.api_key ?? process.env.OPENAI_API_KEY;
-    const baseUrl = argValue(args, "--base-url") ?? pluginCfg.base_url ?? process.env.OPENAI_BASE_URL ?? DEFAULT_BASE_URL;
-    const model = argValue(args, "--model") ?? pluginCfg.model ?? DEFAULT_MODEL;
+    // 配置优先级：CLI args > env > 默认（不读 plugin config）
+    const apiKey = argValue(args, "--api-key") ?? process.env.OPENAI_API_KEY;
+    const baseUrl = argValue(args, "--base-url") ?? process.env.OPENAI_BASE_URL ?? DEFAULT_BASE_URL;
+    const model = argValue(args, "--model") ?? DEFAULT_MODEL;
     if (!apiKey) {
-        console.error(`error: 缺 API key。请通过 --api-key、openclaw.json 或 OPENAI_API_KEY 提供`);
+        console.error(`error: 缺 API key。请通过 --api-key 或 OPENAI_API_KEY 提供`);
         process.exit(2);
     }
     const clientOpts = { apiKey };

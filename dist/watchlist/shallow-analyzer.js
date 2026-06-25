@@ -92,6 +92,12 @@ function renderHotMoneySummary(h) {
             segs.push(`超大单${signPrefix(h.super_net_today)}${formatYi(h.super_net_today)}亿`);
         if (h.large_net_today !== 0)
             segs.push(`大单${signPrefix(h.large_net_today)}${formatYi(h.large_net_today)}亿`);
+        // 同花顺独有：主动性买入(流入)/卖出(流出)金额，反映资金博弈激烈度
+        // （超大单/大单五档同花顺不提供，用流入/流出补充维度，而非伪装成超大单）
+        if (h.inflow_today !== 0 || h.outflow_today !== 0) {
+            segs.push(`流入${formatYi(h.inflow_today)}亿`);
+            segs.push(`流出${formatYi(h.outflow_today)}亿`);
+        }
         parts.push(segs.join("/"));
     }
     // 龙虎榜（游资/机构席位动向）+ 上榜原因（区分游资炒作 vs 业绩驱动）

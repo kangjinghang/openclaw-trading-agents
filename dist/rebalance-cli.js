@@ -61,32 +61,6 @@ function argValue(args, key) {
     const idx = args.indexOf(key);
     return idx >= 0 && args[idx + 1] ? args[idx + 1] : undefined;
 }
-/** 读取 plugin config（~/.openclaw/openclaw.json → plugins.entries.trading-agents.config）。
- *  与 rank-cli 的 loadPluginConfig 同源；扩展读 llm_concurrency / shallow_concurrency，
- *  让 rebalance 的 shallow-analyzer 并发可配置（避免 GLM-5.x 推理模型 429）。 */
-function loadPluginConfig() {
-    const openclawJson = path.join(os.homedir(), ".openclaw", "openclaw.json");
-    if (!fs.existsSync(openclawJson))
-        return {};
-    try {
-        const root = JSON.parse(fs.readFileSync(openclawJson, "utf-8"));
-        const cfg = root?.plugins?.entries?.["trading-agents"]?.config;
-        if (!cfg)
-            return {};
-        return {
-            api_key: cfg.api_key,
-            base_url: cfg.base_url,
-            model: cfg.models?.analyst,
-            // shallow_concurrency 优先于 llm_concurrency（rebalance 专用细粒度控制）
-            shallow_concurrency: typeof cfg.shallow_concurrency === "number"
-                ? cfg.shallow_concurrency
-                : typeof cfg.llm_concurrency === "number" ? cfg.llm_concurrency : undefined,
-        };
-    }
-    catch {
-        return {};
-    }
-}
 function findLatestScan(watchlistDir) {
     const scanRoot = path.join(watchlistDir, "scan");
     if (!fs.existsSync(scanRoot))
@@ -111,6 +85,7 @@ Options:
   --model <M>        模型（默认 glm-5-turbo）可选: glm-5.2, glm-5.1, glm-5-turbo, glm-5, glm-4.7, glm-4.7-flash, glm-4.7-flashx, glm-4.6, glm-4.5-air, glm-4.5-airx, glm-4.5-flash
   --api-key <K>      API key（默认 OPENAI_API_KEY env）
   --base-url <U>     base URL（默认 OPENAI_BASE_URL env）
+  --shallow-concurrency <N>  shallow-analyzer 并发（默认 2；GLM-5.x 推理模型 429 时调小）
   --sync <DIR>       跑完后把 holdings+last_rebalance 推到 trading-state repo（DIR）
                      （默认 TRADING_STATE_REPO env；不传则不推送，仅落盘本地）
   --help             显示本帮助
@@ -148,11 +123,10 @@ Options:
     catch (e) {
         console.error(`  [fitness-history] backfill 跳过: ${e instanceof Error ? e.message : e}`);
     }
-    // LLM 配置（优先级：CLI args > plugin config (openclaw.json) > env > 默认）
-    const pluginCfg = loadPluginConfig();
-    const apiKey = argValue(args, "--api-key") ?? pluginCfg.api_key ?? process.env.OPENAI_API_KEY;
-    const baseUrl = argValue(args, "--base-url") ?? pluginCfg.base_url ?? process.env.OPENAI_BASE_URL ?? "https://open.bigmodel.cn/api/coding/paas/v4";
-    const model = argValue(args, "--model") ?? pluginCfg.model ?? "glm-5-turbo";
+    // LLM 配置（优先级：CLI args > env > 代码默认；不读 plugin config）
+    const apiKey = argValue(args, "--api-key") ?? process.env.OPENAI_API_KEY;
+    const baseUrl = argValue(args, "--base-url") ?? process.env.OPENAI_BASE_URL ?? "https://open.bigmodel.cn/api/coding/paas/v4";
+    const model = argValue(args, "--model") ?? "glm-5-turbo";
     if (!apiKey) {
         console.error(`error: 缺 API key`);
         process.exit(2);
@@ -228,15 +202,15 @@ Options:
         console.error(`  [macro] 抓取跳过: ${e instanceof Error ? e.message : e}`);
     }
     // 跑 pipeline
-    // shallow_concurrency：plugin config > 默认（DEFAULT_REBALANCE_CONFIG.shallow_concurrency=2）
-    const shallowConcurrency = pluginCfg.shallow_concurrency;
+    // shallow_concurrency：CLI > 代码默认（DEFAULT_REBALANCE_CONFIG.shallow_concurrency）
+    const shallowConcurrency = argValue(args, "--shallow-concurrency");
     const result = await (0, rebalancer_1.rebalancePipeline)({
         scan, holdings, lastRebalance, currentDate: date,
         shallowCaller, rebalanceCaller, dataByTicker,
         macroView,
         config: {
             top_n: topN,
-            ...(shallowConcurrency !== undefined ? { shallow_concurrency: shallowConcurrency } : {}),
+            ...(shallowConcurrency !== undefined ? { shallow_concurrency: parseInt(shallowConcurrency, 10) || undefined } : {}),
         },
     });
     // 收集数据源健康统计：全局 hot_money 源（northbound/sector_fund_flow/hot_stocks）只记录一次，

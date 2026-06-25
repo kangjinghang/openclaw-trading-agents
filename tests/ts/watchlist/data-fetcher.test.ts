@@ -213,16 +213,24 @@ describe("parseHotMoney", () => {
   it("缺字段 → 全 0/空（容忍，不抛）", () => {
     expect(parseHotMoney({})).toEqual({
       main_net_today: 0, super_net_today: 0, large_net_today: 0,
+      inflow_today: 0, outflow_today: 0,
       northbound_yi: 0, northbound_signal: "",
       sector_in_industry_tag: "",
+      dragon_tiger_recent: undefined, dragon_tiger_reason: undefined,
+      sector_inflow_top: undefined, sector_outflow_top: undefined,
+      hot_stocks_top: undefined,
     });
   });
 
   it("null/非对象输入 → 全 0", () => {
     expect(parseHotMoney(null)).toEqual({
       main_net_today: 0, super_net_today: 0, large_net_today: 0,
+      inflow_today: 0, outflow_today: 0,
       northbound_yi: 0, northbound_signal: "",
       sector_in_industry_tag: "",
+      dragon_tiger_recent: undefined, dragon_tiger_reason: undefined,
+      sector_inflow_top: undefined, sector_outflow_top: undefined,
+      hot_stocks_top: undefined,
     });
   });
 

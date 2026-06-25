@@ -94,7 +94,7 @@ export declare function parseMacroView(raw: any): MacroView | null;
 export declare function fetchMacroData(date: string): Promise<MacroView | null>;
 /** 单股并行跑 5 个 script（kline/news/hot_money/fundamentals/lockup）。失败的 script 返回 null 字段（容忍）。 */
 export declare function fetchStockData(ticker: string, name: string, sector: string, rankerThesis?: string, options?: {
-    globalHotMoneyJson?: string;
+    globalHotMoney?: any;
     date?: string;
 }): Promise<StockData | null>;
 /** 一次性拉取 hot_money 全局源（northbound / sector_fund_flow / hot_stocks / fund_flow），

@@ -40,6 +40,8 @@ export interface HotMoneyData {
     main_net_today: number;
     super_net_today: number;
     large_net_today: number;
+    inflow_today: number;
+    outflow_today: number;
     northbound_yi: number;
     northbound_signal: string;
     dragon_tiger_recent?: string;

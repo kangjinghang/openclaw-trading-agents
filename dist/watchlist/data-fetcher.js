@@ -186,6 +186,8 @@ exports.EMPTY_HOT_MONEY = {
     main_net_today: 0,
     super_net_today: 0,
     large_net_today: 0,
+    inflow_today: 0,
+    outflow_today: 0,
     northbound_yi: 0,
     northbound_signal: "",
     sector_in_industry_tag: "",
@@ -251,8 +253,19 @@ function parseHotMoney(raw, industry) {
         }
         // 行业归属判断：industry 非空时才比对（拉取失败则留空，renderHotMoneySummary 会省略）
         if (industry) {
-            const inHit = inflow.some((b) => typeof b?.name === "string" && b.name.includes(industry));
-            const outHit = outflow.some((b) => typeof b?.name === "string" && b.name.includes(industry));
+            // 归一化行业名：去申万罗马数字后缀（东财 BOARD_NAME 带"白酒Ⅱ"，同花顺/东财板块名可能不带），
+            // 让 fundamentals.industry（东财 datacenter BOARD_NAME）与 sector 榜单名（东财/同花顺）可对齐。
+            const norm = (s) => s.replace(/[ⅠⅡⅢⅣⅤ二三四五]+$/, "").trim();
+            const indNorm = norm(industry);
+            // 双向包含：应对"白酒"vs"白酒Ⅱ"等命名粒度差异（任意一方含对方即命中）
+            const match = (b) => {
+                if (typeof b?.name !== "string")
+                    return false;
+                const bNorm = norm(b.name);
+                return bNorm === indNorm || bNorm.includes(indNorm) || indNorm.includes(bNorm);
+            };
+            const inHit = inflow.some(match);
+            const outHit = outflow.some(match);
             sectorTag = inHit ? "主线" : outHit ? "弱势" : "未上榜";
         }
     }
@@ -270,6 +283,8 @@ function parseHotMoney(raw, industry) {
         main_net_today: num(ff.main_net),
         super_net_today: num(ff.super_net),
         large_net_today: num(ff.large_net),
+        inflow_today: num(ff.inflow),
+        outflow_today: num(ff.outflow),
         northbound_yi: num(nb?.total),
         northbound_signal: nb?.signal === "inflow" || nb?.signal === "outflow" ? nb.signal : "",
         dragon_tiger_recent: dragonTigerRecent,
@@ -435,16 +450,21 @@ async function fetchStockData(ticker, name, sector, rankerThesis, options) {
     // 5 个脚本的 CLI 参数（--ticker/--date 均为 argparse 命名参数，required=True）：
     // 老实现只传 [ticker] 裸位置参数 → argparse 报错 exit 2 → safeCall 恒返回 null → 全零默认值。
     // 历史上 commit 56444b0 只修了 news.py，kline/hot_money/fundamentals 漏修，本批一并补齐。
-    // hot_money: --global-data 注入预取的全局源（northbound/sector_fund_flow/hot_stocks），
-    // 避免每股重复拉取全市场数据（N→1）。
+    // hot_money: --global-data 注入预取的全局源（northbound/sector_fund_flow/hot_stocks/fund_flow），
+    // 避免每股重复拉取全市场数据（N→1）。全局 JSON（含 5191 只股 fund_flow）远超 Windows 命令行
+    // 32KB 限制，走 stdin（命令行只传 --global-data 无值标志，Python 端从 stdin 读 JSON）。
+    // execSkillScript 的 stdinData 是对象，exec-python 内部统一 JSON.stringify 后写入。
     const hotMoneyArgs = ["--ticker", ticker, "--date", today];
-    if (options?.globalHotMoneyJson)
-        hotMoneyArgs.push("--global-data", options.globalHotMoneyJson);
+    let hotMoneyStdin = null;
+    if (options?.globalHotMoney) {
+        hotMoneyArgs.push("--global-data");
+        hotMoneyStdin = options.globalHotMoney;
+    }
     const tasks = [
         // kline.py: --ticker required，--date 可选（default=""，kline 不消费日期）
         safeCall(() => (0, exec_python_1.execSkillScript)("trading-kline", "kline", PROJECT_ROOT, ["--ticker", ticker])),
         safeCall(() => (0, exec_python_1.execSkillScript)("trading-news", "news", PROJECT_ROOT, ["--ticker", ticker, "--date", today, "--lookback-days", "7", "--skip-macro"])),
-        safeCall(() => (0, exec_python_1.execSkillScript)("trading-hot-money", "hot_money", PROJECT_ROOT, hotMoneyArgs)),
+        safeCall(() => (0, exec_python_1.execSkillScript)("trading-hot-money", "hot_money", PROJECT_ROOT, hotMoneyArgs, hotMoneyStdin)),
         safeCall(() => (0, exec_python_1.execSkillScript)("trading-fundamentals", "fundamentals", PROJECT_ROOT, ["--ticker", ticker, "--date", today])),
         // lockup.py：--ticker/--date 均 required，解禁区间 [date, date+90]。全量接入（含 mootdx F10），
         // 慢（5-8s，F10 是瓶颈），但未来 90 天解禁是 rebalancer 中期组合的硬风险。
@@ -538,9 +558,8 @@ async function fetchAllStockData(metas, concurrency = 5) {
     // 用北京时间（UTC+8）避免北京 0-8 点日期早一天
     const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
     // 一次性拉取全局 hot_money 数据（northbound / sector_fund_flow / hot_stocks），
-    // 之后每股调用 hot_money.py 时通过 --global-data 注入，省掉 N-1 次重复 HTTP 请求。
+    // 之后每股调用 hot_money.py 时通过 stdin 注入（命令行 32KB 装不下 5191 只股 fund_flow）。
     const { globalHotMoney, calls: globalCalls } = await fetchGlobalHotMoneyData(today);
-    const globalJson = globalHotMoney ? JSON.stringify(globalHotMoney) : undefined;
     if (globalHotMoney) {
         console.log(`  hot_money 全局源: 预取成功（northbound/sector_fund_flow/hot_stocks/fund_flow × 1）`);
     }
@@ -556,7 +575,7 @@ async function fetchAllStockData(metas, concurrency = 5) {
                 const meta = queue.shift();
                 try {
                     const data = await fetchStockData(meta.ticker, meta.name, meta.sector, meta.ranker_thesis, {
-                        globalHotMoneyJson: globalJson,
+                        globalHotMoney: globalHotMoney,
                         date: today,
                     });
                     if (data) {

@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
-from http_helpers import em_get, http_get, eastmoney_datacenter, output_json, normalize_ticker, record_call, record_error
+from http_helpers import http_get, eastmoney_datacenter, output_json, normalize_ticker, record_call
 
 import requests
 
@@ -57,85 +57,16 @@ def _fetch_northbound():
         return None
 
 
-def _fetch_fund_flow(code, date):
-    """Fetch individual stock fund flow (当日主力/超大单/大单净流入) from 东财.
-
-    双路容灾（push2his 日 K 为主，push2 分钟 K 为辅）：
-    - 主路 push2his.eastmoney.com/api/qt/stock/fflow/daykline/get（日 K，klt=101）
-      历史/统计接口，限流比 push2（实时行情）宽松，且只要「当日」用日 K 更贴合。
-      字段编号（东财资金流标准）：f54=主力净额 f56=超大单净额 f58=大单净额（单位：元）
-    - 降级 push2.eastmoney.com/api/qt/stock/fflow/kline/get（分钟 K，klt=1）
-      push2 的 fflow 系列接口反爬较严，常被 RemoteDisconnected，仅作兜底。
-
-    实测 2026-06：push2 fflow 接口持续被封，push2his 也间歇——东财 host 级限流，
-    非脚本问题。失败返回 None，上游用 EMPTY_HOT_MONEY 兜底（诚实标注资金面无数据）。
-    """
-    start = time.monotonic()
-    secid = f"1.{code}" if code.startswith("6") else f"0.{code}"
-
-    def _parse_daykline(d):
-        """push2his 日 K：fields2=f51,f54,f56,f58 → [日期, 主力净额, 超大单净额, 大单净额]"""
-        klines = d.get("data", {}).get("klines", [])
-        if not klines:
-            return None
-        last = klines[-1].split(",")
-        # index 对齐 fields2 顺序：0=日期 1=主力净额(f54) 2=超大单(f56) 3=大单(f58)
-        return {
-            "main_net": float(last[1]) if len(last) > 1 else 0,
-            "super_net": float(last[2]) if len(last) > 2 else 0,
-            "large_net": float(last[3]) if len(last) > 3 else 0,
-        }
-
-    def _parse_minkline(d):
-        """push2 分钟 K（老接口，fallback）：fields2=f51..f57 → 取最后一根"""
-        klines = d.get("data", {}).get("klines", [])
-        if not klines:
-            return None
-        last = klines[-1].split(",")
-        result = {"main_net": float(last[1]) if len(last) > 1 else 0}
-        if len(last) >= 6:
-            result["large_net"] = float(last[4])
-            result["super_net"] = float(last[5])
-        return result
-
-    try:
-        # 主路：push2his 日 K（只要最新 1 根，lmt=1 省流量）
-        url_main = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get"
-        params_main = {"secid": secid, "klt": 101, "lmt": 1,
-                       "fields1": "f1,f2,f3,f7", "fields2": "f51,f54,f56,f58"}
-        r = em_get(url_main, params=params_main, timeout=10)
-        result = _parse_daykline(r.json())
-        if result:
-            record_call("hot_money/fund_flow", success=True, duration_ms=(time.monotonic() - start) * 1000,
-                        url=url_main, status_code=r.status_code, response_size=len(r.content),
-                        response_snippet=r.text)
-            return result
-
-        # 降级：push2 分钟 K（em_get 内置限流会自动间隔，避免双发触发更严封禁）
-        url_fallback = "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get"
-        params_fallback = {"secid": secid, "klt": 1,
-                           "fields1": "f1,f2,f3,f7", "fields2": "f51,f52,f53,f54,f55,f56,f57"}
-        r = em_get(url_fallback, params=params_fallback, timeout=10)
-        result = _parse_minkline(r.json())
-        if result:
-            record_call("hot_money/fund_flow", success=True, duration_ms=(time.monotonic() - start) * 1000,
-                        url=url_fallback, status_code=r.status_code, response_size=len(r.content),
-                        response_snippet=r.text)
-            return result
-
-        record_call("hot_money/fund_flow", success=False, error="No klines data (both push2his & push2)",
-                    duration_ms=(time.monotonic() - start) * 1000)
-        return None
-    except Exception as e:
-        record_call("hot_money/fund_flow", success=False, error=str(e), duration_ms=(time.monotonic() - start) * 1000)
-        return None
-
-
 def _fetch_fund_flow_global():
     """Batch-fetch individual stock fund flow for the entire market via 同花顺 10jqka.
 
     Returns dict mapping stock code (e.g. "603259") -> {main_net, super_net, large_net}.
-    Single HTTP call (~15-18s) replaces N per-stock 东财 push2his calls (~40% success rate).
+    Single HTTP call (~15-18s on Mac/Linux) replaces N per-stock calls.
+
+    Depends on py_mini_racer (V8) to compute the 同花顺 hexin-v anti-crawl token.
+    NOTE: install py-mini-racer (==0.6.0, the legacy package), NOT mini-racer —
+    the newer mini-racer uses a background event-loop thread that deadlocks on
+    Windows. See AGENTS.md "Environment" for the install requirement.
     """
     start = time.monotonic()
     try:
@@ -161,8 +92,12 @@ def _fetch_fund_flow_global():
                     return 0.0
             result[code] = {
                 "main_net": _parse_yi(row.get("净额", 0)),
+                # 同花顺个股资金流不分超大单/大单五档（只有总净额），保留 0 如实标注"无细分"；
+                # 但有"流入资金/流出资金"（主动买/卖盘），补充资金博弈激烈度信息。
                 "super_net": 0,
                 "large_net": 0,
+                "inflow": _parse_yi(row.get("流入资金", 0)),
+                "outflow": _parse_yi(row.get("流出资金", 0)),
             }
         record_call("hot_money/fund_flow", success=True,
                     duration_ms=(time.monotonic() - start) * 1000,
@@ -370,47 +305,41 @@ def _score_dragon_tiger(records):
 
 
 def _fetch_sector_fund_flow(top_n=8):
-    """Fetch industry board fund-flow ranking (主力净流入) from 东财 push2.
+    """Fetch industry board fund-flow ranking (主力净流入) from 同花顺 10jqka.
 
     Board rotation is a primary A-share driver. Returns top-N inflow and
     top-N outflow industry boards so the LLM can read main theme (主线) vs
-    weak (弱势) camps. Source: push2 clist fs=m:90+t:2 (行业板块, ~90 boards)
-    with f62 (main net inflow), f184 (main net pct), f136 (super-large net).
+    weak (弱势) camps. Source: akshare stock_fund_flow_industry (同花顺 hyzjl).
+    Replaces the old 东财 push2 source (push2.eastmoney.com 被持续封禁).
+
+    同花顺 净额 单位是「亿」(与东财 f62/1e8 对齐)，无超大单净额
+    (super_net_yi 置 0；下游只用 name + main_net_yi)。
     """
     start = time.monotonic()
-    url = "https://push2.eastmoney.com/api/qt/clist/get"
-    params = {
-        "pn": "1", "pz": "100", "po": "1", "np": "1",
-        "fltt": "2", "invt": "2",
-        "fs": "m:90+t:2",
-        "fields": "f3,f12,f14,f62,f136,f184",
-    }
     try:
-        r = em_get(url, params=params, timeout=15)
-        items = r.json().get("data", {}).get("diff", []) or []
+        import akshare as ak
+        df = ak.stock_fund_flow_industry(symbol="即时")
+        boards = [
+            {
+                "name": str(row.get("行业", "")),
+                "change_pct": row.get("行业-涨跌幅", 0),
+                "main_net_yi": round(float(row.get("净额", 0) or 0), 2),
+                "super_net_yi": 0,  # 同花顺不提供超大单净额
+            }
+            for _, row in df.iterrows()
+        ]
     except Exception as e:
         record_call("hot_money/sector_fund_flow", success=False, error=str(e),
                     duration_ms=(time.monotonic() - start) * 1000,
-                    url=url)
+                    url="akshare:stock_fund_flow_industry(10jqka)")
         return None
 
-    if not items:
+    if not boards:
         record_call("hot_money/sector_fund_flow", success=False, error="No items returned",
                     duration_ms=(time.monotonic() - start) * 1000,
-                    url=url, status_code=r.status_code, response_size=len(r.content),
-                    response_snippet=r.text)
+                    url="akshare:stock_fund_flow_industry(10jqka)")
         return None
 
-    boards = [
-        {
-            "name": it.get("f14", ""),
-            "change_pct": it.get("f3", 0),
-            "main_net_yi": round((it.get("f62") or 0) / 1e8, 2),
-            "super_net_yi": round((it.get("f136") or 0) / 1e8, 2),
-            "main_net_pct": it.get("f184", 0),
-        }
-        for it in items
-    ]
     boards_sorted = sorted(boards, key=lambda x: x["main_net_yi"], reverse=True)
     result = {
         "inflow_top": boards_sorted[:top_n],
@@ -418,8 +347,7 @@ def _fetch_sector_fund_flow(top_n=8):
         "total_boards": len(boards_sorted),
     }
     record_call("hot_money/sector_fund_flow", success=True, duration_ms=(time.monotonic() - start) * 1000,
-                url=url, status_code=r.status_code, response_size=len(r.content),
-                response_snippet=r.text)
+                url="akshare:stock_fund_flow_industry(10jqka)", response_size=len(df))
     return result
 
 
@@ -446,10 +374,13 @@ def fetch_hot_money(ticker, date, global_data=None):
         else:
             data["fund_flow"] = None
     else:
+        # 无全局预取（global-only 预取 timeout/失败）→ 各源独立拉取。
+        # fund_flow 已废弃东财单股路（push2his/push2 持续被封，~40% 成功率制造大量假性失败），
+        # 此处置 None：缺 fund_flow 不影响主决策（dragon_tiger/northbound 兜底），且健康报告干净。
         data["northbound"] = _fetch_northbound()
         data["sector_fund_flow"] = _fetch_sector_fund_flow()
         data["hot_stocks"] = _fetch_hot_stocks(date)
-        data["fund_flow"] = _fetch_fund_flow(code, date)
+        data["fund_flow"] = None
     data["dragon_tiger"] = _fetch_dragon_tiger(code, date)
     # 5-dimension quality scoring of dragon-tiger appearances (None when no
     # appearances — downstream should treat absence as "no signal", not an error).
@@ -478,8 +409,9 @@ def main():
     parser.add_argument("--date", required=True, help="Analysis date YYYY-MM-DD")
     parser.add_argument("--global-only", action="store_true",
                         help="Only fetch global sources (northbound/sector_fund_flow/hot_stocks)")
-    parser.add_argument("--global-data", type=str, default=None,
-                        help="Pre-fetched global data JSON (skip redundant global fetches)")
+    parser.add_argument("--global-data", nargs="?", const="__stdin__", default=None,
+                        help="Pre-fetched global data JSON. Pass --global-data without value "
+                             "to read from stdin (large payloads >32KB must use stdin on Windows).")
     args = parser.parse_args()
 
     try:
@@ -491,7 +423,12 @@ def main():
         global_data = None
         if args.global_data:
             try:
-                global_data = json.loads(args.global_data)
+                if args.global_data == "__stdin__":
+                    # Read large global JSON from stdin (Windows cmdline 32KB limit).
+                    raw = sys.stdin.read()
+                else:
+                    raw = args.global_data
+                global_data = json.loads(raw)
             except (json.JSONDecodeError, TypeError):
                 pass
 

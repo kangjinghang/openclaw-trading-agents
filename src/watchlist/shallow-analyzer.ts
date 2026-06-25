@@ -43,8 +43,10 @@ export interface NewsLayerStats {
  *  - dragon_tiger_reason：最近一次上榜原因（日涨幅偏离/换手达标等），判断游资炒作 vs 业绩驱动 */
 export interface HotMoneyData {
   main_net_today: number;        // 当日主力净流入（元）
-  super_net_today: number;       // 当日超大单净流入（元）
-  large_net_today: number;       // 当日大单净流入（元）
+  super_net_today: number;       // 当日超大单净流入（元）——同花顺源不提供，恒 0
+  large_net_today: number;       // 当日大单净流入（元）——同花顺源不提供，恒 0
+  inflow_today: number;          // 当日主动性买入金额（流入，元）——同花顺独有，反映买盘强度
+  outflow_today: number;         // 当日主动性卖出金额（流出，元）——同花顺独有，反映卖盘强度
   northbound_yi: number;         // 全市场北向净流入（亿元）
   northbound_signal: string;     // "inflow"|"outflow"|""（无北向数据则空串）
   dragon_tiger_recent?: string;  // 近 30 天龙虎榜预压缩文本（最近 2 条：日期+净买+换手）
@@ -233,6 +235,12 @@ export function renderHotMoneySummary(h: HotMoneyData): string {
     const segs = [`当日主力${signPrefix(h.main_net_today)}${formatYi(h.main_net_today)}亿`];
     if (h.super_net_today !== 0) segs.push(`超大单${signPrefix(h.super_net_today)}${formatYi(h.super_net_today)}亿`);
     if (h.large_net_today !== 0) segs.push(`大单${signPrefix(h.large_net_today)}${formatYi(h.large_net_today)}亿`);
+    // 同花顺独有：主动性买入(流入)/卖出(流出)金额，反映资金博弈激烈度
+    // （超大单/大单五档同花顺不提供，用流入/流出补充维度，而非伪装成超大单）
+    if (h.inflow_today !== 0 || h.outflow_today !== 0) {
+      segs.push(`流入${formatYi(h.inflow_today)}亿`);
+      segs.push(`流出${formatYi(h.outflow_today)}亿`);
+    }
     parts.push(segs.join("/"));
   }
 

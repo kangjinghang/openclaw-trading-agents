@@ -55,6 +55,59 @@ function details(summary: string, content: string): string {
   return `<details><summary>${summary}</summary><div class="detail-body">${content}</details>`;
 }
 
+/** 尝试从 response_snippet（可能是 JSONP callback({...}) 包裹）解析出 JSON 对象。
+ *  失败返回 null（调用方降级为纯文本展示）。 */
+function tryParseResponseJson(snippet: string): any {
+  let s = snippet.trim();
+  // JSONP: callback({...}) / jsonp({...}) — 取第一个 ( 到最后一个 ) 之间
+  const parenStart = s.indexOf("(");
+  const parenEnd = s.lastIndexOf(")");
+  if (parenStart >= 0 && parenEnd > parenStart) {
+    s = s.slice(parenStart + 1, parenEnd).trim();
+  }
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
+/** 渲染 JSON 为可折叠树（<details> 嵌套）。顶层默认展开，深层默认折叠。
+ *  字符串/数字/布尔/null 直接着色显示；对象/数组可折叠并标注元素数。 */
+function renderJsonTree(value: any, key?: string): string {
+  const keyHtml = key !== undefined ? `<span class="jt-key">${esc(key)}</span>: ` : "";
+  if (value === null) {
+    return `<div>${keyHtml}<span class="jt-null">null</span></div>`;
+  }
+  const type = typeof value;
+  if (type === "string") {
+    // 截断超长字符串（如整篇新闻正文），title 提供完整内容
+    const shown = value.length > 200 ? value.slice(0, 200) + "…" : value;
+    return `<div>${keyHtml}<span class="jt-str" title="${esc(value)}">"${esc(shown)}"</span></div>`;
+  }
+  if (type === "number") {
+    return `<div>${keyHtml}<span class="jt-num">${value}</span></div>`;
+  }
+  if (type === "boolean") {
+    return `<div>${keyHtml}<span class="jt-bool">${value}</span></div>`;
+  }
+  // 对象或数组 → 可折叠
+  const isArray = Array.isArray(value);
+  const entries = isArray ? value.map((v, i) => [String(i), v] as [string, any]) : Object.entries(value);
+  const open = key === undefined ? " open" : "";  // 顶层（无 key）默认展开
+  const bracket = isArray ? ["[", "]"] : ["{", "}"];
+  const count = entries.length;
+  const summary = `${keyHtml}<span class="jt-bracket">${bracket[0]}</span><span class="jt-count">${count} 项</span><span class="jt-bracket">${bracket[1]}</span>`;
+  if (count === 0) {
+    return `<div>${keyHtml}<span class="jt-bracket">${bracket[0]}${bracket[1]}</span></div>`;
+  }
+  let body = "";
+  for (const [k, v] of entries) {
+    body += renderJsonTree(v, isArray ? `[${k}]` : k);
+  }
+  return `<details${open}><summary>${summary}</summary><div class="jt-children">${body}</div></details>`;
+}
+
 // ── CSS ──────────────────────────────────────────────────────────────────────
 
 const CSS = `
@@ -96,6 +149,19 @@ details > summary:hover { text-decoration: underline; }
 .json-str { color: #ce9178; }
 .json-num { color: #b5cea8; }
 .json-bool { color: #569cd6; }
+.json-null { color: var(--muted); }
+/* JSON 折叠树 */
+.json-tree { font-size: 0.84em; line-height: 1.7; margin: 6px 0; }
+.json-tree details > summary { color: #ccc; font-size: 1em; padding: 1px 0; }
+.json-tree details > summary:hover { text-decoration: none; color: var(--accent); }
+.json-tree .jt-key { color: #9cdcfe; }
+.json-tree .jt-str { color: #ce9178; }
+.json-tree .jt-num { color: #b5cea8; }
+.json-tree .jt-bool { color: #569cd6; }
+.json-tree .jt-null { color: var(--muted); font-style: italic; }
+.json-tree .jt-count { color: var(--muted); font-size: 0.9em; margin-left: 2px; }
+.json-tree .jt-bracket { color: var(--muted); }
+.json-tree .jt-children { padding-left: 18px; border-left: 1px dashed var(--border); margin-left: 4px; }
 .risk-flag { background: #3a1b1b; border-left: 3px solid var(--fail); padding: 6px 10px; margin: 4px 0; border-radius: 0 4px 4px 0; font-size: 0.88em; }
 .risk-flag .sev { color: var(--fail); font-weight: 600; }
 .action-sell { color: var(--fail); font-weight: 600; }
@@ -127,7 +193,7 @@ function traceKline(d: StockData): string {
     ]);
   }
   h += `<h4>注入 prompt</h4>`;
-  h += codeBlock(`## K 线（5 日 ${d.kline.pct_5d > 0 ? "+" : ""}${d.kline.pct_5d}% / 20 日 ${d.kline.pct_20d > 0 ? "+" : ""}${d.kline.pct_20d}%，支撑 ${d.kline.support} / 压力 ${d.kline.resistance}）`);
+  h += codeBlock(`## K 线（5 日 ${d.kline.pct_5d > 0 ? "+" : ""}${r2(d.kline.pct_5d)}% / 20 日 ${d.kline.pct_20d > 0 ? "+" : ""}${r2(d.kline.pct_20d)}%，支撑 ${r2(d.kline.support)} / 压力 ${r2(d.kline.resistance)}）`);
   return h;
 }
 
@@ -172,8 +238,10 @@ function traceHotMoney(d: StockData): string {
   const rYi = (v: number) => v !== 0 ? `${(v / 1e8).toFixed(2)}亿` : "0";
   h += summaryTable("parseHotMoney() 处理后", [
     ["main_net_today", rYi(d.hot_money.main_net_today)],
-    ["super_net_today", rYi(d.hot_money.super_net_today)],
-    ["large_net_today", rYi(d.hot_money.large_net_today)],
+    ["super_net_today", `${rYi(d.hot_money.super_net_today)}（同花顺源不分档）`],
+    ["large_net_today", `${rYi(d.hot_money.large_net_today)}（同花顺源不分档）`],
+    ["inflow_today", rYi(d.hot_money.inflow_today)],
+    ["outflow_today", rYi(d.hot_money.outflow_today)],
     ["northbound_yi", `${d.hot_money.northbound_yi.toFixed(2)}亿`],
     ["northbound_signal", d.hot_money.northbound_signal],
     ["dragon_tiger_recent", d.hot_money.dragon_tiger_recent ?? "缺失"],
@@ -207,7 +275,12 @@ function traceFundamentals(d: StockData): string {
     h += codeBlock(renderConsensus(d.fundamentals.consensus_eps));
   }
   h += `<h4>注入 prompt</h4>`;
-  h += codeBlock(`## 基本面（PE ${d.fundamentals.pe} / PB ${d.fundamentals.pb} / Q1 营收 ${d.fundamentals.rev_q1} / Q1 净利 ${d.fundamentals.np_q1}）`);
+  // 与 shallow-analyzer 真实 prompt 格式对齐：营收/净利转亿 + 数值 toFixed(2)（避免原始长整数/小数噪音）
+  const revQ1 = d.fundamentals.rev_q1 > 0 ? `${(d.fundamentals.rev_q1 / 1e8).toFixed(2)}亿` : String(d.fundamentals.rev_q1);
+  const npQ1 = d.fundamentals.np_q1 > 0 ? `${(d.fundamentals.np_q1 / 1e8).toFixed(2)}亿` : String(d.fundamentals.np_q1);
+  const pe = Number.isFinite(d.fundamentals.pe) ? d.fundamentals.pe.toFixed(2) : String(d.fundamentals.pe);
+  const pb = Number.isFinite(d.fundamentals.pb) ? d.fundamentals.pb.toFixed(2) : String(d.fundamentals.pb);
+  h += codeBlock(`## 基本面（PE ${pe} / PB ${pb} / Q1 营收 ${revQ1} / Q1 净利 ${npQ1}）`);
   return h;
 }
 
@@ -333,7 +406,16 @@ ${CSS}
       detailHtml += detailTable(rows);
       if (c.response_snippet) {
         detailHtml += `<h4>响应内容</h4>`;
-        detailHtml += codeBlock(c.response_snippet.slice(0, 2000) + (c.response_snippet.length > 2000 ? "\n... (truncated)" : ""), "json");
+        const parsed = tryParseResponseJson(c.response_snippet);
+        if (parsed !== null) {
+          // JSON / JSONP → 折叠树（默认展开第一层，点开往下钻，不截断）
+          detailHtml += `<div class="json-tree">${renderJsonTree(parsed)}</div>`;
+        } else {
+          // 非 JSON（HTML/纯文本）→ 保留截断展示，但放进 details 避免巨长
+          const snippet = c.response_snippet;
+          const shown = snippet.length > 2000 ? snippet.slice(0, 2000) + "\n... (truncated)" : snippet;
+          detailHtml += codeBlock(shown, "json");
+        }
       }
     }
     html += details("展开全部调用详情", detailHtml);
