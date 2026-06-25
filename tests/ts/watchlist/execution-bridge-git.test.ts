@@ -133,6 +133,20 @@ describe.skipIf(!HAS_GIT)("syncPush — 真实 git 集成", () => {
     expect(originLast.execution!.status).toBe("pending");
   });
 
+  it("无变更（重跑相同内容）→ 跳过 commit/push，不抛错（nothing-to-commit 防护）", async () => {
+    const mine = pendingLast("2026-06-23-mine000");
+    fs.writeFileSync(path.join(watchlistDir, "holdings.json"), JSON.stringify(baseHoldings, null, 2));
+    fs.writeFileSync(path.join(watchlistDir, "last_rebalance.json"), JSON.stringify(mine, null, 2));
+    // 第一次：order_id 不同（baseline base000 → mine000）→ 暂存区有差异 → push 成功
+    await syncPush(watchlistDir, workRepo);
+    // 第二次推相同内容：两文件字节级一致 → 暂存区无差异 → 跳过 commit/push
+    // 旧实现（无 diff 检查）：git commit nothing-to-commit exit 1 → 抛错
+    await expect(syncPush(watchlistDir, workRepo)).resolves.toBeUndefined();
+    // origin 仍是第一次推上去的 mine000
+    const originLast = readOriginLast(originDir);
+    expect(originLast.order_id).toBe("2026-06-23-mine000");
+  });
+
   it("后写胜出：A 机先 push pending，B 机（落后）syncPush 自己的 pending → 成功 push（I1 核心）", async () => {
     // 模拟 A 机：在 work repo 直接写 A 的 pending 并 push（work 现在与 origin 一致，可 push）
     writeAndCommit(workRepo, baseHoldings, pendingLast("2026-06-23-AAAAAA"), "A 机订单");
