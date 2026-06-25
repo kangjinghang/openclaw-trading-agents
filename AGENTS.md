@@ -13,6 +13,8 @@ npm run lint                        # eslint src/
 npx tsc --noEmit                    # typecheck (pass = no output)
 node dist/cli.js                    # standalone CLI: quick|full <ticker> [date] [options]
 node dist/dashboard.js              # HTTP dashboard on port 3210
+npm run rebalance                   # 调仓：读 holdings+scan → plan.json/plan.md + last_rebalance.json
+                                    #   -- --sync <DIR> 跑完推到 trading-state repo（或 TRADING_STATE_REPO env）
 ```
 
 **Order matters**: `build` before `test` — tests import from `dist/`.
@@ -69,7 +71,7 @@ OpenClaw plugin (`openclaw.plugin.json`) with 3 tools:
 | `src/watchlist/order-id.ts` | `computeOrderId()` 幂等键（date+sha256(actions) 前 6 位），让 QMT 执行器识别已执行订单 |
 | `src/watchlist/execution-schema.ts` | Execution 状态机：`isTerminal`/`isPending`/`makePendingExecution` |
 | `src/watchlist/holdings-merge.ts` | `mergeHoldings()` 持仓字段级合并契约（QMT 市场字段覆盖，本地 sector 保留） |
-| `src/watchlist/execution-bridge.ts` | `syncPush()` 推状态到 trading-state repo + 冲突仲裁（pending 撞已执行 → 拒绝） |
+| `src/watchlist/execution-bridge.ts` | `syncPush()` 推状态到 trading-state repo + 冲突仲裁（pending 撞已执行→拒绝；都 pending→后写胜出，reset 对齐远端再 push） |
 
 ## Skills & Prompts
 

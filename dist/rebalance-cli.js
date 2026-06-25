@@ -55,6 +55,7 @@ const fitness_history_store_1 = require("./watchlist/fitness-history-store");
 const fitness_backfiller_1 = require("./watchlist/fitness-backfiller");
 const order_id_1 = require("./watchlist/order-id");
 const execution_schema_1 = require("./watchlist/execution-schema");
+const execution_bridge_1 = require("./watchlist/execution-bridge");
 const DEFAULT_WATCHLIST_DIR = path.join(os.homedir(), ".openclaw", "watchlist");
 function argValue(args, key) {
     const idx = args.indexOf(key);
@@ -110,8 +111,11 @@ Options:
   --model <M>        模型（默认 glm-5-turbo）可选: glm-5.2, glm-5.1, glm-5-turbo, glm-5, glm-4.7, glm-4.7-flash, glm-4.7-flashx, glm-4.6, glm-4.5-air, glm-4.5-airx, glm-4.5-flash
   --api-key <K>      API key（默认 OPENAI_API_KEY env）
   --base-url <U>     base URL（默认 OPENAI_BASE_URL env）
+  --sync <DIR>       跑完后把 holdings+last_rebalance 推到 trading-state repo（DIR）
+                     （默认 TRADING_STATE_REPO env；不传则不推送，仅落盘本地）
   --help             显示本帮助
   WATCHLIST_DIR      存储路径（默认 ${DEFAULT_WATCHLIST_DIR}）
+  TRADING_STATE_REPO trading-state private repo 本地路径（被 --sync 覆盖）
 `);
         process.exit(0);
     }
@@ -316,7 +320,9 @@ Options:
             fs.writeFileSync(path.join(rebalanceDir, "data-trace.md"), traceMd, "utf-8");
         }
     }
-    // 更新 last_rebalance.json（含 recent_sells 跨次累积，供 anti-churn 买锁）
+    // 更新 last_rebalance.json（含 recent_sells 跨次累积，供 anti-churn 买锁）。
+    // 注意：仅在有动作时才写——全 HOLD 日不落 last_rebalance 信封，这些日子无
+    // 订单可执行，不产生 order_id/execution_sequence（有意为之，非 bug）。
     if (result.rebalancer_output.actions.length > 0) {
         // 继承旧的 recent_sells，追加本次 SELL，淘汰 >14 天的旧记录
         const prevSells = lastRebalance?.recent_sells ?? {};
@@ -380,6 +386,15 @@ Options:
     console.log(`\n  tokens: ${traceLogger.totalTokens}`);
     console.log(`  输出: ${path.join(rebalanceDir, "plan.json")}`);
     console.log(`  输出: ${path.join(rebalanceDir, "plan.md")}`);
+    // 执行桥：可选把 holdings+last_rebalance 推到 trading-state private repo，
+    // 供 Win 云服务器 QMT 执行器消费。--sync flag 优先于 TRADING_STATE_REPO env；
+    // 都不传则不推送（仅本地落盘，向后兼容）。冲突仲裁见 execution-bridge.syncPush。
+    const stateRepoDir = argValue(args, "--sync") ?? process.env.TRADING_STATE_REPO;
+    if (stateRepoDir) {
+        console.log(`\n  推状态到 trading-state repo: ${stateRepoDir}`);
+        await (0, execution_bridge_1.syncPush)(watchlistDir, stateRepoDir);
+        console.log(`  ✓ 已推送（origin/main 已更新）`);
+    }
 }
 if (require.main === module)
     main().catch(e => {

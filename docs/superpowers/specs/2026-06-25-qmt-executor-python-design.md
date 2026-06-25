@@ -130,7 +130,7 @@ def run():
             filled = client.wait_fill(order_id)   # 轮询成交，超时撤单
             fills.append(filled)
         except Exception as e:
-            errors.append({"ticker": step["ticker"], "error": str(e)})
+            errors.append(f"{step['ticker']}: {e}")  # list[str]，与 TS Execution.errors: string[] 对齐
 
     # 回填 execution
     last["execution"] = {
