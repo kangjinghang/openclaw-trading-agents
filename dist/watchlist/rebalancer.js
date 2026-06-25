@@ -328,7 +328,10 @@ currentWeights) {
     return {
         plan: lastPlan,
         reviseCount,
-        status: "constraint_violation",
+        // lastPlan===null ⇒ 整轮从未解析出合法 JSON（所有 attempt 都走 parse 失败分支），
+        //   与"解析成功但约束不过"是不同的故障，单独标记。
+        // lastPlan!==null ⇒ 至少解析成功过，是约束违反（revise 用尽仍不过）。
+        status: lastPlan === null ? "parse_failed" : "constraint_violation",
         finalViolations: lastViolations,
         positionTraces: lastTraces,
     };

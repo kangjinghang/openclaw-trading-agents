@@ -267,7 +267,11 @@ export type RebalanceLlmCaller = (input: {
 export interface RebalanceResult {
   plan: RebalancePlan | null;
   reviseCount: number;
-  status: "ok" | "constraint_violation" | "llm_failed";
+  /** ok=校验通过；constraint_violation=至少解析出过 plan 但始终不过校验；
+   *  parse_failed=从未解析出合法 plan（全程 JSON 失败，plan=null）；
+   *  llm_failed=caller 抛错。区分 parse_failed vs constraint_violation 让事后排查
+   *  能判断"是 LLM 没吐对格式"还是"吐对了但满足不了约束"，两者处置不同。 */
+  status: "ok" | "constraint_violation" | "parse_failed" | "llm_failed";
   finalViolations: ConstraintViolation[];
   positionTraces: Map<string, string>;
 }
@@ -341,7 +345,10 @@ export async function runRebalanceWithRevise(
   return {
     plan: lastPlan,
     reviseCount,
-    status: "constraint_violation",
+    // lastPlan===null ⇒ 整轮从未解析出合法 JSON（所有 attempt 都走 parse 失败分支），
+    //   与"解析成功但约束不过"是不同的故障，单独标记。
+    // lastPlan!==null ⇒ 至少解析成功过，是约束违反（revise 用尽仍不过）。
+    status: lastPlan === null ? "parse_failed" : "constraint_violation",
     finalViolations: lastViolations,
     positionTraces: lastTraces,
   };
@@ -366,7 +373,7 @@ export interface RebalancePipelineResult {
   rebalancer_output: RebalancePlan;
   constraint_check: { passed: boolean; violations: string[]; revise_count: number };
   execution_plan: ReturnType<typeof buildExecutionPlan>;
-  status: "ok" | "constraint_violation" | "llm_failed";
+  status: "ok" | "constraint_violation" | "parse_failed" | "llm_failed";
   /** 行业拉取相关警告（fundamentals.industry 为空的股按"未分类"累计，规则 3 对它们失效） */
   sector_warnings: string[];
   /** 仓位计算器溯源（ticker → 可读字符串） */

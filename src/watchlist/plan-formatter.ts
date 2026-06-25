@@ -17,7 +17,10 @@ const ACTION_LABEL: Record<string, string> = {
 export function formatPlanMarkdown(plan: RebalancePlanFile): string {
   const lines: string[] = [];
   const statusIcon = plan.status === "ok" ? "✅" : plan.status === "constraint_violation" ? "⚠️" : "❌";
-  const statusText = plan.status === "ok" ? "通过" : plan.status === "constraint_violation" ? "约束违反" : "LLM 失败";
+  const statusText = plan.status === "ok" ? "通过"
+    : plan.status === "constraint_violation" ? "约束违反"
+    : plan.status === "parse_failed" ? "LLM 输出格式失败"
+    : "LLM 失败";
 
   // ── 标题 + 状态摘要 ─────────────────────────────────────────────────
   lines.push(`# 调仓方案 ${plan.scan_date}`);

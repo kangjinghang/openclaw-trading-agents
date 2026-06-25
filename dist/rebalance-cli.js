@@ -180,7 +180,6 @@ Options:
         const result = await (0, llm_client_1.callLLM)(client, {
             model, systemPrompt, userMessage,
             phase: "rebalance", role: `${role}-shallow`, traceLogger, temperature: 0,
-            thinking: { type: "disabled" },
             responseFormat: { type: "json_object" },
         });
         return result.content;
@@ -189,7 +188,6 @@ Options:
         const result = await (0, llm_client_1.callLLM)(client, {
             model, systemPrompt: "A 股投资组合管理者", userMessage,
             phase: "rebalance", role: "portfolio-rebalancer", traceLogger, temperature: 0,
-            thinking: { type: "disabled" },
         });
         return result.content;
     };

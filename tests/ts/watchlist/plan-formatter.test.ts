@@ -159,6 +159,14 @@ describe("formatPlanMarkdown", () => {
     expect(md).toContain("revise 次数: 2");
   });
 
+  it("status=parse_failed 显示格式失败（区别于 LLM 失败）", () => {
+    const md = formatPlanMarkdown(makePlanFile({
+      status: "parse_failed",
+    }));
+    expect(md).toContain("❌");
+    expect(md).toContain("LLM 输出格式失败");
+  });
+
   it("空 actions 显示'今日无操作'", () => {
     const md = formatPlanMarkdown(makePlanFile({
       rebalancer_output: {

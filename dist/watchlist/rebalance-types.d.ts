@@ -145,7 +145,7 @@ export interface ExecutionPlan {
 export interface RebalancePlanFile {
     scan_date: string;
     written_at: string;
-    status: "ok" | "constraint_violation" | "llm_failed";
+    status: "ok" | "constraint_violation" | "parse_failed" | "llm_failed";
     model: string;
     tokens: number;
     holdings_before: Holdings;

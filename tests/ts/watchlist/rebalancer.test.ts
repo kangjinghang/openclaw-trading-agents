@@ -179,6 +179,16 @@ describe("runRebalanceWithRevise", () => {
     expect(r.plan).not.toBeNull();
   });
 
+  it("全程 JSON 解析失败 → status=parse_failed + plan=null（区别于 constraint_violation）", async () => {
+    const caller: RebalanceLlmCaller = async () => "totally not json at all";
+    const r = await runRebalanceWithRevise(caller, "fake-prompt", ctx, DEFAULT_REBALANCE_CONFIG);
+    expect(r.status).toBe("parse_failed");
+    expect(r.plan).toBeNull();
+    // 循环 attempt 0..max_revise_retries = 3 次尝试，每次 parse 失败都 reviseCount++
+    // （JSON 重试与约束 revise 共用同一配额——这是设计上的有意取舍）
+    expect(r.reviseCount).toBe(DEFAULT_REBALANCE_CONFIG.max_revise_retries + 1);
+  });
+
   it("LLM 抛错 → status=llm_failed", async () => {
     const caller: RebalanceLlmCaller = async () => { throw new Error("network"); };
     const r = await runRebalanceWithRevise(caller, "fake-prompt", ctx, DEFAULT_REBALANCE_CONFIG);
