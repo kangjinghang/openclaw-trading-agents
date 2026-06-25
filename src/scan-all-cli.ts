@@ -2,19 +2,16 @@ import * as os from "os";
 import * as path from "path";
 import { execFileSync } from "child_process";
 import * as fs from "fs";
+import { resolvePythonCmd } from "./exec-python";
 
 const DEFAULT_WATCHLIST_DIR = path.join(os.homedir(), ".openclaw", "watchlist");
 const PROJECT_ROOT = path.resolve(__dirname, "..");
-
-function resolvePython(): string {
-  return process.env.TRADING_PYTHON || "python3";
-}
 
 function runPython(script: string, extraArgs: string[], watchlistDir: string) {
   const scriptPath = path.join(PROJECT_ROOT, "skills", "watchlist", "scripts", script);
   const args = [scriptPath, "--watchlist-dir", watchlistDir, ...extraArgs];
   console.log(`\n\u25b6 python ${script} ${extraArgs.join(" ")}`);
-  execFileSync(resolvePython(), args, { stdio: "inherit", env: process.env });
+  execFileSync(resolvePythonCmd(), args, { stdio: "inherit", env: process.env });
 }
 
 function runNode(script: string, extraArgs: string[], watchlistDir: string) {

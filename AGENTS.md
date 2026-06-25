@@ -4,7 +4,7 @@
 
 ```bash
 npm install                         # Node dependencies
-pip install -r requirements.txt     # Python deps: mootdx, akshare, pandas, requests
+pip install -r requirements.txt     # Python deps: mootdx, akshare, pandas, requests, pywencai
 npm run build                       # tsc → dist/
 npm test                            # vitest run (tests/ts/ *.test.ts)
 npm run test:watch                  # vitest in watch mode
@@ -30,7 +30,7 @@ bash scripts/setup-python.sh  # creates .venv, installs skill deps
 source .venv/bin/activate
 ```
 
-The plugin **auto-detects** a Python with `requests` installed (system, Homebrew, pyenv). Override: `TRADING_PYTHON=/path/to/python3`.
+The plugin **auto-detects** a Python with the required deps (`requests`/`akshare`/`pandas`). It prefers the **project-local `.venv`** (created by `setup-python.sh`) over system Python, then falls back to `python3`/Homebrew/pyenv on PATH. Override: `TRADING_PYTHON=/path/to/python3`.
 
 **Pre-commit** (husky → lint-staged): eslint --fix then tsc --noEmit on `src/**/*.ts`. Fix before committing.
 
@@ -116,7 +116,7 @@ Plugin config file: `~/.openclaw/plugins/trading-agents/config.json`. Standalone
 
 - `OPENAI_API_KEY` — required (runtime only; tests are stubbed)
 - `OPENAI_BASE_URL` — optional, for OpenAI-compatible APIs (ZhiPu, DeepSeek, etc.)
-- Python 3.11+ with mootdx, akshare, pandas, requests
+- Python 3.11+ with mootdx, akshare, pandas, requests, pywencai
 - Reports saved to `~/.openclaw/trading-reports/{ticker}/{date}_{mode}.json` + detail directory with phase subdirs (01_analysts/, 02_debate/, etc.)
 - LLM traces: `{detailDir}/06_traces/{runId}/` — one JSON file per LLM call
 - Data cache: `~/.openclaw/cache/` — 4h TTL, keyed by script path + args hash

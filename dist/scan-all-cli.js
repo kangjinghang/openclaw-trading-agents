@@ -37,16 +37,14 @@ const os = __importStar(require("os"));
 const path = __importStar(require("path"));
 const child_process_1 = require("child_process");
 const fs = __importStar(require("fs"));
+const exec_python_1 = require("./exec-python");
 const DEFAULT_WATCHLIST_DIR = path.join(os.homedir(), ".openclaw", "watchlist");
 const PROJECT_ROOT = path.resolve(__dirname, "..");
-function resolvePython() {
-    return process.env.TRADING_PYTHON || "python3";
-}
 function runPython(script, extraArgs, watchlistDir) {
     const scriptPath = path.join(PROJECT_ROOT, "skills", "watchlist", "scripts", script);
     const args = [scriptPath, "--watchlist-dir", watchlistDir, ...extraArgs];
     console.log(`\n\u25b6 python ${script} ${extraArgs.join(" ")}`);
-    (0, child_process_1.execFileSync)(resolvePython(), args, { stdio: "inherit", env: process.env });
+    (0, child_process_1.execFileSync)((0, exec_python_1.resolvePythonCmd)(), args, { stdio: "inherit", env: process.env });
 }
 function runNode(script, extraArgs, watchlistDir) {
     const scriptPath = path.join(PROJECT_ROOT, "dist", script);

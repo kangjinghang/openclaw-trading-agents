@@ -1,7 +1,7 @@
 // src/orchestrator.ts
 
 import OpenAI from "openai";
-import { execPython } from "./exec-python";
+import { execPython, resolvePythonCmd } from "./exec-python";
 import { PYTHON_SCRIPT_TIMEOUT_MS } from "./constants";
 import { loadAndRender } from "./prompt-loader";
 import { callLLM, parseVerdict, RateLimitCoordinator } from "./llm-client";
@@ -668,7 +668,7 @@ async function runAnalystPhase(
       const scriptPath = path.join(SKILLS_DIR, cfg.script);
       const args = ["--ticker", ticker, "--date", date, ...cfg.extraArgs(ticker)];
       try {
-        const result: ScriptResult = await execPython(scriptPath, args, null, 'python3', scriptTimeout(cfg));
+        const result: ScriptResult = await execPython(scriptPath, args, null, resolvePythonCmd(), scriptTimeout(cfg));
         dataResults[idx] = { role: cfg.role, result };
         if (!result.success) {
           log(`  数据采集 ${cfg.role} 失败: ${result.error?.slice(0, 80)}`);

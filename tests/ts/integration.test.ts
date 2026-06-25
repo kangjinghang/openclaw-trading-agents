@@ -11,7 +11,8 @@ import * as os from 'os';
 
 // Mock execPython at module level
 vi.mock('../../src/exec-python', () => ({
-  execPython: vi.fn()
+  execPython: vi.fn(),
+  resolvePythonCmd: vi.fn(() => 'python3'),
 }));
 
 import { execPython } from '../../src/exec-python';

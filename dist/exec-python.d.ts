@@ -5,10 +5,13 @@ import { ScriptResult } from './types';
  *
  * Priority:
  * 1. TRADING_PYTHON env var (user explicit override)
- * 2. python3 (PATH lookup)
- * 3. /usr/bin/python3 (system)
- * 4. /opt/homebrew/bin/python3 (Homebrew macOS)
- * 5. ~/.pyenv/shims/python3 (pyenv)
+ * 2. <project>/.venv/bin/python (project-local venv created by setup-python.sh;
+ *    preferred so deps installed there win over a system python that lacks them)
+ * 3. python3 (PATH lookup)
+ * 4. python (Windows alias; `python3` may resolve to a bare install there)
+ * 5. /usr/bin/python3 (system)
+ * 6. /opt/homebrew/bin/python3 (Homebrew macOS)
+ * 7. ~/.pyenv/shims/python3 (pyenv)
  *
  * Falls back to 'python3' if none have `requests` installed.
  */
@@ -25,7 +28,8 @@ export declare function writeCache(scriptPath: string, args: string[], result: S
  * @param scriptPath - Absolute path to the Python script
  * @param args - Command line arguments to pass to the script
  * @param stdinData - Optional data to pass via stdin
- * @param pythonCmd - Python command to use (defaults to 'python3')
+ * @param pythonCmd - Python command to use (defaults to resolvePythonCmd(), which
+ *                    prefers project .venv then system python — pass explicitly only to override)
  * @param timeoutMs - Timeout in milliseconds
  * @param useCache - Whether to use cache (default: true)
  * @param cacheDir - Override cache directory (default: ~/.openclaw/cache)

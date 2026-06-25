@@ -605,7 +605,7 @@ async function runAnalystPhase(ticker, date, config, openaiClient, traceLogger, 
         const scriptPath = path.join(SKILLS_DIR, cfg.script);
         const args = ["--ticker", ticker, "--date", date, ...cfg.extraArgs(ticker)];
         try {
-            const result = await (0, exec_python_1.execPython)(scriptPath, args, null, 'python3', scriptTimeout(cfg));
+            const result = await (0, exec_python_1.execPython)(scriptPath, args, null, (0, exec_python_1.resolvePythonCmd)(), scriptTimeout(cfg));
             dataResults[idx] = { role: cfg.role, result };
             if (!result.success) {
                 log(`  数据采集 ${cfg.role} 失败: ${result.error?.slice(0, 80)}`);

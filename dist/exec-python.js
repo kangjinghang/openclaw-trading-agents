@@ -57,18 +57,28 @@ let resolvedPython = null;
  *
  * Priority:
  * 1. TRADING_PYTHON env var (user explicit override)
- * 2. python3 (PATH lookup)
- * 3. /usr/bin/python3 (system)
- * 4. /opt/homebrew/bin/python3 (Homebrew macOS)
- * 5. ~/.pyenv/shims/python3 (pyenv)
+ * 2. <project>/.venv/bin/python (project-local venv created by setup-python.sh;
+ *    preferred so deps installed there win over a system python that lacks them)
+ * 3. python3 (PATH lookup)
+ * 4. python (Windows alias; `python3` may resolve to a bare install there)
+ * 5. /usr/bin/python3 (system)
+ * 6. /opt/homebrew/bin/python3 (Homebrew macOS)
+ * 7. ~/.pyenv/shims/python3 (pyenv)
  *
  * Falls back to 'python3' if none have `requests` installed.
  */
 function resolvePythonCmd() {
     if (resolvedPython)
         return resolvedPython;
+    // Project-local venv: preferred over system python so the deps installed by
+    // `bash scripts/setup-python.sh` (akshare/pywencai/pandas) are picked up
+    // without manually exporting TRADING_PYTHON. Only added when the binary
+    // actually exists — keeps Windows / venv-less environments untouched.
+    const projectVenv = path.join(process.cwd(), '.venv', 'bin', 'python');
+    const venvCandidates = fs.existsSync(projectVenv) ? [projectVenv] : [];
     const candidates = [
         process.env.TRADING_PYTHON,
+        ...venvCandidates,
         'python3',
         'python', // Windows: `python` is the common alias; `python3` may resolve to a bare install
         '/usr/bin/python3',
@@ -171,12 +181,13 @@ function writeCache(scriptPath, args, result, cacheDir) {
  * @param scriptPath - Absolute path to the Python script
  * @param args - Command line arguments to pass to the script
  * @param stdinData - Optional data to pass via stdin
- * @param pythonCmd - Python command to use (defaults to 'python3')
+ * @param pythonCmd - Python command to use (defaults to resolvePythonCmd(), which
+ *                    prefers project .venv then system python — pass explicitly only to override)
  * @param timeoutMs - Timeout in milliseconds
  * @param useCache - Whether to use cache (default: true)
  * @param cacheDir - Override cache directory (default: ~/.openclaw/cache)
  */
-async function execPython(scriptPath, args = [], stdinData = null, pythonCmd = 'python3', timeoutMs = constants_1.PYTHON_SCRIPT_TIMEOUT_MS, useCache = true, cacheDir) {
+async function execPython(scriptPath, args = [], stdinData = null, pythonCmd = resolvePythonCmd(), timeoutMs = constants_1.PYTHON_SCRIPT_TIMEOUT_MS, useCache = true, cacheDir) {
     // Check cache first
     if (useCache && stdinData === null) {
         const cached = readCache(scriptPath, args, constants_1.CACHE_TTL_MS, cacheDir);
