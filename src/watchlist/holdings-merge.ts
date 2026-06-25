@@ -37,6 +37,9 @@ export function mergeHoldings(
   for (const p of remote.positions) remoteByTicker.set(p.ticker, p);
 
   const mergedPositions: Position[] = [];
+  // 注意：遍历以 QMT 持仓为准，remote 中有但 QMT 未返回的 ticker 不进结果
+  // —— 即 absent ≡ 清仓删除（与 volume=0 同语义）。已与用户确认：xtquant
+  // query_stock_positions 视为权威持仓快照，不返回即代表该账户已无此持仓。
   for (const qp of qmtPositions) {
     if (qp.volume === 0) continue;  // 清仓删除
     const existing = remoteByTicker.get(qp.ticker);

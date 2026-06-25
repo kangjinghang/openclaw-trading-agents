@@ -78,6 +78,18 @@ describe("mergeHoldings — 增删", () => {
     const merged = mergeHoldings(remote, positions, asset);
     expect(merged.positions.find(x => x.ticker === "SZ300319")).toBeUndefined();
   });
+
+  it("remote 有、QMT 查询结果完全不含该 ticker → 视为清仓删除（absent ≡ volume=0）", () => {
+    // QMT 未返回 SH600183（既不是 volume=0，是压根没这条记录）
+    const positions: QmtPosition[] = [
+      { ticker: "SZ300319", volume: 200, open_price: 25, open_date: "2026-06-15", market_value: 5000, can_use_volume: 200 },
+    ];
+    const merged = mergeHoldings(remote, positions, asset);
+    // 语义：absent ≡ 清仓。remote 有但 QMT 没返回 → 删除。
+    // 已与用户确认：xtquant query_stock_positions 视为权威持仓快照，
+    // 不返回即代表该账户已无此持仓。查询抖动风险由调用方保证查询完整性兜底。
+    expect(merged.positions.find(x => x.ticker === "SH600183")).toBeUndefined();
+  });
 });
 
 describe("mergeHoldings — 更新时间", () => {
