@@ -47,6 +47,22 @@ function gitIn(dir: string, args: string[]): string {
   return execFileSync("git", args, { cwd: dir, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
 }
 
+/** 读 work repo 当前分支名（HEAD → refs/heads/<branch>）。 */
+function currentBranch(dir: string): string {
+  const head = gitIn(dir, ["symbolic-ref", "--short", "HEAD"]);
+  return head.trim();
+}
+
+/** 确保 work repo 当前分支是 main（不依赖 init.defaultBranch 全局配置：
+ *  本地配了 main，CI 的 ubuntu git 默认仍是 master，硬编码 main 会
+ *  "src refspec main does not match any"）。 */
+function ensureMainBranch(dir: string): void {
+  const cur = currentBranch(dir);
+  if (cur !== "main") {
+    gitIn(dir, ["branch", "-m", cur, "main"]);  // rename 当前分支为 main
+  }
+}
+
 /** 写两文件并 commit + push 到 origin main。 */
 function writeAndCommit(dir: string, holdings: Holdings, last: LastRebalance, msg: string): void {
   fs.writeFileSync(path.join(dir, "holdings.json"), JSON.stringify(holdings, null, 2));
@@ -63,7 +79,7 @@ function readOriginLast(originDir: string): LastRebalance {
 }
 
 // CI 环境的 git 可能默认无 user.email/name，commit 会失败。统一设个本地身份。
-function setupFixture(): { watchlistDir: string; workRepo: string; originDir: string } {
+function setupFixture(): { root: string; watchlistDir: string; workRepo: string; originDir: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "ebgit-"));
   const originDir = path.join(root, "origin.git");
   const workRepo = path.join(root, "work");
@@ -76,27 +92,33 @@ function setupFixture(): { watchlistDir: string; workRepo: string; originDir: st
   // 配身份（clone 后在 work repo 设；CI 环境可能无全局 user.email/name）
   gitIn(workRepo, ["config", "user.email", "test@example.com"]);
   gitIn(workRepo, ["config", "user.name", "test"]);
+  // 显式对齐分支名为 main（不依赖 init.defaultBranch，跨 mac/ubuntu 一致）
+  ensureMainBranch(workRepo);
 
   // 基线提交：work repo 写初始两文件 → push 到 origin
   writeAndCommit(workRepo, baseHoldings, pendingLast("2026-06-23-base000"), "baseline");
 
-  return { watchlistDir, workRepo, originDir };
+  return { root, watchlistDir, workRepo, originDir };
 }
 
 describe.skipIf(!HAS_GIT)("syncPush — 真实 git 集成", () => {
-  let root: string;
+  let root: string | undefined;
   let watchlistDir: string;
   let workRepo: string;
   let originDir: string;
 
   beforeEach(() => {
     const fx = setupFixture();
-    root = path.dirname(fx.originDir);
+    root = fx.root;          // 先记下 root，确保 afterEach 能清理（即使后面某步抛错）
     watchlistDir = fx.watchlistDir;
     workRepo = fx.workRepo;
     originDir = fx.originDir;
   });
-  afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
+  afterEach(() => {
+    // root 可能 undefined（若 setupFixture 自身在 mkdtemp 后某步抛错）；
+    // fs.rmSync 的 path 不能传 undefined（会 ERR_INVALID_ARG_TYPE），这里兜底。
+    if (root) fs.rmSync(root, { recursive: true, force: true });
+  });
 
   it("无分叉 → push 成功，origin/main 更新为本地内容", async () => {
     // watchlistDir 写一份新 pending，syncPush 推上去（work repo 已与 origin 一致）
