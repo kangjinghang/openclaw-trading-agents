@@ -131,6 +131,50 @@ def _fetch_fund_flow(code, date):
         return None
 
 
+def _fetch_fund_flow_global():
+    """Batch-fetch individual stock fund flow for the entire market via 同花顺 10jqka.
+
+    Returns dict mapping stock code (e.g. "603259") -> {main_net, super_net, large_net}.
+    Single HTTP call (~15-18s) replaces N per-stock 东财 push2his calls (~40% success rate).
+    """
+    start = time.monotonic()
+    try:
+        import akshare as ak
+        df = ak.stock_fund_flow_individual(symbol="即时")
+        result = {}
+        for _, row in df.iterrows():
+            code = str(row.get("股票代码", "")).strip()
+            if not code:
+                continue
+            def _parse_yi(val):
+                """Parse '1.39亿' / '-6227.71万' / numeric -> float (元)."""
+                if isinstance(val, (int, float)):
+                    return float(val)
+                s = str(val).strip()
+                if s.endswith("亿"):
+                    return float(s[:-1]) * 1e8
+                if s.endswith("万"):
+                    return float(s[:-1]) * 1e4
+                try:
+                    return float(s)
+                except (ValueError, TypeError):
+                    return 0.0
+            result[code] = {
+                "main_net": _parse_yi(row.get("净额", 0)),
+                "super_net": 0,
+                "large_net": 0,
+            }
+        record_call("hot_money/fund_flow", success=True,
+                    duration_ms=(time.monotonic() - start) * 1000,
+                    url="akshare:stock_fund_flow_individual(10jqka)",
+                    response_size=len(df))
+        return result
+    except Exception as e:
+        record_call("hot_money/fund_flow", success=False, error=str(e),
+                    duration_ms=(time.monotonic() - start) * 1000)
+        return None
+
+
 def _fetch_hot_stocks(date):
     """Fetch hot stocks with topic attribution from 同花顺."""
     start = time.monotonic()
@@ -168,7 +212,7 @@ def _fetch_dragon_tiger(code, date, lookback=30):
     start_dt = (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=lookback)).strftime("%Y-%m-%d")
     start = time.monotonic()
     try:
-        data = eastmoney_datacenter(
+        data, http = eastmoney_datacenter(
             "RPT_DAILYBILLBOARD_DETAILSNEW",
             filter_str=f'(TRADE_DATE>=\'{start_dt}\')(TRADE_DATE<=\'{date}\')(SECURITY_CODE="{code}")',
             page_size=10,
@@ -178,7 +222,8 @@ def _fetch_dragon_tiger(code, date, lookback=30):
         if not data:
             # 空数组是合法结果（该股 30 天内未上榜），不是接口故障——
             # 之前误记 success=False 会污染数据源健康统计（误报龙虎榜源宕机）。
-            record_call("hot_money/dragon_tiger", success=True, duration_ms=(time.monotonic() - start) * 1000)
+            record_call("hot_money/dragon_tiger", success=True, duration_ms=(time.monotonic() - start) * 1000,
+                        **http)
             return []
         result = [
             {
@@ -193,7 +238,8 @@ def _fetch_dragon_tiger(code, date, lookback=30):
             }
             for row in data
         ]
-        record_call("hot_money/dragon_tiger", success=True, duration_ms=(time.monotonic() - start) * 1000)
+        record_call("hot_money/dragon_tiger", success=True, duration_ms=(time.monotonic() - start) * 1000,
+                    **http)
         return result
     except Exception as e:
         record_call("hot_money/dragon_tiger", success=False, error=str(e), duration_ms=(time.monotonic() - start) * 1000)
@@ -382,9 +428,9 @@ def fetch_hot_money(ticker, date, global_data=None):
 
     Args:
         global_data: Optional pre-fetched global data dict with keys
-            northbound/sector_fund_flow/hot_stocks. When provided, these 3
-            sources are NOT fetched again (saving N-1 duplicate HTTP calls).
-            Per-stock sources (fund_flow, dragon_tiger) are always fetched.
+            northbound/sector_fund_flow/hot_stocks/fund_flow. When provided,
+            these sources are NOT fetched again (saving N-1 duplicate HTTP calls).
+            Per-stock source (dragon_tiger) is always fetched.
     """
     code = normalize_ticker(ticker)
     data = {"ticker": code, "date": date}
@@ -393,12 +439,17 @@ def fetch_hot_money(ticker, date, global_data=None):
         data["northbound"] = global_data.get("northbound")
         data["sector_fund_flow"] = global_data.get("sector_fund_flow")
         data["hot_stocks"] = global_data.get("hot_stocks")
+        # fund_flow: pre-fetched batch lookup by code
+        ff_global = global_data.get("fund_flow")
+        if ff_global and isinstance(ff_global, dict):
+            data["fund_flow"] = ff_global.get(code)
+        else:
+            data["fund_flow"] = None
     else:
         data["northbound"] = _fetch_northbound()
         data["sector_fund_flow"] = _fetch_sector_fund_flow()
         data["hot_stocks"] = _fetch_hot_stocks(date)
-
-    data["fund_flow"] = _fetch_fund_flow(code, date)
+        data["fund_flow"] = _fetch_fund_flow(code, date)
     data["dragon_tiger"] = _fetch_dragon_tiger(code, date)
     # 5-dimension quality scoring of dragon-tiger appearances (None when no
     # appearances — downstream should treat absence as "no signal", not an error).
@@ -410,13 +461,14 @@ def fetch_hot_money(ticker, date, global_data=None):
 def fetch_global_only(date):
     """Fetch only global (non-ticker-specific) hot money sources.
 
-    Returns dict with northbound/sector_fund_flow/hot_stocks for injection
+    Returns dict with northbound/sector_fund_flow/hot_stocks/fund_flow for injection
     into per-stock calls via --global-data.
     """
     return {
         "northbound": _fetch_northbound(),
         "sector_fund_flow": _fetch_sector_fund_flow(),
         "hot_stocks": _fetch_hot_stocks(date),
+        "fund_flow": _fetch_fund_flow_global(),
     }
 
 

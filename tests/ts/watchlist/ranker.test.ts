@@ -304,20 +304,36 @@ describe("enrichRanked", () => {
     expect(out[0].days).toBe(0);
   });
 
-  it("LLM 串号（ticker 真实但 name 错配）时用候选池权威 name 覆盖", () => {
+  it("LLM 串号（ticker 真实但 name 错配）时用候选池权威 name 覆盖 + reason 交叉验证", () => {
     // 复现真实 bug：candidates 里 SH603259=药明康德（权威），但 LLM 把
     // 大元泵业（真实代码 SH603757）的理由串到了 SH603259。parseRankResponse
-    // 只校验 ticker 真实性，放行了这类错配；enrichRanked 必须用候选池 name 纠正。
+    // 只校验 ticker 真实性，放行了这类错配；enrichRanked 必须用候选池 name 纠正，
+    // 并丢弃提及了其他公司名称的 reason（防止串号向下游 rebalance 传播）。
     const lookup = new Map([
       ["SH603259", makeCandidate({ ticker: "SH603259", name: "药明康德" })],
+      ["SH603757", makeCandidate({ ticker: "SH603757", name: "大元泵业" })],
     ]);
     const out = enrichRanked(
-      [{ ticker: "SH603259", name: "大元泵业", score: 9.5, reason: "谷歌液冷泵订单" }],
+      [{ ticker: "SH603259", name: "大元泵业", score: 9.5, reason: "大元泵业获得谷歌液冷泵订单" }],
       lookup,
     );
     expect(out[0].name).toBe("药明康德");
-    // reason 是 LLM 的分析，保留不覆盖（即便串号，理由本身可能仍可读）
-    expect(out[0].reason).toBe("谷歌液冷泵订单");
+    // reason 提到了候选池中其他公司"大元泵业"，判定为串号，丢弃
+    expect(out[0].reason).toBe("");
+  });
+
+  it("LLM 串号但 reason 未提及其他公司名称时保留", () => {
+    const lookup = new Map([
+      ["SH603259", makeCandidate({ ticker: "SH603259", name: "药明康德" })],
+      ["SH603757", makeCandidate({ ticker: "SH603757", name: "大元泵业" })],
+    ]);
+    const out = enrichRanked(
+      [{ ticker: "SH603259", name: "大元泵业", score: 9.5, reason: "谷歌CDU液冷泵订单份额达60%" }],
+      lookup,
+    );
+    expect(out[0].name).toBe("药明康德");
+    // reason 没提"大元泵业"，保留
+    expect(out[0].reason).toBe("谷歌CDU液冷泵订单份额达60%");
   });
 });
 

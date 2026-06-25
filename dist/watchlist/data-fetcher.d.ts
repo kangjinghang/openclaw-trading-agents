@@ -97,13 +97,14 @@ export declare function fetchStockData(ticker: string, name: string, sector: str
     globalHotMoneyJson?: string;
     date?: string;
 }): Promise<StockData | null>;
-/** 一次性拉取 hot_money 全局源（northbound / sector_fund_flow / hot_stocks），
+/** 一次性拉取 hot_money 全局源（northbound / sector_fund_flow / hot_stocks / fund_flow），
  *  返回预取数据 + 子源级调用记录。失败返回 null（graceful degrade）。 */
 export declare function fetchGlobalHotMoneyData(date: string): Promise<{
     globalHotMoney: {
         northbound: any;
         sector_fund_flow: any;
         hot_stocks: any;
+        fund_flow: any;
     } | null;
     calls: SourceCall[];
 }>;

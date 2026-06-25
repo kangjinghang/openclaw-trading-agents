@@ -17,7 +17,7 @@ _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 def _fetch_lockup_history(code):
     """Fetch historical lockup expiry records."""
     try:
-        data = eastmoney_datacenter(
+        data, http = eastmoney_datacenter(
             "RPT_LIFT_STAGE",
             filter_str=f'(SECURITY_CODE="{code}")',
             page_size=15,
@@ -30,16 +30,16 @@ def _fetch_lockup_history(code):
              "shares": row.get("FREE_SHARES_NUM", ""),
              "ratio": row.get("FREE_RATIO", "")}
             for row in data
-        ]
+        ], http
     except Exception:
-        return []
+        return [], {}
 
 
 def _fetch_lockup_upcoming(code, date, forward_days=90):
     """Fetch upcoming lockup expiries."""
     end_dt = (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=forward_days)).strftime("%Y-%m-%d")
     try:
-        data = eastmoney_datacenter(
+        data, http = eastmoney_datacenter(
             "RPT_LIFT_STAGE",
             filter_str=f'(SECURITY_CODE="{code}")(FREE_DATE>=\'{date}\')(FREE_DATE<=\'{end_dt}\')',
             page_size=20,
@@ -52,9 +52,9 @@ def _fetch_lockup_upcoming(code, date, forward_days=90):
              "shares": row.get("FREE_SHARES_NUM", ""),
              "ratio": row.get("FREE_RATIO", "")}
             for row in data
-        ]
+        ], http
     except Exception:
-        return []
+        return [], {}
 
 
 def _fetch_insider_transactions(code):
@@ -172,7 +172,7 @@ def _fetch_reduce_em(code, date=None):
     start = time.monotonic()
     filter_date = date or datetime.now().strftime("%Y-%m-%d")
     try:
-        data = eastmoney_datacenter(
+        data, http = eastmoney_datacenter(
             "RPT_REDUCED_HOLDINGS",
             filter_str=f'(SECURITY_CODE="{code}")(REDUCE_DATE>={filter_date})',
             page_size=10,
@@ -189,7 +189,8 @@ def _fetch_reduce_em(code, date=None):
             }
             for row in data
         ]
-        record_call("lockup/reduce_em", success=True, duration_ms=(time.monotonic() - start) * 1000)
+        record_call("lockup/reduce_em", success=True, duration_ms=(time.monotonic() - start) * 1000,
+                    **http)
         return result
     except Exception as e:
         record_call("lockup/reduce_em", success=False, error=str(e), duration_ms=(time.monotonic() - start) * 1000)
@@ -288,7 +289,7 @@ def _fetch_margin(code):
     """
     start = time.monotonic()
     try:
-        data = eastmoney_datacenter(
+        data, http = eastmoney_datacenter(
             "RPTA_WEB_RZRQ_GGMX",
             filter_str=f'(SCODE="{code}")',
             page_size=_MARGIN_DAYS,
@@ -307,7 +308,8 @@ def _fetch_margin(code):
 
     signal, latest = _score_margin(data)
     record_call("lockup/margin_em", success=True,
-                duration_ms=(time.monotonic() - start) * 1000)
+                duration_ms=(time.monotonic() - start) * 1000,
+                **http)
 
     # 输出：最近明细（归一为易读字段，数值转亿/万）+ 预计算信号。
     history = []
@@ -338,15 +340,16 @@ def fetch_lockup(ticker, date):
     code = normalize_ticker(ticker)
     data = {"ticker": code, "date": date}
 
-    data["lockup_history"] = _fetch_lockup_history(code)
-    data["lockup_upcoming"] = _fetch_lockup_upcoming(code, date)
+    history, _http_h = _fetch_lockup_history(code)
+    upcoming, _http_u = _fetch_lockup_upcoming(code, date)
+    data["lockup_history"] = history
+    data["lockup_upcoming"] = upcoming
     data["insider_transactions"] = _fetch_insider_transactions(code)
     data["announcements"] = _fetch_announcements(code, date)
     data["reduce_holdings"] = _fetch_reduce_em(code, date)
     data["margin_trading"] = _fetch_margin(code)
 
     # Compute pressure rating
-    upcoming = data.get("lockup_upcoming", [])
     if upcoming:
         data["pressure_rating"] = "重大压力" if len(upcoming) >= 3 else "中等压力" if len(upcoming) >= 1 else "轻微压力"
     else:

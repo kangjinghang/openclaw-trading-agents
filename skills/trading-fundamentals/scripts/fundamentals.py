@@ -75,7 +75,7 @@ def fetch_fundamentals(ticker, date):
     # 1. Tencent: real-time valuation
     start = time.monotonic()
     try:
-        tq = tencent_quote([code])
+        tq, http = tencent_quote([code])
         if code in tq:
             q = tq[code]
             data["valuation"] = {
@@ -91,7 +91,7 @@ def fetch_fundamentals(ticker, date):
             }
         record_call("fundamentals/tencent", success=True,
                     duration_ms=(time.monotonic() - start) * 1000,
-                    url=f"https://qt.gtimg.cn/q={code}")
+                    **http)
     except Exception as e:
         record_call("fundamentals/tencent", success=False, error=str(e),
                     duration_ms=(time.monotonic() - start) * 1000,
@@ -200,9 +200,10 @@ def fetch_fundamentals(ticker, date):
     # 4. Eastmoney Datacenter: quarterly financial trends (last 4 quarters)
     start = time.monotonic()
     try:
-        data["quarterly_trends"] = _fetch_quarterly_financials(code)
+        data["quarterly_trends"], http = _fetch_quarterly_financials(code)
         record_call("fundamentals/em_quarterly", success=True,
-                    duration_ms=(time.monotonic() - start) * 1000)
+                    duration_ms=(time.monotonic() - start) * 1000,
+                    **http)
     except Exception as e:
         record_call("fundamentals/em_quarterly", success=False, error=str(e),
                     duration_ms=(time.monotonic() - start) * 1000)
@@ -211,9 +212,10 @@ def fetch_fundamentals(ticker, date):
     # 5. Eastmoney: consensus EPS / target price / ratings
     start = time.monotonic()
     try:
-        data["consensus_eps"] = _fetch_consensus_eps(code)
+        data["consensus_eps"], http = _fetch_consensus_eps(code)
         record_call("fundamentals/em_consensus", success=True,
-                    duration_ms=(time.monotonic() - start) * 1000)
+                    duration_ms=(time.monotonic() - start) * 1000,
+                    **http)
     except Exception as e:
         record_call("fundamentals/em_consensus", success=False, error=str(e),
                     duration_ms=(time.monotonic() - start) * 1000)
@@ -330,6 +332,8 @@ def _fetch_quarterly_financials(code):
         "client": "WEB",
     }
     r = em_get(url, params=params, timeout=15)
+    http = {"url": url, "status_code": r.status_code,
+            "response_size": len(r.content), "response_snippet": r.text[:200]}
     d = r.json()
 
     results = []
@@ -356,7 +360,7 @@ def _fetch_quarterly_financials(code):
             quarter["gross_margin"] = round(float(item["XSMLL"]), 2)
         results.append(quarter)
 
-    return results
+    return results, http
 
 
 def _fetch_consensus_eps(code):
@@ -391,13 +395,15 @@ def _fetch_consensus_eps(code):
         "client": "WEB",
     }
     r = em_get(url, params=params, timeout=15)
+    http = {"url": url, "status_code": r.status_code,
+            "response_size": len(r.content), "response_snippet": r.text[:200]}
     j = r.json()
 
     # Defensive: Eastmoney returns "result": null both on failure and when the
     # stock has no forecast coverage. Treat both as "no data".
     data = (j.get("result") or {}).get("data", [])
     if not data:
-        return None
+        return None, http
 
     item = data[0]
     result = {}
@@ -448,7 +454,7 @@ def _fetch_consensus_eps(code):
     if tp_max is not None:
         result["target_price_max"] = round(tp_max, 2)
 
-    return result if result else None
+    return (result if result else None), http
 
 
 def _fetch_financial_health(code, periods=4):
@@ -565,10 +571,12 @@ def _fetch_valuation_percentile(code, window_years=5):
             df = ak.stock_zh_valuation_baidu(symbol=code, indicator=indicator, period="近十年")
             if df is None or len(df) == 0:
                 continue
-            # 裁剪到最近 window_years 年（按 date 列过滤，date 是 'YYYY-MM-DD' 字符串）
+            # 裁剪到最近 window_years 年（按 date 列过滤）
+            # date 可能是 datetime.date 对象或 'YYYY-MM-DD' 字符串，统一转 str 比较
             if "date" in df.columns:
-                cutoff = f"{int(df['date'].iloc[-1][:4]) - window_years}-01-01"
-                df = df[df["date"] >= cutoff]
+                last_date = str(df['date'].iloc[-1])
+                cutoff = f"{int(last_date[:4]) - window_years}-01-01"
+                df = df[df["date"].astype(str) >= cutoff]
             values = df["value"].tolist() if "value" in df.columns else []
             pct = _percentile_of_latest(values)
             if pct is not None:

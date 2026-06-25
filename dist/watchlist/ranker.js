@@ -292,12 +292,23 @@ function computeBreakdown(pool) {
     return { range_kind: rk, today_catalyst: tc };
 }
 // ── 字段补齐 ────────────────────────────────────────────────────────────────
-/** LLM 返回的 ticker/name/score/reason + 候选股反查 → 补 percent/days/range_kind。 */
+/**
+ * LLM 返回的 ticker/name/score/reason + 候选股反查 → 补 percent/days/range_kind。
+ *
+ * LLM 偶尔会把另一只股票的理由串到真实 ticker 上（如把"大元泵业"的液冷泵理由挂到
+ * SH603259 药明康德）。parseRankResponse 只校验 ticker 真实性，无法发现这类串号；
+ * 候选池的 name 来自雪球原始数据，是权威来源。防护：
+ *   1. name 用候选池覆盖（阻断串号向下游传播）
+ *   2. reason 名称校验：若 reason 提到了候选池中其他公司的名称，判定为串号并丢弃
+ */
 function enrichRanked(llmRanked, lookup) {
+    const tickerNameMap = new Map();
+    for (const [ticker, entry] of lookup) {
+        tickerNameMap.set(ticker, entry.name);
+    }
     return llmRanked.map((r) => {
         const c = lookup.get(r.ticker);
         if (!c) {
-            // 不应发生（parseRankResponse 已过滤幻觉），防御性兜底
             return {
                 ticker: r.ticker,
                 name: r.name,
@@ -308,19 +319,23 @@ function enrichRanked(llmRanked, lookup) {
                 reason: r.reason,
             };
         }
+        let reason = r.reason;
+        if (reason) {
+            for (const [otherTicker, otherName] of tickerNameMap) {
+                if (otherTicker !== r.ticker && otherName && reason.includes(otherName)) {
+                    reason = "";
+                    break;
+                }
+            }
+        }
         return {
             ticker: r.ticker,
-            // 用候选池的权威 name 覆盖 LLM 输出 —— LLM 偶尔会把另一只股票的名称/理由
-            // 串到真实存在的 ticker 上（如把"大元泵业"的液冷泵理由挂到 SH603259，而
-            // 603259 实为药明康德）。parseRankResponse 只校验 ticker 真实性，无法发现
-            // 这类 ticker-name 错配；候选池的 name 来自 candidates（雪球原始数据），
-            // 是权威来源，用它覆盖可阻断串号向下游 rebalance 传播。
             name: c.name,
             score: r.score,
             percent: c.range.percent,
             days: c.days,
             range_kind: c.range_kind,
-            reason: r.reason,
+            reason,
         };
     });
 }
@@ -381,8 +396,14 @@ const LONG_PROMPT = `# 角色
 打分本质是**排序**，不是绝对评价。如果所有股都 9 分+，下游拿到 N 个并列第一，
 排序就失效了。请敢于给低分——top-N 不该高于 7.5，不喜欢的股不要犹豫给 5-6。
 
+# ⚠️ 关键禁令：禁止跨股数据混淆
+**每只股票的 reason 必须且只能基于该股票自身的摘要和驱动要点。**
+常见错误：把 A 股的驱动逻辑（如"液冷泵订单"）写到 B 股的 ticker 下。
+检查方法：写完 reason 后，回看该股的摘要/驱动要点——如果 reason 里的核心名词
+（产品名、客户名、业务关键词）不在该股的摘要或驱动要点中出现，则必须重写。
+
 # reason 写作规则（严格）
-reason 必须包含至少 1 个**具体名词**，且具体名词必须从该股输入的摘要/驱动要点/事件链里抽取，不能编造。
+reason 必须包含至少 1 个**具体名词**，且具体名词必须从**该股**输入的摘要/驱动要点/事件链里抽取，不能编造。
 
 具体词候选（白名单示例）：
 - 产品/技术（如"T7 锡膏"、"TLVR 电感"、"ABF 膜"、"PPE 树脂"、"HVLP 铜箔"）
@@ -458,8 +479,14 @@ const SHORT_PROMPT = `# 角色
 打分本质是**排序**，不是绝对评价。如果所有股都 9 分+，下游拿到 N 个并列第一，
 排序就失效了。请敢于给低分——top-N 不该高于 7.5，不喜欢的股不要犹豫给 5-6。
 
+# ⚠️ 关键禁令：禁止跨股数据混淆
+**每只股票的 reason 必须且只能基于该股票自身的摘要和驱动要点。**
+常见错误：把 A 股的驱动逻辑（如"液冷泵订单"）写到 B 股的 ticker 下。
+检查方法：写完 reason 后，回看该股的摘要/驱动要点——如果 reason 里的核心名词
+（产品名、客户名、业务关键词）不在该股的摘要或驱动要点中出现，则必须重写。
+
 # reason 写作规则（严格）
-reason 必须包含至少 1 个**具体名词**，且具体名词必须从该股输入的摘要/驱动要点/事件链里抽取，不能编造。
+reason 必须包含至少 1 个**具体名词**，且具体名词必须从**该股**输入的摘要/驱动要点/事件链里抽取，不能编造。
 
 具体词候选（白名单示例）：
 - 产品/技术（如"T7 锡膏"、"TLVR 电感"、"ABF 膜"、"PPE 树脂"、"HVLP 铜箔"）
@@ -557,12 +584,24 @@ async function rankGroup(group, pool, totalPreFilter, totalPostCommon, topN, sca
     // LLM 成功：补齐字段，尊重 LLM 实际选出的数量（不足 topN 不补齐）
     const lookup = new Map(pool.map((c) => [c.ticker, c]));
     const ranked = enrichRanked(llmResult.ranked, lookup);
-    // excluded 同样用候选池权威 name 覆盖（同 enrichRanked 的 ticker-name 串号防护）
-    const excluded = llmResult.excluded.map((e) => ({
-        ticker: e.ticker,
-        name: lookup.get(e.ticker)?.name ?? e.name,
-        reason: e.reason,
-    }));
+    // excluded 同样用候选池权威 name 覆盖 + reason 名称校验
+    const tickerNameMap = new Map(pool.map((c) => [c.ticker, c.name]));
+    const excluded = llmResult.excluded.map((e) => {
+        let reason = e.reason;
+        if (reason) {
+            for (const [otherTicker, otherName] of tickerNameMap) {
+                if (otherTicker !== e.ticker && otherName && reason.includes(otherName)) {
+                    reason = "";
+                    break;
+                }
+            }
+        }
+        return {
+            ticker: e.ticker,
+            name: lookup.get(e.ticker)?.name ?? e.name,
+            reason,
+        };
+    });
     return {
         ...base,
         ranked_count: ranked.length,

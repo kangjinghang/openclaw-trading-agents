@@ -104,7 +104,7 @@ export function parseNews(raw: any): NewsItem[] {
   // news.py 输出字段是 stock_news（skills/trading-news/scripts/news.py:220）。
   // 老实现读 raw.news → 字段名不匹配，恒返回 []。修正为 stock_news，兼容老格式 raw.news。
   const list = Array.isArray(raw?.stock_news) ? raw.stock_news : (Array.isArray(raw?.news) ? raw.news : []);
-  return list.slice(0, 5).map((n: any): NewsItem | null => {
+  const items = list.map((n: any): NewsItem | null => {
     if (!n || typeof n !== "object") return null;
     const title = typeof n.title === "string" ? n.title.trim() : "";
     if (!title) return null;
@@ -116,6 +116,9 @@ export function parseNews(raw: any): NewsItem[] {
     if (typeof n.source === "string" && n.source.trim()) item.source = n.source.trim();
     return item;
   }).filter((x: NewsItem | null): x is NewsItem => x !== null);
+  // 按时间降序排列（最新在前），东财 API 默认按相关性排序导致时间乱序
+  items.sort((a: NewsItem, b: NewsItem) => (b.time ?? "").localeCompare(a.time ?? ""));
+  return items;
 }
 
 /** 从 news.py 输出解析时间分层数量统计（layer_stats）。
@@ -504,10 +507,10 @@ async function safeCall(fn: () => Promise<any>): Promise<{ data: any; vpa?: stri
   }
 }
 
-/** 一次性拉取 hot_money 全局源（northbound / sector_fund_flow / hot_stocks），
+/** 一次性拉取 hot_money 全局源（northbound / sector_fund_flow / hot_stocks / fund_flow），
  *  返回预取数据 + 子源级调用记录。失败返回 null（graceful degrade）。 */
 export async function fetchGlobalHotMoneyData(date: string): Promise<{
-  globalHotMoney: { northbound: any; sector_fund_flow: any; hot_stocks: any } | null;
+  globalHotMoney: { northbound: any; sector_fund_flow: any; hot_stocks: any; fund_flow: any } | null;
   calls: SourceCall[];
 }> {
   try {
@@ -521,6 +524,7 @@ export async function fetchGlobalHotMoneyData(date: string): Promise<{
         northbound: result.data?.northbound ?? null,
         sector_fund_flow: result.data?.sector_fund_flow ?? null,
         hot_stocks: result.data?.hot_stocks ?? null,
+        fund_flow: result.data?.fund_flow ?? null,
       },
       calls: Array.isArray(result.calls) ? result.calls as SourceCall[] : [],
     };
@@ -543,7 +547,7 @@ export async function fetchAllStockData(
   const { globalHotMoney, calls: globalCalls } = await fetchGlobalHotMoneyData(today);
   const globalJson = globalHotMoney ? JSON.stringify(globalHotMoney) : undefined;
   if (globalHotMoney) {
-    console.log(`  hot_money 全局源: 预取成功（northbound/sector_fund_flow/hot_stocks × 1）`);
+    console.log(`  hot_money 全局源: 预取成功（northbound/sector_fund_flow/hot_stocks/fund_flow × 1）`);
   } else {
     console.log(`  hot_money 全局源: 预取失败，每股独立拉取（退化为旧行为）`);
   }
@@ -560,7 +564,15 @@ export async function fetchAllStockData(
             globalHotMoneyJson: globalJson,
             date: today,
           });
-          if (data) result.set(meta.ticker, data);
+          if (data) {
+            // 用 fundamentals 的 industry 覆盖 sector（fundamentals 从东财 datacenter 拉取，
+            // 比 holdings.json 里的手工标注更准确；holdings 里没有的股也能拿到行业分类）
+            if (!data.sector || data.sector === "未分类") {
+              const fi = data.fundamentals?.industry;
+              if (fi) data.sector = fi;
+            }
+            result.set(meta.ticker, data);
+          }
         } catch {
           // 跳过失败的股
         }

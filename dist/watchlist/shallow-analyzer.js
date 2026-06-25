@@ -184,7 +184,8 @@ function renderConsensus(c) {
         const growth = typeof c.eps_growth_pct === "number" ? `(${sign(c.eps_growth_pct)}%)` : "";
         segs.push(`EPS ${cur}→${nxt}${growth}`);
     }
-    if (typeof c.target_price_min === "number" && typeof c.target_price_max === "number") {
+    if (typeof c.target_price_min === "number" && typeof c.target_price_max === "number"
+        && c.target_price_min > 0 && c.target_price_max > 0) {
         segs.push(`目标价 ${c.target_price_min}-${c.target_price_max}`);
     }
     if (c.ratings) {
@@ -197,9 +198,9 @@ function renderConsensus(c) {
         if (parts.length)
             segs.push(`评级 ${parts.join("/")}`);
     }
-    if (typeof c.forward_pe === "number")
+    if (typeof c.forward_pe === "number" && c.forward_pe > 0)
         segs.push(`远期PE ${c.forward_pe}`);
-    if (typeof c.peg === "number")
+    if (typeof c.peg === "number" && c.peg > 0)
         segs.push(`PEG ${c.peg}`);
     return segs.join(" | ");
 }
@@ -276,10 +277,10 @@ function formatAnalystPrompt(d) {
         .replace("{ticker}", d.ticker)
         .replace("{name}", d.name)
         .replace("{sector}", d.sector)
-        .replace("{pct_5d}", String(d.kline.pct_5d))
-        .replace("{pct_20d}", String(d.kline.pct_20d))
-        .replace("{support}", String(d.kline.support))
-        .replace("{resistance}", String(d.kline.resistance))
+        .replace("{pct_5d}", d.kline.pct_5d.toFixed(2))
+        .replace("{pct_20d}", d.kline.pct_20d.toFixed(2))
+        .replace("{support}", d.kline.support.toFixed(2))
+        .replace("{resistance}", d.kline.resistance.toFixed(2))
         .replace("{news_density}", newsDensity)
         .replace("{news_bullets}", newsBullets)
         .replace("{hot_money_summary}", renderHotMoneySummary(d.hot_money))
@@ -287,8 +288,8 @@ function formatAnalystPrompt(d) {
         .replace("{pe_label}", renderPercentileLabel(d.fundamentals.pe_percentile))
         .replace("{pb}", String(d.fundamentals.pb))
         .replace("{pb_label}", renderPercentileLabel(d.fundamentals.pb_percentile))
-        .replace("{rev_q1}", String(d.fundamentals.rev_q1))
-        .replace("{np_q1}", String(d.fundamentals.np_q1))
+        .replace("{rev_q1}", d.fundamentals.rev_q1 > 0 ? `${(d.fundamentals.rev_q1 / 1e8).toFixed(2)}亿` : String(d.fundamentals.rev_q1))
+        .replace("{np_q1}", d.fundamentals.np_q1 > 0 ? `${(d.fundamentals.np_q1 / 1e8).toFixed(2)}亿` : String(d.fundamentals.np_q1))
         // 季度趋势/机构预期：render 返回空串 → 整段标题下内容空白，LLM 理解为"无此数据"。
         .replace("{quarterly_trends}", renderQuarterlyTrends(d.fundamentals.quarterly_trends) || "(无季度趋势数据)")
         .replace("{consensus_eps}", renderConsensus(d.fundamentals.consensus_eps) || "(无机构覆盖)")
@@ -417,16 +418,16 @@ function formatRiskPrompt(d, analyst) {
         .replace("{ticker}", d.ticker)
         .replace("{name}", d.name)
         .replace("{sector}", d.sector)
-        .replace("{pct_5d}", String(d.kline.pct_5d))
-        .replace("{pct_20d}", String(d.kline.pct_20d))
-        .replace("{volume_ratio_5_20}", String(d.kline.volume_ratio_5_20))
+        .replace("{pct_5d}", d.kline.pct_5d.toFixed(2))
+        .replace("{pct_20d}", d.kline.pct_20d.toFixed(2))
+        .replace("{volume_ratio_5_20}", d.kline.volume_ratio_5_20.toFixed(2))
         .replace("{hot_money_summary}", renderHotMoneySummary(d.hot_money))
         .replace("{pe}", String(d.fundamentals.pe))
         .replace("{pe_label}", renderPercentileLabel(d.fundamentals.pe_percentile))
         .replace("{pb}", String(d.fundamentals.pb))
         .replace("{pb_label}", renderPercentileLabel(d.fundamentals.pb_percentile))
-        .replace("{rev_q1}", String(d.fundamentals.rev_q1))
-        .replace("{np_q1}", String(d.fundamentals.np_q1))
+        .replace("{rev_q1}", d.fundamentals.rev_q1 > 0 ? `${(d.fundamentals.rev_q1 / 1e8).toFixed(2)}亿` : String(d.fundamentals.rev_q1))
+        .replace("{np_q1}", d.fundamentals.np_q1 > 0 ? `${(d.fundamentals.np_q1 / 1e8).toFixed(2)}亿` : String(d.fundamentals.np_q1))
         .replace("{quarterly_trends}", renderQuarterlyTrends(d.fundamentals.quarterly_trends) || "(无季度趋势数据)")
         .replace("{vpa_text}", d.vpa_text || "(无 VPA 数据)")
         .replace("{macd_text}", renderMacd(d.macd) || "(无 MACD 数据)")

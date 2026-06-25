@@ -48,7 +48,15 @@ export declare function computeDistribution(values: number[]): DistributionStats
 export declare function classifyTodayCatalyst(c: CandidateEntry): "limit_up" | "pct_over_5" | "pct_under_5" | "none";
 /** 算 pool 的 range_kind + today_catalyst 计数。pool 为空返回 null。 */
 export declare function computeBreakdown(pool: CandidateEntry[]): ScanGroupBreakdown | null;
-/** LLM 返回的 ticker/name/score/reason + 候选股反查 → 补 percent/days/range_kind。 */
+/**
+ * LLM 返回的 ticker/name/score/reason + 候选股反查 → 补 percent/days/range_kind。
+ *
+ * LLM 偶尔会把另一只股票的理由串到真实 ticker 上（如把"大元泵业"的液冷泵理由挂到
+ * SH603259 药明康德）。parseRankResponse 只校验 ticker 真实性，无法发现这类串号；
+ * 候选池的 name 来自雪球原始数据，是权威来源。防护：
+ *   1. name 用候选池覆盖（阻断串号向下游传播）
+ *   2. reason 名称校验：若 reason 提到了候选池中其他公司的名称，判定为串号并丢弃
+ */
 export declare function enrichRanked(llmRanked: Array<{
     ticker: string;
     name: string;

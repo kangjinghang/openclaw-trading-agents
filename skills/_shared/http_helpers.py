@@ -161,7 +161,10 @@ def http_get(url, **kwargs):
 
 def eastmoney_datacenter(report_name, columns="ALL", filter_str="",
                          page_size=50, sort_columns="", sort_types="-1"):
-    """Eastmoney Datacenter unified query (shared by dragon-tiger, lockup, etc.)."""
+    """Eastmoney Datacenter unified query (shared by dragon-tiger, lockup, etc.).
+
+    Returns (data, http_details) where http_details = {url, status_code, response_size, response_snippet}.
+    """
     url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
     params = {
         "reportName": report_name,
@@ -175,18 +178,23 @@ def eastmoney_datacenter(report_name, columns="ALL", filter_str="",
         "client": "WEB",
     }
     r = em_get(url, params=params, timeout=15)
+    http = {"url": url, "status_code": r.status_code,
+            "response_size": len(r.content), "response_snippet": r.text[:200]}
     d = r.json()
     if d.get("result") and d["result"].get("data"):
-        return d["result"]["data"]
-    return []
+        return d["result"]["data"], http
+    return [], http
 
 
 # ── Tencent real-time quote ─────────────────────────────────────────
 def tencent_quote(codes):
     """Batch real-time quotes from Tencent Finance (qt.gtimg.cn).
-    codes: list of 6-digit strings. Returns dict[code] -> {name, price, pe_ttm, pb, ...}
+    codes: list of 6-digit strings. Returns (result, http_details) where:
+      result: dict[code] -> {name, price, pe_ttm, pb, ...}
+      http_details: dict with url, status_code, response_size, response_snippet
     """
     import urllib.request
+    from urllib.error import HTTPError, URLError
 
     def _get_prefix(code):
         if code.startswith(("6", "9")):
@@ -199,8 +207,16 @@ def tencent_quote(codes):
     url = "https://qt.gtimg.cn/q=" + ",".join(prefixed)
     req = urllib.request.Request(url)
     req.add_header("User-Agent", "Mozilla/5.0")
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        raw = resp.read().decode("gbk")
+    resp = urllib.request.urlopen(req, timeout=10)
+    raw_bytes = resp.read()
+    raw = raw_bytes.decode("gbk")
+    status_code = resp.status
+    http_details = {
+        "url": url,
+        "status_code": status_code,
+        "response_size": len(raw_bytes),
+        "response_snippet": raw[:200],
+    }
 
     result = {}
     for line in raw.strip().split(";"):
@@ -228,7 +244,7 @@ def tencent_quote(codes):
             "limit_down": _safe_float(vals[48]),
             "pe_static": _safe_float(vals[52]),
         }
-    return result
+    return result, http_details
 
 
 def _safe_float(val):

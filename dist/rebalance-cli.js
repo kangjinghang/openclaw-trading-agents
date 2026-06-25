@@ -309,15 +309,15 @@ Options:
     // 写 plan.md（人类可读）
     const planMd = (0, plan_formatter_1.formatPlanMarkdown)(planFile);
     fs.writeFileSync(path.join(rebalanceDir, "plan.md"), planMd, "utf-8");
-    // 写 data-trace.md：选第一只股作为代表，展示完整的数据管道调试视图
+    // 写 data-trace.html：选第一只股作为代表，展示完整的数据管道调试视图
     if (result.reports.length > 0) {
         const exampleReport = result.reports[0];
         const exampleData = dataByTicker.get(exampleReport.ticker);
         if (exampleData) {
             const exampleAction = result.rebalancer_output.actions.find(a => a.ticker === exampleReport.ticker);
             const positionTrace = result.position_traces?.[exampleReport.ticker];
-            const traceMd = (0, data_trace_report_1.generateDataTraceReport)(exampleReport.ticker, exampleReport.name, exampleData, exampleReport, exampleAction, positionTrace);
-            fs.writeFileSync(path.join(rebalanceDir, "data-trace.md"), traceMd, "utf-8");
+            const traceHtml = (0, data_trace_report_1.generateDataTraceReport)(exampleReport.ticker, exampleReport.name, exampleData, exampleReport, exampleAction, positionTrace);
+            fs.writeFileSync(path.join(rebalanceDir, "data-trace.html"), traceHtml, "utf-8");
         }
     }
     // 更新 last_rebalance.json（含 recent_sells 跨次累积，供 anti-churn 买锁）。

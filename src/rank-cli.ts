@@ -6,7 +6,7 @@
 // Usage:
 //   npm run rank
 //   npm run rank -- --date 2026-06-17 --top 15 --long-top 7 --short-top 8
-//   npm run rank -- --model glm-5-turbo --api-key xxx --base-url https://...
+//   npm run rank -- --model glm-5.2 --api-key xxx --base-url https://...
 // 可用模型: glm-5.2, glm-5.1, glm-5-turbo, glm-5, glm-4.7, glm-4.7-flash, glm-4.7-flashx, glm-4.6, glm-4.5-air, glm-4.5-airx, glm-4.5-flash
 
 import * as os from "os";
@@ -20,7 +20,7 @@ import { writeAtomicJson } from "./watchlist/atomic-json";
 import type { CandidatesFile } from "./watchlist/types";
 
 const DEFAULT_WATCHLIST_DIR = path.join(os.homedir(), ".openclaw", "watchlist");
-const DEFAULT_MODEL = "glm-5-turbo";
+const DEFAULT_MODEL = "glm-5.2";
 const DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
 
 function readJson<T>(fp: string): T | null {
@@ -51,8 +51,9 @@ function loadPluginConfig(): { api_key?: string; base_url?: string; model?: stri
     return {
       api_key: cfg.api_key,
       base_url: cfg.base_url,
-      // ranker 用 analyst 层模型（可在 config.models.ranker 覆盖，未配置则用 analyst）
-      model: cfg.models?.ranker ?? cfg.models?.analyst,
+      // ranker 用决策层强模型（多候选排序对注意力要求高，弱模型易串号）；
+      // 优先 decision_deep > ranker > analyst
+      model: cfg.models?.decision_deep ?? cfg.models?.ranker ?? cfg.models?.analyst,
     };
   } catch {
     return {};
@@ -80,7 +81,7 @@ Options:
   --top <N>          总精选数（默认 15，仅参考；实际以 long-top+short-top 为准）
   --long-top <N>     LONG 组精选（默认 7）
   --short-top <N>    SHORT 组精选（默认 8）
-  --model <M>        模型名（默认 ${DEFAULT_MODEL}，或读 openclaw.json 的 config.models.ranker/analyst）
+  --model <M>        模型名（默认 ${DEFAULT_MODEL}，或读 openclaw.json 的 config.models.decision_deep/ranker/analyst）
   --api-key <K>      OpenAI 兼容 API key（默认读 openclaw.json 或 OPENAI_API_KEY）
   --base-url <U>     OpenAI 兼容 base URL（默认读 openclaw.json 或 OPENAI_BASE_URL）
   --help             显示本帮助
