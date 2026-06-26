@@ -309,6 +309,10 @@ def pywencai_query(query, loop=True):
     pywencai.get returns several shapes depending on the query; this normalizes
     DataFrame / list / nested-dict (tableV1|data|result) / None all into a flat
     list[dict].
+
+    NOTE: pywencai v0.13.1 headers.py 只发 hexin-v + UA + cookie，缺少
+    Accept/Content-Type/Origin/Referer，导致 iwencai API 返回 403。
+    monkey-patch headers 函数补全浏览器 headers。
     """
     start = time.monotonic()
     try:
@@ -318,15 +322,30 @@ def pywencai_query(query, loop=True):
                     duration_ms=(time.monotonic() - start) * 1000)
         return None
 
+    # Monkey-patch: 补全 iwencai API 所需的浏览器 headers
+    import pywencai.wencai as _pw_wencai
+    _orig_headers = _pw_wencai.headers
+
+    def _patched_headers(cookie=None, user_agent=None):
+        h = _orig_headers(cookie, user_agent)
+        h.update({
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+            "Content-Type": "application/json",
+            "Origin": "http://www.iwencai.com",
+            "Referer": "http://www.iwencai.com/",
+        })
+        return h
+
+    _pw_wencai.headers = _patched_headers
     try:
-        # NOTE: pywencai.get signature is (loop=False, **kwargs) — the query
-        # goes through **kwargs as `query=`, NOT as the first positional arg
-        # (which would bind to `loop`). aiagents-stock uses get(query=q, loop=True).
         raw = pywencai.get(query=query, loop=loop)
     except Exception as e:
         record_call("pywencai", success=False, error=str(e),
                     duration_ms=(time.monotonic() - start) * 1000)
         return None
+    finally:
+        _pw_wencai.headers = _orig_headers
 
     # Unwrap nested dict carriers (pywencai wraps the table under varying keys:
     # tableV1 for tabular queries, news_list1 for news, etc.). Prefer the

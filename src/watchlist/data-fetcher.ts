@@ -247,7 +247,7 @@ export function parseHotMoney(raw: any, industry?: string): HotMoneyData {
   };
 }
 
-export function parseFundamentals(raw: any): { pe: number; pb: number; rev_q1: number; np_q1: number; industry: string; quarterly_trends?: QuarterlyTrend[]; consensus_eps?: ConsensusEps; pe_percentile?: number; pb_percentile?: number } {
+export function parseFundamentals(raw: any): { pe: number; pb: number; rev_q1: number; np_q1: number; industry: string; quarterly_trends?: QuarterlyTrend[]; consensus_eps?: ConsensusEps; pe_percentile?: number; pb_percentile?: number; capability_scores?: Record<string, { score: number; label: string }> } {
   // fundamentals.py 的真实输出是嵌套结构：
   //   valuation.pe_ttm / valuation.pb          （腾讯实时估值）
   //   financial_snapshot.revenue / .net_profit （mootdx 财务快照）
@@ -294,6 +294,9 @@ export function parseFundamentals(raw: any): { pe: number; pb: number; rev_q1: n
     // PE/PB 历史分位（baidu 近5年），缺/非法 → undefined，prompt 据此省略方括号标注
     pe_percentile: pct(valPct.pe_percentile),
     pb_percentile: pct(valPct.pb_percentile),
+    // 同花顺 8 维能力评分（pywencai），缺/非法 → undefined
+    capability_scores: raw?.capability_scores && typeof raw.capability_scores === "object" && !Array.isArray(raw.capability_scores)
+      ? raw.capability_scores as Record<string, { score: number; label: string }> : undefined,
   };
 }
 

@@ -127,7 +127,7 @@ export interface StockData {
    *  旧实现是 string[]（只有标题），现升级为 NewsItem[] 让 LLM 判断时效性 + 标题党。 */
   news: NewsItem[];
   hot_money: HotMoneyData;
-  fundamentals: { pe: number; pb: number; rev_q1: number; np_q1: number; industry: string; quarterly_trends?: QuarterlyTrend[]; consensus_eps?: ConsensusEps; pe_percentile?: number; pb_percentile?: number };
+  fundamentals: { pe: number; pb: number; rev_q1: number; np_q1: number; industry: string; quarterly_trends?: QuarterlyTrend[]; consensus_eps?: ConsensusEps; pe_percentile?: number; pb_percentile?: number; capability_scores?: Record<string, { score: number; label: string }> };
   ranker_thesis?: string;
   /** kline.py 预计算的 VPA 量价分析文本（纯事实：价量变动%、交叉事件，无方向性结论）。
    *  undefined = 无 VPA 数据（非 kline 脚本或拉取失败）。 */
@@ -186,6 +186,8 @@ const ANALYST_PROMPT_TEMPLATE = `# 角色
 {quarterly_trends}
 ## 机构一致预期（卖方覆盖数 / EPS 预期 / 目标价 / 评级）
 {consensus_eps}
+## 同花顺能力评分（8维度，0-10分，仅作参考）
+{capability_scores}
 {ranker_section}
 
 # 输出格式（严格 JSON）
@@ -327,6 +329,15 @@ export function renderConsensus(c?: ConsensusEps): string {
   return segs.join(" | ");
 }
 
+/** 渲染同花顺 8 维能力评分为一行摘要。 */
+function renderCapabilityScores(scores?: Record<string, { score: number; label: string }>): string {
+  if (!scores || Object.keys(scores).length === 0) return "";
+  const entries = Object.entries(scores)
+    .filter(([, v]) => typeof v?.score === "number")
+    .map(([k, v]) => `${v.label || k} ${v.score.toFixed(1)}`);
+  return entries.join(" | ") || "";
+}
+
 /** 把解禁+减持压成一行（对齐 renderHotMoneySummary/renderQuarterlyTrends 范式）。
  *
  *  格式：「解禁压力：重大压力 | 未来90天2笔(最近 07-15 定增 0.4%；09-20 首发 1.2%) | 近期减持1笔(大股东 2.1%，个人资金需求)」
@@ -423,6 +434,7 @@ export function formatAnalystPrompt(d: StockData): string {
     // 季度趋势/机构预期：render 返回空串 → 整段标题下内容空白，LLM 理解为"无此数据"。
     .replace("{quarterly_trends}", renderQuarterlyTrends(d.fundamentals.quarterly_trends) || "(无季度趋势数据)")
     .replace("{consensus_eps}", renderConsensus(d.fundamentals.consensus_eps) || "(无机构覆盖)")
+    .replace("{capability_scores}", renderCapabilityScores(d.fundamentals.capability_scores) || "(无评分数据)")
     .replace("{ranker_section}", rankerSection);
 }
 
