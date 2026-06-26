@@ -57,8 +57,9 @@ let resolvedPython = null;
  *
  * Priority:
  * 1. TRADING_PYTHON env var (user explicit override)
- * 2. <project>/.venv/bin/python (project-local venv created by setup-python.sh;
- *    preferred so deps installed there win over a system python that lacks them)
+ * 2. <project>/.venv venv (project-local venv created by setup-python.sh;
+ *    preferred so deps installed there win over a system python that lacks them).
+ *    Path is platform-specific: win32 → .venv/Scripts/python.exe, else → .venv/bin/python
  * 3. python3 (PATH lookup)
  * 4. python (Windows alias; `python3` may resolve to a bare install there)
  * 5. /usr/bin/python3 (system)
@@ -72,10 +73,14 @@ function resolvePythonCmd() {
         return resolvedPython;
     // Project-local venv: preferred over system python so the deps installed by
     // `bash scripts/setup-python.sh` (akshare/pywencai/pandas) are picked up
-    // without manually exporting TRADING_PYTHON. Only added when the binary
-    // actually exists — keeps Windows / venv-less environments untouched.
-    const projectVenv = path.join(process.cwd(), '.venv', 'bin', 'python');
-    const venvCandidates = fs.existsSync(projectVenv) ? [projectVenv] : [];
+    // without manually exporting TRADING_PYTHON. The venv layout differs by
+    // platform: Windows places the interpreter at .venv/Scripts/python.exe while
+    // POSIX uses .venv/bin/python. Probe both so either platform's venv is
+    // detected without forcing the user to export TRADING_PYTHON.
+    const venvCandidates = [
+        path.join(process.cwd(), '.venv', 'bin', 'python'), // POSIX
+        path.join(process.cwd(), '.venv', 'Scripts', 'python.exe'), // Windows
+    ].filter(p => fs.existsSync(p));
     const candidates = [
         process.env.TRADING_PYTHON,
         ...venvCandidates,

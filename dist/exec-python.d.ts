@@ -5,8 +5,9 @@ import { ScriptResult } from './types';
  *
  * Priority:
  * 1. TRADING_PYTHON env var (user explicit override)
- * 2. <project>/.venv/bin/python (project-local venv created by setup-python.sh;
- *    preferred so deps installed there win over a system python that lacks them)
+ * 2. <project>/.venv venv (project-local venv created by setup-python.sh;
+ *    preferred so deps installed there win over a system python that lacks them).
+ *    Path is platform-specific: win32 → .venv/Scripts/python.exe, else → .venv/bin/python
  * 3. python3 (PATH lookup)
  * 4. python (Windows alias; `python3` may resolve to a bare install there)
  * 5. /usr/bin/python3 (system)

@@ -1146,7 +1146,7 @@ npm run rebalance -- [options]
 | `WATCHLIST_DIR` | `~/.openclaw/watchlist` | 存储路径 |
 | `OPENAI_API_KEY` | - | API key（fallback） |
 | `OPENAI_BASE_URL` | - | base URL（fallback） |
-| `TRADING_PYTHON` | `python3` | Python 解释器路径 |
+| `TRADING_PYTHON` | 自动探测 | Python 解释器路径（默认探测项目 `.venv`，未找到则用系统 `python`/`python3`）；显式指定可覆盖自动探测 |
 
 ## 9. 错误处理
 

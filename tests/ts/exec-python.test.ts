@@ -26,6 +26,13 @@ async function clearCache() {
 
 // Tests use useCache:false to avoid cache interference
 
+// Resolve a working python once for the execPython tests below. They previously
+// hardcoded 'python3', which only exists on POSIX — on Windows the interpreter
+// is 'python' (or the project .venv), so the tests failed with exit code 9009
+// ("command not found") there. Using resolvePythonCmd() makes the suite portable
+// without changing what is being asserted (the tests just need *a* python).
+const PYTHON = resolvePythonCmd();
+
 describe('execPython', () => {
   const tmpDir = join(process.cwd(), 'test-tmp');
   let testScriptPath: string;
@@ -55,7 +62,7 @@ print(json.dumps(result))
 `;
 
     await writeFile(testScriptPath, script, 'utf-8');
-    const result = await execPython(testScriptPath, [], null, 'python3', 30_000, false);
+    const result = await execPython(testScriptPath, [], null, PYTHON, 30_000, false);
 
     expect(result.success).toBe(true);
     expect(result.data).toEqual({
@@ -79,7 +86,7 @@ print(json.dumps(result))
 `;
 
     await writeFile(testScriptPath, script, 'utf-8');
-    const result = await execPython(testScriptPath, ['arg1', 'arg2', 'arg3'], null, 'python3', 30_000, false);
+    const result = await execPython(testScriptPath, ['arg1', 'arg2', 'arg3'], null, PYTHON, 30_000, false);
 
     expect(result.success).toBe(true);
     expect(result.data).toEqual({
@@ -104,7 +111,7 @@ print(json.dumps(result))
 
     await writeFile(testScriptPath, script, 'utf-8');
     const inputData = { ticker: 'AAPL', timeframe: '1d' };
-    const result = await execPython(testScriptPath, [], inputData, 'python3', 30_000, false);
+    const result = await execPython(testScriptPath, [], inputData, PYTHON, 30_000, false);
 
     expect(result.success).toBe(true);
     expect(result.data).toEqual({
@@ -121,7 +128,7 @@ raise ValueError("This is a test error")
 `;
 
     await writeFile(testScriptPath, script, 'utf-8');
-    const result = await execPython(testScriptPath, [], null, 'python3', 30_000, false);
+    const result = await execPython(testScriptPath, [], null, PYTHON, 30_000, false);
 
     expect(result.success).toBe(false);
     expect(result.error).toBeDefined();
@@ -136,7 +143,7 @@ print("More invalid output")
 `;
 
     await writeFile(testScriptPath, script, 'utf-8');
-    const result = await execPython(testScriptPath, [], null, 'python3', 30_000, false);
+    const result = await execPython(testScriptPath, [], null, PYTHON, 30_000, false);
 
     expect(result.success).toBe(false);
     expect(result.error).toBeDefined();
@@ -157,7 +164,7 @@ print("More invalid output")
 `;
 
     await writeFile(testScriptPath, script, 'utf-8');
-    const result = await execPython(testScriptPath, [], null, 'python3', 30_000, false);
+    const result = await execPython(testScriptPath, [], null, PYTHON, 30_000, false);
 
     expect(result.success).toBe(false);
     expect(result.error).toBeDefined();
@@ -315,12 +322,21 @@ describe('resolvePythonCmd', () => {
   it('prioritizes TRADING_PYTHON env var when set and valid', () => {
     // Save and set env. Use a python that has all required deps (requests+akshare+pandas);
     // resolvePythonCmd Phase-1 prefers a python with full deps over a bare python3.
+    // Resolve the project venv python (created by setup-python.sh with full deps) so the
+    // test does not depend on whether the host's bare `python`/`python3` happens to have
+    // akshare/pandas installed — that varies across machines and breaks CI portability.
+    const venvPython = path.join(process.cwd(), '.venv', 'bin', 'python');
+    const venvPythonWin = path.join(process.cwd(), '.venv', 'Scripts', 'python.exe');
+    const fullDepsPython = fs.existsSync(venvPythonWin) ? venvPythonWin
+      : fs.existsSync(venvPython) ? venvPython
+      : 'python'; // fallback: assume host python has full deps (original behavior)
+
     const orig = process.env.TRADING_PYTHON;
-    process.env.TRADING_PYTHON = 'python'; // uv-managed python with full deps
+    process.env.TRADING_PYTHON = fullDepsPython;
     resetPythonResolver();
 
     const cmd = resolvePythonCmd();
-    expect(cmd).toBe('python');
+    expect(cmd).toBe(fullDepsPython);
 
     // Restore
     if (orig) {

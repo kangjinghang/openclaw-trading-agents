@@ -1,11 +1,16 @@
 // tests/ts/cache.test.ts
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { readCache, writeCache, execPython } from '../../src/exec-python';
+import { readCache, writeCache, execPython, resolvePythonCmd } from '../../src/exec-python';
 import { writeFile, rm, mkdir, readdir } from 'fs/promises';
 import { join } from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
+
+// Resolve a working python once: tests previously hardcoded 'python3', which is
+// absent on Windows (exit 9009). resolvePythonCmd() picks the project venv /
+// system python so the cache suite runs cross-platform.
+const PYTHON = resolvePythonCmd();
 
 const TMP_DIR = join(process.cwd(), 'test-tmp-cache');
 const TEST_CACHE_DIR = join(TMP_DIR, '.cache');
@@ -29,7 +34,7 @@ print(json.dumps({"value": 42}))
     await writeFile(scriptPath, script, 'utf-8');
 
     // First call — should execute Python and cache
-    const result1 = await execPython(scriptPath, [], null, 'python3', 30_000, true, TEST_CACHE_DIR);
+    const result1 = await execPython(scriptPath, [], null, PYTHON, 30_000, true, TEST_CACHE_DIR);
     expect(result1.success).toBe(true);
     expect(result1.data).toEqual({ value: 42 });
 
@@ -41,7 +46,7 @@ print(json.dumps({"value": 99}))
     await writeFile(scriptPath, script2, 'utf-8');
 
     // Second call — should return cached result (42, not 99)
-    const result2 = await execPython(scriptPath, [], null, 'python3', 30_000, true, TEST_CACHE_DIR);
+    const result2 = await execPython(scriptPath, [], null, PYTHON, 30_000, true, TEST_CACHE_DIR);
     expect(result2.success).toBe(true);
     expect(result2.data).toEqual({ value: 42 }); // cached!
   });
@@ -54,7 +59,7 @@ print(json.dumps({"v": 1}))
 `;
     await writeFile(scriptPath, script, 'utf-8');
 
-    const result1 = await execPython(scriptPath, [], null, 'python3', 30_000, false, TEST_CACHE_DIR);
+    const result1 = await execPython(scriptPath, [], null, PYTHON, 30_000, false, TEST_CACHE_DIR);
     expect(result1.data).toEqual({ v: 1 });
 
     // Overwrite
@@ -63,7 +68,7 @@ import json
 print(json.dumps({"v": 2}))
 `, 'utf-8');
 
-    const result2 = await execPython(scriptPath, [], null, 'python3', 30_000, false, TEST_CACHE_DIR);
+    const result2 = await execPython(scriptPath, [], null, PYTHON, 30_000, false, TEST_CACHE_DIR);
     expect(result2.data).toEqual({ v: 2 }); // fresh, not cached
   });
 
@@ -72,7 +77,7 @@ print(json.dumps({"v": 2}))
     const script = `raise ValueError("fail")`;
     await writeFile(scriptPath, script, 'utf-8');
 
-    const result = await execPython(scriptPath, [], null, 'python3', 30_000, true, TEST_CACHE_DIR);
+    const result = await execPython(scriptPath, [], null, PYTHON, 30_000, true, TEST_CACHE_DIR);
     expect(result.success).toBe(false);
 
     // Verify no cache file was written
@@ -89,7 +94,7 @@ print(json.dumps({"echo": data}))
 `;
     await writeFile(scriptPath, script, 'utf-8');
 
-    const result = await execPython(scriptPath, [], { x: 1 }, 'python3', 30_000, true, TEST_CACHE_DIR);
+    const result = await execPython(scriptPath, [], { x: 1 }, PYTHON, 30_000, true, TEST_CACHE_DIR);
     expect(result.success).toBe(true);
 
     // Should not have cached because stdinData was provided
@@ -105,8 +110,8 @@ print(json.dumps({"args": sys.argv[1:]}))
 `;
     await writeFile(scriptPath, script, 'utf-8');
 
-    const r1 = await execPython(scriptPath, ['a'], null, 'python3', 30_000, true, TEST_CACHE_DIR);
-    const r2 = await execPython(scriptPath, ['b'], null, 'python3', 30_000, true, TEST_CACHE_DIR);
+    const r1 = await execPython(scriptPath, ['a'], null, PYTHON, 30_000, true, TEST_CACHE_DIR);
+    const r2 = await execPython(scriptPath, ['b'], null, PYTHON, 30_000, true, TEST_CACHE_DIR);
 
     expect(r1.data).toEqual({ args: ['a'] });
     expect(r2.data).toEqual({ args: ['b'] });
@@ -121,7 +126,7 @@ print(json.dumps({"ts": 1}))
     await writeFile(scriptPath, script, 'utf-8');
 
     // Cache with very short TTL (1ms)
-    const result1 = await execPython(scriptPath, [], null, 'python3', 30_000, true, TEST_CACHE_DIR);
+    const result1 = await execPython(scriptPath, [], null, PYTHON, 30_000, true, TEST_CACHE_DIR);
     expect(result1.data).toEqual({ ts: 1 });
 
     // Overwrite script
