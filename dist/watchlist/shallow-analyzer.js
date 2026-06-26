@@ -66,15 +66,11 @@ const ANALYST_PROMPT_TEMPLATE = `# 角色
 /** 把 HotMoneyData 渲染成 prompt 里的一行紧凑资金面摘要。
  *
  *  范式对齐 newsDensity（news_layer_stats）：有则一行管道分隔，无则兜底标注。
- *  老实现只塞一个 net_5d 数字（且字段名 bug 恒 0），现把 5 个子源压成一句：
- *  "北向 +2.3亿(inflow) | 当日主力 +1.2亿(超大+0.45亿/大单+0.21亿) | 龙虎榜近30天2次(最近+1.2亿) | 所在行业未在当日主线 | 今日热门:半导体/军工/锂电"
+ *  把全局子源压成一句：
+ *  "北向 +2.3亿(inflow) | 龙虎榜近30天2次(最近+1.2亿) | 所在行业未在当日主线 | 今日热门:半导体/军工/锂电"
  *
  *  兜底：所有标量全 0 且无任何文本片段 → "(资金数据拉取失败或全空)"，
  *  让 LLM 知道资金面维度无数据（诚实标注缺失，不编造）。 */
-function formatYi(yuan) {
-    // 元 → 亿元，保留 2 位；0 显示为 0 亿（便于 LLM 区分"无数据"与"净流入 0"）
-    return (yuan / 1e8).toFixed(2);
-}
 function signPrefix(n) {
     return n > 0 ? "+" : "";
 }
@@ -84,21 +80,6 @@ function renderHotMoneySummary(h) {
     if (h.northbound_signal) {
         const sig = h.northbound_signal === "inflow" ? "流入" : "流出";
         parts.push(`北向${signPrefix(h.northbound_yi)}${h.northbound_yi.toFixed(2)}亿(${sig})`);
-    }
-    // 当日主力资金（超大单=机构，大单=游资/大户）
-    if (h.main_net_today !== 0 || h.super_net_today !== 0 || h.large_net_today !== 0) {
-        const segs = [`当日主力${signPrefix(h.main_net_today)}${formatYi(h.main_net_today)}亿`];
-        if (h.super_net_today !== 0)
-            segs.push(`超大单${signPrefix(h.super_net_today)}${formatYi(h.super_net_today)}亿`);
-        if (h.large_net_today !== 0)
-            segs.push(`大单${signPrefix(h.large_net_today)}${formatYi(h.large_net_today)}亿`);
-        // 同花顺独有：主动性买入(流入)/卖出(流出)金额，反映资金博弈激烈度
-        // （超大单/大单五档同花顺不提供，用流入/流出补充维度，而非伪装成超大单）
-        if (h.inflow_today !== 0 || h.outflow_today !== 0) {
-            segs.push(`流入${formatYi(h.inflow_today)}亿`);
-            segs.push(`流出${formatYi(h.outflow_today)}亿`);
-        }
-        parts.push(segs.join("/"));
     }
     // 龙虎榜（游资/机构席位动向）+ 上榜原因（区分游资炒作 vs 业绩驱动）
     if (h.dragon_tiger_recent) {

@@ -29,24 +29,17 @@ export interface NewsLayerStats {
   total_categorized: number;
 }
 
-/** 资金面摘要（来自 hot_money.py 的 5 个子源，parseHotMoney 预压缩为浅层字段 + 文本片段）。
+/** 资金面摘要（来自 hot_money.py 的全局子源，parseHotMoney 预压缩为浅层字段 + 文本片段）。
  *
- *  ⚠️ 字段命名诚实：main_net_today 是「当日」主力净流入，不是 5 日累计——
- *  hot_money.py 的 _fetch_fund_flow 只解析最后一根日 K（klt=1, klines[-1]），
- *  没有 5 日聚合逻辑。老实现字段叫 net_5d 但实际取不到值（顶层无此字段，恒 0），
- *  此处修正为 main_net_today 与脚本语义对齐，避免误导 LLM 把当日数字当成 5 日趋势。
+ *  注：个股 fund_flow（当日主力/超大单/大单净流入）已移除——同花顺"个股资金流"页面只收
+ *  深市 ~1400 只活跃股，沪市几乎不收录，覆盖率天花板过低。保留的全局子源不受影响。
  *
- *  - 标量字段（main_net_today / *_net_today / northbound_*）：缺失或拉取失败 → 0/空串
+ *  - 标量字段（northbound_*）：缺失或拉取失败 → 0/空串
  *  - 文本片段（dragon_tiger_recent / sector_inflow_top / sector_outflow_top / hot_stocks_top）：
  *    缺数据 → undefined，renderHotMoneySummary 据此省略对应分句
  *  - sector_in_industry_tag：标的行业是否落在当日板块流入/流出榜，"主线"|"弱势"|"未上榜"|""
  *  - dragon_tiger_reason：最近一次上榜原因（日涨幅偏离/换手达标等），判断游资炒作 vs 业绩驱动 */
 export interface HotMoneyData {
-  main_net_today: number;        // 当日主力净流入（元）
-  super_net_today: number;       // 当日超大单净流入（元）——同花顺源不提供，恒 0
-  large_net_today: number;       // 当日大单净流入（元）——同花顺源不提供，恒 0
-  inflow_today: number;          // 当日主动性买入金额（流入，元）——同花顺独有，反映买盘强度
-  outflow_today: number;         // 当日主动性卖出金额（流出，元）——同花顺独有，反映卖盘强度
   northbound_yi: number;         // 全市场北向净流入（亿元）
   northbound_signal: string;     // "inflow"|"outflow"|""（无北向数据则空串）
   dragon_tiger_recent?: string;  // 近 30 天龙虎榜预压缩文本（最近 2 条：日期+净买+换手）
@@ -207,16 +200,11 @@ const ANALYST_PROMPT_TEMPLATE = `# 角色
 /** 把 HotMoneyData 渲染成 prompt 里的一行紧凑资金面摘要。
  *
  *  范式对齐 newsDensity（news_layer_stats）：有则一行管道分隔，无则兜底标注。
- *  老实现只塞一个 net_5d 数字（且字段名 bug 恒 0），现把 5 个子源压成一句：
- *  "北向 +2.3亿(inflow) | 当日主力 +1.2亿(超大+0.45亿/大单+0.21亿) | 龙虎榜近30天2次(最近+1.2亿) | 所在行业未在当日主线 | 今日热门:半导体/军工/锂电"
+ *  把全局子源压成一句：
+ *  "北向 +2.3亿(inflow) | 龙虎榜近30天2次(最近+1.2亿) | 所在行业未在当日主线 | 今日热门:半导体/军工/锂电"
  *
  *  兜底：所有标量全 0 且无任何文本片段 → "(资金数据拉取失败或全空)"，
  *  让 LLM 知道资金面维度无数据（诚实标注缺失，不编造）。 */
-function formatYi(yuan: number): string {
-  // 元 → 亿元，保留 2 位；0 显示为 0 亿（便于 LLM 区分"无数据"与"净流入 0"）
-  return (yuan / 1e8).toFixed(2);
-}
-
 function signPrefix(n: number): string {
   return n > 0 ? "+" : "";
 }
@@ -228,20 +216,6 @@ export function renderHotMoneySummary(h: HotMoneyData): string {
   if (h.northbound_signal) {
     const sig = h.northbound_signal === "inflow" ? "流入" : "流出";
     parts.push(`北向${signPrefix(h.northbound_yi)}${h.northbound_yi.toFixed(2)}亿(${sig})`);
-  }
-
-  // 当日主力资金（超大单=机构，大单=游资/大户）
-  if (h.main_net_today !== 0 || h.super_net_today !== 0 || h.large_net_today !== 0) {
-    const segs = [`当日主力${signPrefix(h.main_net_today)}${formatYi(h.main_net_today)}亿`];
-    if (h.super_net_today !== 0) segs.push(`超大单${signPrefix(h.super_net_today)}${formatYi(h.super_net_today)}亿`);
-    if (h.large_net_today !== 0) segs.push(`大单${signPrefix(h.large_net_today)}${formatYi(h.large_net_today)}亿`);
-    // 同花顺独有：主动性买入(流入)/卖出(流出)金额，反映资金博弈激烈度
-    // （超大单/大单五档同花顺不提供，用流入/流出补充维度，而非伪装成超大单）
-    if (h.inflow_today !== 0 || h.outflow_today !== 0) {
-      segs.push(`流入${formatYi(h.inflow_today)}亿`);
-      segs.push(`流出${formatYi(h.outflow_today)}亿`);
-    }
-    parts.push(segs.join("/"));
   }
 
   // 龙虎榜（游资/机构席位动向）+ 上榜原因（区分游资炒作 vs 业绩驱动）

@@ -231,11 +231,6 @@ function traceHotMoney(d) {
     h += `<p class="muted">脚本: skills/trading-hot-money/scripts/hot_money.py &nbsp;|&nbsp; 5 个子源并行</p>`;
     const rYi = (v) => v !== 0 ? `${(v / 1e8).toFixed(2)}亿` : "0";
     h += summaryTable("parseHotMoney() 处理后", [
-        ["main_net_today", rYi(d.hot_money.main_net_today)],
-        ["super_net_today", `${rYi(d.hot_money.super_net_today)}（同花顺源不分档）`],
-        ["large_net_today", `${rYi(d.hot_money.large_net_today)}（同花顺源不分档）`],
-        ["inflow_today", rYi(d.hot_money.inflow_today)],
-        ["outflow_today", rYi(d.hot_money.outflow_today)],
         ["northbound_yi", `${d.hot_money.northbound_yi.toFixed(2)}亿`],
         ["northbound_signal", d.hot_money.northbound_signal],
         ["dragon_tiger_recent", d.hot_money.dragon_tiger_recent ?? "缺失"],

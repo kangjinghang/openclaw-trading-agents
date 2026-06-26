@@ -16,11 +16,10 @@ export declare function checkFieldCitations(content: string, role: string): stri
  * sentinel; null when all null fields are properly declared (or no watched
  * fields are null).
  *
- * Regression: 600157 hot_money had fund_flow=null + sector_fund_flow=null
- * (push2 rate-limited). The analyst wrote plain-text "数据缺失" instead of
- * the bracketed sentinel form, so Layer-1's sentinel counter saw zero
- * matches and graded it A. This check closes that loophole by consulting
- * the raw data the analyst was given.
+ * Regression: 600157 hot_money had sector_fund_flow=null (push2 rate-limited).
+ * The analyst wrote plain-text "数据缺失" instead of the bracketed sentinel
+ * form, so Layer-1's sentinel counter saw zero matches and graded it A. This
+ * check closes that loophole by consulting the raw data the analyst was given.
  */
 export declare function checkNullFieldSentinels(content: string, role: string, rawData: unknown): string | null;
 /**

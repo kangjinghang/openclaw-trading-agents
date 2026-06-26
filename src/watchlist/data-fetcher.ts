@@ -144,27 +144,20 @@ export function parseNewsLayerStats(raw: any): NewsLayerStats | null {
 
 /** 全空 HotMoneyData 兜底（拉取失败/字段全缺时用）。 */
 export const EMPTY_HOT_MONEY: HotMoneyData = {
-  main_net_today: 0,
-  super_net_today: 0,
-  large_net_today: 0,
-  inflow_today: 0,
-  outflow_today: 0,
   northbound_yi: 0,
   northbound_signal: "",
   sector_in_industry_tag: "",
 };
 
-/** 从 hot_money.py 输出解析资金面摘要（5 个子源预压缩为浅层字段 + 文本片段）。
- *
- *  ⚠️ 修复历史 bug：老实现 `return { net_5d: raw?.net_5d }`，但 hot_money.py 顶层
- *  无 net_5d 字段（真实结构是 fund_flow.main_net / northbound / ...），导致恒返回 0。
- *  且 fund_flow.main_net 是「当日」主力净流入（_fetch_fund_flow 只取 klines[-1]），
- *  非 5 日累计——此处诚实命名为 main_net_today，避免误导下游。
+/** 从 hot_money.py 输出解析资金面摘要（全局子源预压缩为浅层字段 + 文本片段）。
  *
  *  raw 结构（exec-python.ts 已把 raw.data 提到顶层）：
- *  { ticker, date, northbound:{total,signal,...}, fund_flow:{main_net,large_net,super_net},
+ *  { ticker, date, northbound:{total,signal,...},
  *    sector_fund_flow:{inflow_top:[{name,main_net_yi,...}], outflow_top:[...], total_boards},
  *    hot_stocks:[{code,name,reason,change_pct}], dragon_tiger:[{date,net_buy,turnover,...}] }
+ *
+ *  注：个股 fund_flow（main_net/super_net/large_net/inflow/outflow）已移除——同花顺个股
+ *  资金流页面只收深市 ~1400 只活跃股，沪市几乎不收录，覆盖率天花板过低。
  *
  *  industry 参数用于判断标的行业是否落在当日板块流入/流出榜（板块轮动信号），
  *  来自已 parse 的 fundamentals.industry，可为空（拉取失败时）。
@@ -173,7 +166,6 @@ export function parseHotMoney(raw: any, industry?: string): HotMoneyData {
   if (!raw || typeof raw !== "object") return { ...EMPTY_HOT_MONEY };
 
   const num = (v: unknown): number => typeof v === "number" && !isNaN(v) ? v : 0;
-  const ff = raw.fund_flow || {};
   const nb = raw.northbound;
 
   // 龙虎榜：取最近 2 条（脚本已按日期倒序），压成 "MM-DD 净买±X亿 换手Y%"
@@ -244,11 +236,6 @@ export function parseHotMoney(raw: any, industry?: string): HotMoneyData {
   }
 
   return {
-    main_net_today: num(ff.main_net),
-    super_net_today: num(ff.super_net),
-    large_net_today: num(ff.large_net),
-    inflow_today: num(ff.inflow),
-    outflow_today: num(ff.outflow),
     northbound_yi: num(nb?.total),
     northbound_signal: nb?.signal === "inflow" || nb?.signal === "outflow" ? nb.signal : "",
     dragon_tiger_recent: dragonTigerRecent,
@@ -442,9 +429,9 @@ export async function fetchStockData(
   // 5 个脚本的 CLI 参数（--ticker/--date 均为 argparse 命名参数，required=True）：
   // 老实现只传 [ticker] 裸位置参数 → argparse 报错 exit 2 → safeCall 恒返回 null → 全零默认值。
   // 历史上 commit 56444b0 只修了 news.py，kline/hot_money/fundamentals 漏修，本批一并补齐。
-  // hot_money: --global-data 注入预取的全局源（northbound/sector_fund_flow/hot_stocks/fund_flow），
-  // 避免每股重复拉取全市场数据（N→1）。全局 JSON（含 5191 只股 fund_flow）远超 Windows 命令行
-  // 32KB 限制，走 stdin（命令行只传 --global-data 无值标志，Python 端从 stdin 读 JSON）。
+  // hot_money: --global-data 注入预取的全局源（northbound/sector_fund_flow/hot_stocks），
+  // 避免每股重复拉取全市场数据（N→1）。全局 JSON 可能较大，走 stdin（命令行只传
+  // --global-data 无值标志，Python 端从 stdin 读 JSON），规避命令行长度限制。
   // execSkillScript 的 stdinData 是对象，exec-python 内部统一 JSON.stringify 后写入。
   const hotMoneyArgs = ["--ticker", ticker, "--date", today];
   let hotMoneyStdin: any = null;
@@ -530,7 +517,7 @@ async function safeCall(fn: () => Promise<any>): Promise<{ data: any; vpa?: stri
 /** 一次性拉取 hot_money 全局源（northbound / sector_fund_flow / hot_stocks / fund_flow），
  *  返回预取数据 + 子源级调用记录。失败返回 null（graceful degrade）。 */
 export async function fetchGlobalHotMoneyData(date: string): Promise<{
-  globalHotMoney: { northbound: any; sector_fund_flow: any; hot_stocks: any; fund_flow: any } | null;
+  globalHotMoney: { northbound: any; sector_fund_flow: any; hot_stocks: any } | null;
   calls: SourceCall[];
 }> {
   try {
@@ -544,7 +531,6 @@ export async function fetchGlobalHotMoneyData(date: string): Promise<{
         northbound: result.data?.northbound ?? null,
         sector_fund_flow: result.data?.sector_fund_flow ?? null,
         hot_stocks: result.data?.hot_stocks ?? null,
-        fund_flow: result.data?.fund_flow ?? null,
       },
       calls: Array.isArray(result.calls) ? result.calls as SourceCall[] : [],
     };
@@ -563,10 +549,10 @@ export async function fetchAllStockData(
   const today = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
 
   // 一次性拉取全局 hot_money 数据（northbound / sector_fund_flow / hot_stocks），
-  // 之后每股调用 hot_money.py 时通过 stdin 注入（命令行 32KB 装不下 5191 只股 fund_flow）。
+  // 之后每股调用 hot_money.py 时通过 stdin 注入，避免每股重复拉全市场数据（N→1）。
   const { globalHotMoney, calls: globalCalls } = await fetchGlobalHotMoneyData(today);
   if (globalHotMoney) {
-    console.log(`  hot_money 全局源: 预取成功（northbound/sector_fund_flow/hot_stocks/fund_flow × 1）`);
+    console.log(`  hot_money 全局源: 预取成功（northbound/sector_fund_flow/hot_stocks × 1）`);
   } else {
     console.log(`  hot_money 全局源: 预取失败，每股独立拉取（退化为旧行为）`);
   }

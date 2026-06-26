@@ -24,24 +24,17 @@ export interface NewsLayerStats {
     history_7d_count: number;
     total_categorized: number;
 }
-/** 资金面摘要（来自 hot_money.py 的 5 个子源，parseHotMoney 预压缩为浅层字段 + 文本片段）。
+/** 资金面摘要（来自 hot_money.py 的全局子源，parseHotMoney 预压缩为浅层字段 + 文本片段）。
  *
- *  ⚠️ 字段命名诚实：main_net_today 是「当日」主力净流入，不是 5 日累计——
- *  hot_money.py 的 _fetch_fund_flow 只解析最后一根日 K（klt=1, klines[-1]），
- *  没有 5 日聚合逻辑。老实现字段叫 net_5d 但实际取不到值（顶层无此字段，恒 0），
- *  此处修正为 main_net_today 与脚本语义对齐，避免误导 LLM 把当日数字当成 5 日趋势。
+ *  注：个股 fund_flow（当日主力/超大单/大单净流入）已移除——同花顺"个股资金流"页面只收
+ *  深市 ~1400 只活跃股，沪市几乎不收录，覆盖率天花板过低。保留的全局子源不受影响。
  *
- *  - 标量字段（main_net_today / *_net_today / northbound_*）：缺失或拉取失败 → 0/空串
+ *  - 标量字段（northbound_*）：缺失或拉取失败 → 0/空串
  *  - 文本片段（dragon_tiger_recent / sector_inflow_top / sector_outflow_top / hot_stocks_top）：
  *    缺数据 → undefined，renderHotMoneySummary 据此省略对应分句
  *  - sector_in_industry_tag：标的行业是否落在当日板块流入/流出榜，"主线"|"弱势"|"未上榜"|""
  *  - dragon_tiger_reason：最近一次上榜原因（日涨幅偏离/换手达标等），判断游资炒作 vs 业绩驱动 */
 export interface HotMoneyData {
-    main_net_today: number;
-    super_net_today: number;
-    large_net_today: number;
-    inflow_today: number;
-    outflow_today: number;
     northbound_yi: number;
     northbound_signal: string;
     dragon_tiger_recent?: string;

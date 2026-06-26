@@ -147,11 +147,10 @@ describe("parseNewsLayerStats", () => {
 });
 
 describe("parseHotMoney", () => {
-  it("解析真实 hot_money.py 结构：fund_flow + northbound + 3 个数组子源", () => {
+  it("解析真实 hot_money.py 结构：northbound + 3 个数组子源", () => {
     // 结构对齐 hot_money.py 实际输出（exec-python.ts 已把 raw.data 提到顶层）
     const raw = {
       ticker: "600519",
-      fund_flow: { main_net: 1.23e8, large_net: 5e7, super_net: 7.3e7 },
       northbound: { total: 2.3, signal: "inflow" },
       sector_fund_flow: {
         inflow_top: [
@@ -175,9 +174,6 @@ describe("parseHotMoney", () => {
       ],
     };
     const r = parseHotMoney(raw, "白酒");
-    expect(r.main_net_today).toBe(1.23e8);
-    expect(r.super_net_today).toBe(7.3e7);
-    expect(r.large_net_today).toBe(5e7);
     expect(r.northbound_yi).toBe(2.3);
     expect(r.northbound_signal).toBe("inflow");
     expect(r.dragon_tiger_recent).toContain("2次");
@@ -212,8 +208,6 @@ describe("parseHotMoney", () => {
 
   it("缺字段 → 全 0/空（容忍，不抛）", () => {
     expect(parseHotMoney({})).toEqual({
-      main_net_today: 0, super_net_today: 0, large_net_today: 0,
-      inflow_today: 0, outflow_today: 0,
       northbound_yi: 0, northbound_signal: "",
       sector_in_industry_tag: "",
       dragon_tiger_recent: undefined, dragon_tiger_reason: undefined,
@@ -224,21 +218,12 @@ describe("parseHotMoney", () => {
 
   it("null/非对象输入 → 全 0", () => {
     expect(parseHotMoney(null)).toEqual({
-      main_net_today: 0, super_net_today: 0, large_net_today: 0,
-      inflow_today: 0, outflow_today: 0,
       northbound_yi: 0, northbound_signal: "",
       sector_in_industry_tag: "",
       dragon_tiger_recent: undefined, dragon_tiger_reason: undefined,
       sector_inflow_top: undefined, sector_outflow_top: undefined,
       hot_stocks_top: undefined,
     });
-  });
-
-  it("老格式 {net_5d:...}（已废弃的字段名）→ 不再被读取，返回 0", () => {
-    // 回归测试：老实现读 raw.net_5d，但 hot_money.py 顶层无此字段（恒 0）。
-    // 修正后读 raw.fund_flow.main_net，老格式的 net_5d 应被忽略。
-    const r = parseHotMoney({ net_5d: 1.23e8 });
-    expect(r.main_net_today).toBe(0);  // 不再从 net_5d 读
   });
 });
 
@@ -357,7 +342,7 @@ function mockBySkill(vpaContent?: string) {
         layer_stats: { realtime_6h_count: 1, extended_24h_count: 2, history_7d_count: 3, total_categorized: 6 },
       },
     } as any;
-    if (skillName === "trading-hot-money") return { success: true, data: { fund_flow: { main_net: 1e8, large_net: 2e7, super_net: 3e7 }, northbound: { total: 1.5, signal: "inflow" } } } as any;
+    if (skillName === "trading-hot-money") return { success: true, data: { northbound: { total: 1.5, signal: "inflow" } } } as any;
     if (skillName === "trading-fundamentals") return { success: true, data: { pe_ttm: 20, pb: 3, stock_info: { industry: "x" } } } as any;
     return { success: false } as any;
   });
@@ -465,7 +450,7 @@ describe("fetchStockData news 调用参数 + layer_stats", () => {
 /** 辅助：复用 mockBySkill 的返回值逻辑（不重置 mock）。 */
 function mockBySkillReturnValue(skillName: string): any {
   if (skillName === "trading-kline") return { success: true, data: { data: [{ close: 10, volume: 100 }, { close: 11, volume: 110 }] } };
-  if (skillName === "trading-hot-money") return { success: true, data: { fund_flow: { main_net: 1e8, large_net: 2e7, super_net: 3e7 }, northbound: { total: 1.5, signal: "inflow" } } };
+  if (skillName === "trading-hot-money") return { success: true, data: { northbound: { total: 1.5, signal: "inflow" } } };
   if (skillName === "trading-fundamentals") return { success: true, data: { pe_ttm: 20, pb: 3, stock_info: { industry: "x" } } };
   return { success: false };
 }

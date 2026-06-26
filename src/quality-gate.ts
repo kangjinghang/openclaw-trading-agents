@@ -78,7 +78,6 @@ export function checkFieldCitations(content: string, role: string): string | nul
  */
 const NULL_FIELD_CHECKS: Record<string, Array<{ field: string; keywords: string[] }>> = {
   hot_money: [
-    { field: "fund_flow", keywords: ["主力资金", "资金流", "fund_flow"] },
     { field: "sector_fund_flow", keywords: ["板块资金", "sector_fund"] },
   ],
   sentiment: [
@@ -96,11 +95,10 @@ const NULL_FIELD_CHECKS: Record<string, Array<{ field: string; keywords: string[
  * sentinel; null when all null fields are properly declared (or no watched
  * fields are null).
  *
- * Regression: 600157 hot_money had fund_flow=null + sector_fund_flow=null
- * (push2 rate-limited). The analyst wrote plain-text "数据缺失" instead of
- * the bracketed sentinel form, so Layer-1's sentinel counter saw zero
- * matches and graded it A. This check closes that loophole by consulting
- * the raw data the analyst was given.
+ * Regression: 600157 hot_money had sector_fund_flow=null (push2 rate-limited).
+ * The analyst wrote plain-text "数据缺失" instead of the bracketed sentinel
+ * form, so Layer-1's sentinel counter saw zero matches and graded it A. This
+ * check closes that loophole by consulting the raw data the analyst was given.
  */
 export function checkNullFieldSentinels(
   content: string,

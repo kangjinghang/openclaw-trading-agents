@@ -57,59 +57,6 @@ def _fetch_northbound():
         return None
 
 
-def _fetch_fund_flow_global():
-    """Batch-fetch individual stock fund flow for the entire market via 同花顺 10jqka.
-
-    Returns dict mapping stock code (e.g. "603259") -> {main_net, super_net, large_net}.
-    Single HTTP call (~15-18s on Mac/Linux) replaces N per-stock calls.
-
-    Depends on py_mini_racer (V8) to compute the 同花顺 hexin-v anti-crawl token.
-    NOTE: install py-mini-racer (==0.6.0, the legacy package), NOT mini-racer —
-    the newer mini-racer uses a background event-loop thread that deadlocks on
-    Windows. See AGENTS.md "Environment" for the install requirement.
-    """
-    start = time.monotonic()
-    try:
-        import akshare as ak
-        df = ak.stock_fund_flow_individual(symbol="即时")
-        result = {}
-        for _, row in df.iterrows():
-            code = str(row.get("股票代码", "")).strip()
-            if not code:
-                continue
-            def _parse_yi(val):
-                """Parse '1.39亿' / '-6227.71万' / numeric -> float (元)."""
-                if isinstance(val, (int, float)):
-                    return float(val)
-                s = str(val).strip()
-                if s.endswith("亿"):
-                    return float(s[:-1]) * 1e8
-                if s.endswith("万"):
-                    return float(s[:-1]) * 1e4
-                try:
-                    return float(s)
-                except (ValueError, TypeError):
-                    return 0.0
-            result[code] = {
-                "main_net": _parse_yi(row.get("净额", 0)),
-                # 同花顺个股资金流不分超大单/大单五档（只有总净额），保留 0 如实标注"无细分"；
-                # 但有"流入资金/流出资金"（主动买/卖盘），补充资金博弈激烈度信息。
-                "super_net": 0,
-                "large_net": 0,
-                "inflow": _parse_yi(row.get("流入资金", 0)),
-                "outflow": _parse_yi(row.get("流出资金", 0)),
-            }
-        record_call("hot_money/fund_flow", success=True,
-                    duration_ms=(time.monotonic() - start) * 1000,
-                    url="akshare:stock_fund_flow_individual(10jqka)",
-                    response_size=len(df))
-        return result
-    except Exception as e:
-        record_call("hot_money/fund_flow", success=False, error=str(e),
-                    duration_ms=(time.monotonic() - start) * 1000)
-        return None
-
-
 def _fetch_hot_stocks(date):
     """Fetch hot stocks with topic attribution from 同花顺."""
     start = time.monotonic()
@@ -356,7 +303,7 @@ def fetch_hot_money(ticker, date, global_data=None):
 
     Args:
         global_data: Optional pre-fetched global data dict with keys
-            northbound/sector_fund_flow/hot_stocks/fund_flow. When provided,
+            northbound/sector_fund_flow/hot_stocks. When provided,
             these sources are NOT fetched again (saving N-1 duplicate HTTP calls).
             Per-stock source (dragon_tiger) is always fetched.
     """
@@ -367,20 +314,11 @@ def fetch_hot_money(ticker, date, global_data=None):
         data["northbound"] = global_data.get("northbound")
         data["sector_fund_flow"] = global_data.get("sector_fund_flow")
         data["hot_stocks"] = global_data.get("hot_stocks")
-        # fund_flow: pre-fetched batch lookup by code
-        ff_global = global_data.get("fund_flow")
-        if ff_global and isinstance(ff_global, dict):
-            data["fund_flow"] = ff_global.get(code)
-        else:
-            data["fund_flow"] = None
     else:
         # 无全局预取（global-only 预取 timeout/失败）→ 各源独立拉取。
-        # fund_flow 已废弃东财单股路（push2his/push2 持续被封，~40% 成功率制造大量假性失败），
-        # 此处置 None：缺 fund_flow 不影响主决策（dragon_tiger/northbound 兜底），且健康报告干净。
         data["northbound"] = _fetch_northbound()
         data["sector_fund_flow"] = _fetch_sector_fund_flow()
         data["hot_stocks"] = _fetch_hot_stocks(date)
-        data["fund_flow"] = None
     data["dragon_tiger"] = _fetch_dragon_tiger(code, date)
     # 5-dimension quality scoring of dragon-tiger appearances (None when no
     # appearances — downstream should treat absence as "no signal", not an error).
@@ -392,14 +330,17 @@ def fetch_hot_money(ticker, date, global_data=None):
 def fetch_global_only(date):
     """Fetch only global (non-ticker-specific) hot money sources.
 
-    Returns dict with northbound/sector_fund_flow/hot_stocks/fund_flow for injection
+    Returns dict with northbound/sector_fund_flow/hot_stocks for injection
     into per-stock calls via --global-data.
+
+    Note: 个股 fund_flow 已移除——同花顺"个股资金流"页面只收深市 ~1400 只活跃股，
+    沪市几乎不收录，覆盖率天花板过低，对调仓决策信号价值有限。
+    全局的 northbound/sector_fund_flow/hot_stocks 不受影响（全市场覆盖）。
     """
     return {
         "northbound": _fetch_northbound(),
         "sector_fund_flow": _fetch_sector_fund_flow(),
         "hot_stocks": _fetch_hot_stocks(date),
-        "fund_flow": _fetch_fund_flow_global(),
     }
 
 

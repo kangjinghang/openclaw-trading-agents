@@ -234,56 +234,50 @@ describe("checkFieldCitations", () => {
 });
 
 describe("checkNullFieldSentinels", () => {
-  // Regression for 600157 2026-06-13: hot_money had fund_flow=null +
-  // sector_fund_flow=null (push2.eastmoney rate-limited per MEMORY.md),
-  // analyst wrote plain-text "资金流数据缺失" instead of the mandated
-  // `[数据缺失: 主力资金流]` sentinel form, and Layer-1 graded it A.
-  // This check cross-references raw null fields against sentinel coverage.
+  // Regression for 600157 2026-06-13: hot_money had sector_fund_flow=null
+  // (push2.eastmoney rate-limited per MEMORY.md), analyst wrote plain-text
+  // "资金流数据缺失" instead of the mandated `[数据缺失: 板块资金]` sentinel form,
+  // and Layer-1 graded it A. This check cross-references raw null fields
+  // against sentinel coverage.
+  //
+  // Note: 个股 fund_flow 已从检查表移除（同花顺个股资金流页面只收深市 ~1400 只活跃股，
+  // 沪市几乎不收录，恒 null 是常态而非故障，不该被标为数据缺失）。
 
-  it("flags hot_money when fund_flow is null and no sentinel covers it", () => {
+  it("flags hot_money when sector_fund_flow is null and no sentinel covers it", () => {
     const issue = checkNullFieldSentinels(
       "北向资金大幅流出，龙虎榜无数据，资金面沉寂。",  // no [数据缺失: ...]
       "hot_money",
-      { fund_flow: null, sector_fund_flow: { today: -1e8 }, northbound: {} }
+      { sector_fund_flow: null, northbound: {} }
     );
     expect(issue).not.toBeNull();
-    expect(issue).toContain("fund_flow");
+    expect(issue).toContain("sector_fund_flow");
   });
 
-  it("does NOT flag when fund_flow=null but report has [数据缺失: 主力资金流] sentinel", () => {
+  it("does NOT flag when sector_fund_flow=null but report has [数据缺失: 板块资金] sentinel", () => {
     const issue = checkNullFieldSentinels(
-      "[数据缺失: 主力资金流] — push2 接口限流。其他资金面数据正常。",
+      "[数据缺失: 板块资金] — 接口限流。其他资金面数据正常。",
       "hot_money",
-      { fund_flow: null, sector_fund_flow: { today: -1e8 } }
+      { sector_fund_flow: null }
     );
     expect(issue).toBeNull();
   });
 
-  it("accepts alternate keyword '资金流' inside the sentinel", () => {
+  it("does NOT flag when sector_fund_flow is populated (not null)", () => {
     const issue = checkNullFieldSentinels(
-      "[数据缺失: 个股资金流] — 接口异常。",
+      "板块资金净流入 2.3 亿元。",
       "hot_money",
-      { fund_flow: null }
+      { sector_fund_flow: { today: -1e8 } }
     );
     expect(issue).toBeNull();
   });
 
-  it("does NOT flag when fund_flow is populated (not null)", () => {
-    const issue = checkNullFieldSentinels(
-      "主力资金净流入 2.3 亿元。",
-      "hot_money",
-      { fund_flow: { today: 2.3e8, "5d": -1e8 } }
-    );
-    expect(issue).toBeNull();
-  });
-
-  it("does NOT flag when fund_flow is [] (empty array, not null)", () => {
+  it("does NOT flag when sector_fund_flow is [] (empty array, not null)", () => {
     // null = fetch failed; [] = upstream returned empty (could be normal).
     // Only null counts as a data failure worth flagging.
     const issue = checkNullFieldSentinels(
       "资金面数据为空。",
       "hot_money",
-      { fund_flow: [] }
+      { sector_fund_flow: [] }
     );
     expect(issue).toBeNull();
   });
@@ -292,21 +286,9 @@ describe("checkNullFieldSentinels", () => {
     const issue = checkNullFieldSentinels(
       "no mention of missing data",
       "hot_money",
-      { northbound: {} }   // fund_flow key absent
+      { northbound: {} }   // sector_fund_flow key absent
     );
     expect(issue).toBeNull();
-  });
-
-  it("aggregates multiple null fields into a single issue", () => {
-    const issue = checkNullFieldSentinels(
-      "no sentinels here",
-      "hot_money",
-      { fund_flow: null, sector_fund_flow: null }
-    );
-    expect(issue).not.toBeNull();
-    // single issue string lists both fields
-    expect(issue).toContain("fund_flow");
-    expect(issue).toContain("sector_fund_flow");
   });
 
   it("flags sentiment.hot_rank=null without sentinel", () => {
@@ -376,11 +358,10 @@ describe("validateAnalystReports with dataResults (null-field cross-check)", () 
 <!-- VERDICT: {"direction": "中性", "reason": "资金面真空"} -->
 `;
 
-  it("downgrades hot_money A→B when fund_flow=null and report has no sentinel", () => {
-    // 600157 scenario: would normally grade A — but raw data has fund_flow=null.
+  it("downgrades hot_money A→B when sector_fund_flow=null and report has no sentinel", () => {
+    // 600157 scenario: would normally grade A — but raw data has sector_fund_flow=null.
     const reports = [makeReport("hot_money", HOT_MONEY_BODY, "中性", "资金面真空")];
     const dataResults = [dataResult("hot_money", {
-      fund_flow: null,
       sector_fund_flow: null,
       northbound: { total: -40.38 },
       hot_stocks: [],
@@ -389,17 +370,16 @@ describe("validateAnalystReports with dataResults (null-field cross-check)", () 
     const result = validateAnalystReports(reports, dataResults);
     const grade = result.grades.find((g) => g.role === "hot_money")!;
     expect(grade.grade).toBe("B");  // was A before the fix
-    expect(grade.issues.some((i) => i.includes("fund_flow"))).toBe(true);
+    expect(grade.issues.some((i) => i.includes("sector_fund_flow"))).toBe(true);
   });
 
-  it("keeps hot_money at A when fund_flow=null AND report has matching sentinel", () => {
+  it("keeps hot_money at A when sector_fund_flow=null AND report has matching sentinel", () => {
     const content = HOT_MONEY_BODY.replace(
       "个股主力资金净流入数据缺失（详见下文哨兵），板块方面煤炭板块资金小幅流入。",
-      "[数据缺失: 主力资金流] — push2 接口限流。\n[数据缺失: 板块资金流] — push2 接口限流。"
+      "个股主力资金净流入数据缺失（详见下文哨兵），[数据缺失: 板块资金] — push2 接口限流。"
     );
     const reports = [makeReport("hot_money", content, "中性", "资金面真空")];
     const dataResults = [dataResult("hot_money", {
-      fund_flow: null,
       sector_fund_flow: null,
       northbound: { total: -40.38 }
     })];
@@ -414,7 +394,7 @@ describe("validateAnalystReports with dataResults (null-field cross-check)", () 
     const result = validateAnalystReports(reports);  // no dataResults
     const grade = result.grades.find((g) => g.role === "hot_money")!;
     expect(grade.grade).toBe("A");
-    expect(grade.issues.some((i) => i.includes("fund_flow"))).toBe(false);
+    expect(grade.issues.some((i) => i.includes("sector_fund_flow"))).toBe(false);
   });
 
   it("skips roles whose raw data failed (success=false)", () => {
@@ -426,7 +406,7 @@ describe("validateAnalystReports with dataResults (null-field cross-check)", () 
     }];
     const result = validateAnalystReports(reports, dataResults);
     const grade = result.grades.find((g) => g.role === "hot_money")!;
-    expect(grade.issues.some((i) => i.includes("fund_flow"))).toBe(false);
+    expect(grade.issues.some((i) => i.includes("sector_fund_flow"))).toBe(false);
   });
 });
 

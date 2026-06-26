@@ -24,17 +24,15 @@ export declare function parseNews(raw: any): NewsItem[];
 export declare function parseNewsLayerStats(raw: any): NewsLayerStats | null;
 /** 全空 HotMoneyData 兜底（拉取失败/字段全缺时用）。 */
 export declare const EMPTY_HOT_MONEY: HotMoneyData;
-/** 从 hot_money.py 输出解析资金面摘要（5 个子源预压缩为浅层字段 + 文本片段）。
- *
- *  ⚠️ 修复历史 bug：老实现 `return { net_5d: raw?.net_5d }`，但 hot_money.py 顶层
- *  无 net_5d 字段（真实结构是 fund_flow.main_net / northbound / ...），导致恒返回 0。
- *  且 fund_flow.main_net 是「当日」主力净流入（_fetch_fund_flow 只取 klines[-1]），
- *  非 5 日累计——此处诚实命名为 main_net_today，避免误导下游。
+/** 从 hot_money.py 输出解析资金面摘要（全局子源预压缩为浅层字段 + 文本片段）。
  *
  *  raw 结构（exec-python.ts 已把 raw.data 提到顶层）：
- *  { ticker, date, northbound:{total,signal,...}, fund_flow:{main_net,large_net,super_net},
+ *  { ticker, date, northbound:{total,signal,...},
  *    sector_fund_flow:{inflow_top:[{name,main_net_yi,...}], outflow_top:[...], total_boards},
  *    hot_stocks:[{code,name,reason,change_pct}], dragon_tiger:[{date,net_buy,turnover,...}] }
+ *
+ *  注：个股 fund_flow（main_net/super_net/large_net/inflow/outflow）已移除——同花顺个股
+ *  资金流页面只收深市 ~1400 只活跃股，沪市几乎不收录，覆盖率天花板过低。
  *
  *  industry 参数用于判断标的行业是否落在当日板块流入/流出榜（板块轮动信号），
  *  来自已 parse 的 fundamentals.industry，可为空（拉取失败时）。
@@ -104,7 +102,6 @@ export declare function fetchGlobalHotMoneyData(date: string): Promise<{
         northbound: any;
         sector_fund_flow: any;
         hot_stocks: any;
-        fund_flow: any;
     } | null;
     calls: SourceCall[];
 }>;

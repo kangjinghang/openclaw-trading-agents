@@ -9,7 +9,7 @@ function makeStockData(overrides: { fund?: Partial<StockData["fundamentals"]>; l
     ticker: "SZ300319", name: "麦捷科技", sector: "电子",
     kline: { pct_5d: 1, pct_20d: 2, support: 1, resistance: 2, volatility_20d: 0.02, volume_ratio_5_20: 1.0 },
     news: [],
-    hot_money: { main_net_today: 0, super_net_today: 0, large_net_today: 0, northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" },
+    hot_money: { northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" },
     fundamentals: { pe: 30, pb: 5, rev_q1: 1e9, np_q1: 1e8, industry: "电子", ...(overrides.fund ?? {}) },
     lockup: overrides.lockup,
   };
