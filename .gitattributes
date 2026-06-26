@@ -1,0 +1,13 @@
+# 强制全仓库文本文件统一用 LF 换行符。
+# 解决 Windows 上 tsc/工具链生成 CRLF 导致 git 标记大量"假改动"（内容不变、仅换行符）的问题。
+# * text=auto eol=lf：所有文本文件签出/提交都用 LF（含 dist 编译产物）。
+# *.sh：明确 shell 脚本 LF（防 CRLF 破坏 bash shebang）。
+# 二进制文件显式标记 binary，避免被当文本处理。
+* text=auto eol=lf
+*.sh text eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
