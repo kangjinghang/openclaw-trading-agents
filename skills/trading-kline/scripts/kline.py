@@ -312,8 +312,10 @@ def compute_vpa(data: list) -> str:
         "|------|------|--------|----------|----------|--------|--------|------|----------|",
     ]
 
-    # Show last 30 days
-    display_rows = rows[-30:] if len(rows) > 30 else rows
+    # Show last 7 days（A/B 实验结论：30 日表用 +52% token 只换来不稳定的
+    # 技术细节，核心 risk 判断不变；精简到近 7 日保留"最近发生了什么"的上下文，
+    # 既能让 LLM 验证模式识别结论，又不稀释注意力。摘要/模式识别用全量 rows 不受影响）
+    display_rows = rows[-7:] if len(rows) > 7 else rows
     for r in display_rows:
         pct = r["pct_change"] * 100
         spread_label = "宽" if r["bar_spread"] > 0.03 else ("窄" if r["bar_spread"] < 0.015 else "中")

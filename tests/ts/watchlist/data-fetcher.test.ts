@@ -239,7 +239,36 @@ describe("parseFundamentals", () => {
       financial_snapshot: { revenue: 1.2e9, net_profit: 1.3e8, roe: 15.2, debt_ratio: 20.1 },
       stock_info: { industry: "白酒", name: "贵州茅台", total_mv: 2.1e12 },
     };
-    expect(parseFundamentals(raw)).toEqual({ pe: 35.2, pb: 4.5, rev_q1: 1.2e9, np_q1: 1.3e8, industry: "白酒" });
+    // 无 quarterly_trends 时，snap.revenue 作为兜底（单位：元）
+    const r = parseFundamentals(raw);
+    expect(r).toMatchObject({ pe: 35.2, pb: 4.5, rev_q1: 1.2e9, np_q1: 1.3e8, industry: "白酒" });
+  });
+  it("quarterly_trends[0].revenue_yi 优先于 financial_snapshot.revenue（修复 10x 年度累计 bug）", () => {
+    const raw = {
+      valuation: { pe_ttm: 35.2, pb: 4.5 },
+      financial_snapshot: { revenue: 35.77e8, net_profit: 3.58e7 }, // mootdx 年度累计（单位：元）
+      quarterly_trends: [
+        { report_date: "2026-03-31", revenue_yi: 3.58, net_profit_yi: 0.36 }, // em_datacenter 单季度（单位：亿元）
+        { report_date: "2025-12-31", revenue_yi: 32.19, net_profit_yi: 3.21 },
+      ],
+    };
+    // quarterly_trends[0].revenue_yi=3.58 亿元 → ×1e8 = 3.58e8 元（优先于 snap.revenue=35.77e8）
+    const r = parseFundamentals(raw);
+    expect(r.rev_q1).toBe(3.58e8);  // 3.58 亿 × 1e8 = 3.58e8 元
+    expect(r.np_q1).toBe(0.36e8);   // 0.36 亿 × 1e8 = 0.36e8 元
+    expect(r.industry).toBe("");
+  });
+  it("quarterly_trends[0] 值为 0/缺失时降级到 financial_snapshot（兜底链）", () => {
+    const raw = {
+      valuation: { pe_ttm: 20 },
+      financial_snapshot: { revenue: 2.85e9, net_profit: 3.2e8 },
+      quarterly_trends: [
+        { report_date: "2026-03-31", revenue_yi: 0, net_profit_yi: 0 }, // 不可用（0 被视为无效）
+      ],
+    };
+    const r = parseFundamentals(raw);
+    expect(r.rev_q1).toBe(2.85e9); // revenue_yi=0 → 降级到 snap.revenue
+    expect(r.np_q1).toBe(3.2e8);   // net_profit_yi=0 → 降级到 snap.net_profit
   });
   it("兼容老扁平格式（顶层 pe_ttm/pb + 别名 rev_q1/np_q1）", () => {
     const raw = { pe: 20, pb: 3, rev_q1: 5e8, np_q1: 6e7 };

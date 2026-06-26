@@ -17,3 +17,4 @@ logs/
 opencode.json
 .DS_Store
 .worktrees/
+openclaw-trading-agents-news-filter/

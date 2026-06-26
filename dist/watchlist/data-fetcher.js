@@ -304,9 +304,22 @@ function parseFundamentals(raw) {
     return {
         pe: num(val.pe_ttm) || num(val.pe) || num(raw?.pe_ttm) || num(raw?.pe),
         pb: num(val.pb) || num(raw?.pb),
-        // 字段名对齐 fundamentals.py：snapshot 用 revenue/net_profit（无 _q1 后缀）
-        rev_q1: num(snap.revenue) || num(snap.revenue_q1) || num(raw?.revenue_q1) || num(raw?.rev_q1),
-        np_q1: num(snap.net_profit) || num(snap.net_profit_q1) || num(raw?.net_profit_q1) || num(raw?.np_q1),
+        // rev_q1 / np_q1 优先级：em_datacenter 单季度（quarterly_trends[0]）> mootdx 明确 _q1 字段 > 顶层兼容
+        // 注意：revenue_yi / net_profit_yi 单位是亿元（fundamentals.py:348 已 /1e8），
+        //        需 ×1e8 转回元以保持 rev_q1/np_q1 的单位约定（下游 render 用 /1e8 转亿显示）。
+        //       snap.revenue / snap.net_profit 是 mootdx annual 累计值（元），不可直接用于 Q1 单季（10x 误差）。
+        rev_q1: (() => {
+            const qt = Array.isArray(raw?.quarterly_trends) ? raw.quarterly_trends : [];
+            const t0 = qt.length > 0 ? qt[0] : undefined;
+            return (t0 && num(t0.revenue_yi) > 0 ? num(t0.revenue_yi) * 1e8 : 0)
+                || num(snap.revenue_q1) || num(raw?.revenue_q1) || num(raw?.rev_q1) || num(snap.revenue);
+        })(),
+        np_q1: (() => {
+            const qt = Array.isArray(raw?.quarterly_trends) ? raw.quarterly_trends : [];
+            const t0 = qt.length > 0 ? qt[0] : undefined;
+            return (t0 && num(t0.net_profit_yi) > 0 ? num(t0.net_profit_yi) * 1e8 : 0)
+                || num(snap.net_profit_q1) || num(raw?.net_profit_q1) || num(raw?.np_q1) || num(snap.net_profit);
+        })(),
         industry: typeof raw?.stock_info?.industry === "string" && raw.stock_info.industry.trim() ? raw.stock_info.industry.trim() : "",
         // quarterly_trends / consensus_eps 原样透传（压缩逻辑放 render 函数，保持解析层薄）。
         // 防御 fundamentals.py 异常输出：非数组/非对象 → undefined，render 据此省略整行。
