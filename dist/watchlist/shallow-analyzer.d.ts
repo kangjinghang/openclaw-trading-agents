@@ -142,9 +142,13 @@ export interface StockData {
         consensus_eps?: ConsensusEps;
         pe_percentile?: number;
         pb_percentile?: number;
+        capability_scores?: Record<string, {
+            score: number;
+            label: string;
+        }>;
     };
     ranker_thesis?: string;
-    /** kline.py 预计算的 VPA 量价分析文本（含"顶部背离信号/放量滞涨"等结论）。
+    /** kline.py 预计算的 VPA 量价分析文本（纯事实：价量变动%、交叉事件，无方向性结论）。
      *  undefined = 无 VPA 数据（非 kline 脚本或拉取失败）。 */
     vpa_text?: string;
     /** kline.py 预计算的 MACD 结构化数据（DIF/DEA/histogram/方向/金叉死叉）。
@@ -196,6 +200,16 @@ export declare function renderMacd(m?: MacdData): string;
  *  分位含义：0-100，表示当前值在近5年序列里的位置——低分位=相对便宜，高分位=相对贵。
  *  让 LLM 据此判断"PE=18 在该股历史上贵不贵"，治绝对值盲区。 */
 export declare function renderPercentileLabel(percentile: number | undefined): string;
+/** 渲染 PE 值为 prompt 友好的文本，归一化无意义的负值/零值。
+ *
+ *  亏损股 PE = 市值/负净利 < 0，数学上无意义，投资语义 = "亏损"。
+ *  裸注入 `-3033.67` 会让 LLM 误判为"天价 PE → 估值严重偏高"（实测误判）。
+ *  归一化规则：
+ *  - 负值（净利为负/亏损）→ "N/A（亏损）"，让 LLM 识别为亏损而非高估值
+ *  - 0（未拉取到/字段缺失）→ "N/A"
+ *  - 正常正值 → 保留 2 位小数
+ *  注意：fundamentals.pe 保留原始数值不变，此函数只影响 prompt 文本呈现。 */
+export declare function renderPe(pe: number): string;
 export declare function formatAnalystPrompt(d: StockData): string;
 /** 解析 analyst-role 输出。非 JSON / 缺字段返回 null（或填默认值）。 */
 export declare function parseAnalystReport(content: string): AnalystReport | null;

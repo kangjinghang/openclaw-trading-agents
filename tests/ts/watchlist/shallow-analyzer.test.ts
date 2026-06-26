@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatAnalystPrompt, parseAnalystReport, formatRiskPrompt, parseRiskReport, buildStockReport, buildFallbackReport, analyzeAll, renderQuarterlyTrends, renderConsensus, renderLockup, renderPercentileLabel, renderMacd, type ShallowLlmCaller, type StockData, type ConsensusEps, type MacdData } from "../../../src/watchlist/shallow-analyzer";
+import { formatAnalystPrompt, parseAnalystReport, formatRiskPrompt, parseRiskReport, buildStockReport, buildFallbackReport, analyzeAll, renderQuarterlyTrends, renderConsensus, renderLockup, renderPercentileLabel, renderPe, renderMacd, type ShallowLlmCaller, type StockData, type ConsensusEps, type MacdData } from "../../../src/watchlist/shallow-analyzer";
 import type { AnalystReport } from "../../../src/watchlist/rebalance-types";
 import type { CandidateMeta } from "../../../src/watchlist/candidate-selector";
 import type { StockData } from "../../../src/watchlist/shallow-analyzer";
@@ -713,6 +713,29 @@ describe("renderPercentileLabel", () => {
   });
 });
 
+// ── renderPe：负值（亏损股）归一化 ──────────────
+describe("renderPe", () => {
+  it("正常正值 → 保留 2 位小数", () => {
+    expect(renderPe(18.5)).toBe("18.50");
+    expect(renderPe(100)).toBe("100.00");
+  });
+
+  it("负值（亏损股）→ N/A（亏损），避免 LLM 误读为高估值", () => {
+    // 回归：苏大维格 PE=-3033.67 被裸注入，LLM 据此输出"估值严重偏高"（误判）
+    expect(renderPe(-3033.67)).toBe("N/A（亏损）");
+    expect(renderPe(-0.01)).toBe("N/A（亏损）");
+  });
+
+  it("0（未拉取/缺失）→ N/A", () => {
+    expect(renderPe(0)).toBe("N/A");
+  });
+
+  it("非有限值（NaN/Infinity）→ N/A", () => {
+    expect(renderPe(NaN)).toBe("N/A");
+    expect(renderPe(Infinity)).toBe("N/A");
+  });
+});
+
 // ── formatAnalystPrompt/formatRiskPrompt：分位标注注入 ──────
 describe("formatAnalystPrompt 分位标注注入", () => {
   const base = (): StockData => ({
@@ -727,13 +750,13 @@ describe("formatAnalystPrompt 分位标注注入", () => {
     d.fundamentals.pe_percentile = 15;
     d.fundamentals.pb_percentile = 29;
     const prompt = formatAnalystPrompt(d);
-    expect(prompt).toContain("PE 18.5[近5年15%分位]");
+    expect(prompt).toContain("PE 18.50[近5年15%分位]");
     expect(prompt).toContain("PB 2.1[近5年29%分位]");
   });
 
   it("无分位 → 退回原样（不带方括号，向后兼容）", () => {
     const prompt = formatAnalystPrompt(base());
-    expect(prompt).toContain("PE 18.5 /");
+    expect(prompt).toContain("PE 18.50 /");
     expect(prompt).not.toContain("[近5年");
   });
 });
@@ -747,7 +770,7 @@ describe("formatRiskPrompt 分位标注注入", () => {
       fundamentals: { pe: 85, pb: 6, rev_q1: 1e9, np_q1: 1e8, industry: "电子", pe_percentile: 95 },
     };
     const prompt = formatRiskPrompt(d, { thesis: "x", fitness_score: 8, data_freshness: "", key_signals: [], data_gaps: [] });
-    expect(prompt).toContain("PE 85[近5年95%分位]");  // 高分位让 risk LLM 识别估值高位
+    expect(prompt).toContain("PE 85.00[近5年95%分位]");  // 高分位让 risk LLM 识别估值高位
   });
 });
 
