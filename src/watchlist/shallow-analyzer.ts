@@ -399,7 +399,9 @@ export function formatAnalystPrompt(d: StockData): string {
   const newsDensity = d.news_layer_stats
     ? `新闻密度：6h 内 ${d.news_layer_stats.realtime_6h_count} 条突发 / 24h 内 ${d.news_layer_stats.extended_24h_count} 条 / 7 天共 ${d.news_layer_stats.total_categorized} 条\n`
     : "";
-  const rankerSection = d.ranker_thesis ? `## ranker 评估（ranker 给的 thesis）\n${d.ranker_thesis}` : "";
+  const rankerSection = d.ranker_thesis
+    ? `## ranker 补充事实（来自不同数据源，供你独立参考，不是你的前置结论）\n${d.ranker_thesis}\n（注意：以上是 ranker 基于雪球异动等数据源的事实摘要，可能混有解释性措辞。请将其视为额外数据，与你的新闻/基本面/资金流分析独立交叉验证，不要被其方向性措辞锚定。）`
+    : "";
   return ANALYST_PROMPT_TEMPLATE
     .replace("{ticker}", d.ticker)
     .replace("{name}", d.name)
