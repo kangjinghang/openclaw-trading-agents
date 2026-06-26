@@ -37,15 +37,11 @@ def run_main_capture(argv):
 
     output_json (http_helpers.py) calls sys.exit(0) at the end, so we catch
     SystemExit to read the buffered stdout before the process would die."""
-    news_calls = {"eastmoney": 0, "pywencai": 0}
+    news_calls = {"eastmoney": 0}
 
     def fake_eastmoney(code):
         news_calls["eastmoney"] += 1
         return [{"title": "x", "content": "y", "time": "2026-06-20 10:00:00", "source": "em"}]
-
-    def fake_pywencai(code):
-        news_calls["pywencai"] += 1
-        return []
 
     old_argv = sys.argv
     sys.argv = ["news.py"] + argv
@@ -53,11 +49,10 @@ def run_main_capture(argv):
     try:
         with patch("sys.stdout", buf):
             with patch.object(news, "_fetch_news_eastmoney", fake_eastmoney):
-                with patch.object(news, "_fetch_news_pywencai", fake_pywencai):
-                    try:
-                        news.main()
-                    except SystemExit:
-                        pass  # output_json calls sys.exit; buf already has the JSON
+                try:
+                    news.main()
+                except SystemExit:
+                    pass  # output_json calls sys.exit; buf already has the JSON
         out = buf.getvalue().strip()
         return json.loads(out), news_calls
     finally:
@@ -108,12 +103,11 @@ class TestMacroOnlyHappy:
         assert data["commodities"]["AU0"]["trend"] == "上行"
 
     def test_skips_per_stock_news(self):
-        """--macro-only must NOT call eastmoney/pywencai (per-stock news skipped)."""
+        """--macro-only must NOT call eastmoney (per-stock news skipped)."""
         with patch.object(news, "_fetch_macro_nbs", return_value=fake_indicators()):
             with patch.object(news, "_fetch_commodities", return_value=fake_commodities()):
                 out, news_calls = run_main_capture(["--macro-only", "--date", "2026-06-20"])
         assert news_calls["eastmoney"] == 0
-        assert news_calls["pywencai"] == 0
         # 确认无 stock_news 字段（个股新闻块完全跳过）
         assert "stock_news" not in out["data"]
 

@@ -44,9 +44,9 @@ const ANALYST_PROMPT_TEMPLATE = `# 角色
 
 # 数据
 ## K 线（5 日 +{pct_5d}% / 20 日 +{pct_20d}%，支撑 {support} / 压力 {resistance}，量比 {volume_ratio}）
-## 新闻（最近 7 天 top，含时间与正文摘要）
+## 新闻（近 60 天个股相关 top，含时间与正文摘要）
 {news_density}{news_bullets}
-（注意时效：最近 1-2 天的突发新闻权重高于一周前的旧闻；标题党风险——标题与正文矛盾时以正文为准）
+（注意时效：最近 1-2 天的突发新闻权重高于一月前的旧闻；标题党风险——标题与正文矛盾时以正文为准）
 ## 资金流向
 {hot_money_summary}
 ## 基本面（PE {pe}{pe_label} / PB {pb}{pb_label} / Q1 营收 {rev_q1} / Q1 净利 {np_q1}）

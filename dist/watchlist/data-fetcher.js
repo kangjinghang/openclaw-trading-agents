@@ -445,7 +445,11 @@ async function fetchMacroData(date) {
 async function fetchStockData(ticker, name, sector, rankerThesis, options) {
     // news.py 的 --ticker/--date 是 required（skills/trading-news/scripts/news.py:262-263），
     // 老实现只传 [ticker] 位置参数 → argparse 报错 → news 恒为 []。
-    // 用 today 作为分析日期；--lookback-days 7 对齐 trading_full 的 news 角色。
+    // 用 today 作为分析日期；--lookback-days 60：watchlist 是中期持仓视角，
+    // 7 天窗口会把 1-2 个月前的公司大事（财报、募投、人事变更）挡掉——这些才是
+    // 影响中期持仓判断的实质事件。跨 12 只代表性股票实测：7天覆盖率中位数仅 35%，
+    // 30天 86%（6只<90%），60天达 100%（全覆盖），90天与 60 天无差异。
+    // 分析师 news 角色仍用 7 天（短期事件冲击视角）。
     // --skip-macro：shallow 不消费宏观新闻（与 ticker 无关、N 股重复拉取纯浪费），
     // 省掉 CLS+akshare 两路 HTTP（实测单股 1.27s→0.37s，-71%）。
     // 用北京时间（UTC+8）而非 UTC，避免北京 0-8 点日期早一天
@@ -466,7 +470,7 @@ async function fetchStockData(ticker, name, sector, rankerThesis, options) {
     const tasks = [
         // kline.py: --ticker required，--date 可选（default=""，kline 不消费日期）
         safeCall(() => (0, exec_python_1.execSkillScript)("trading-kline", "kline", PROJECT_ROOT, ["--ticker", ticker])),
-        safeCall(() => (0, exec_python_1.execSkillScript)("trading-news", "news", PROJECT_ROOT, ["--ticker", ticker, "--date", today, "--lookback-days", "7", "--skip-macro", "--company-name", name])),
+        safeCall(() => (0, exec_python_1.execSkillScript)("trading-news", "news", PROJECT_ROOT, ["--ticker", ticker, "--date", today, "--lookback-days", "60", "--skip-macro", "--company-name", name])),
         safeCall(() => (0, exec_python_1.execSkillScript)("trading-hot-money", "hot_money", PROJECT_ROOT, hotMoneyArgs, hotMoneyStdin)),
         safeCall(() => (0, exec_python_1.execSkillScript)("trading-fundamentals", "fundamentals", PROJECT_ROOT, ["--ticker", ticker, "--date", today])),
         // lockup.py：--ticker/--date 均 required，解禁区间 [date, date+90]。全量接入（含 mootdx F10），

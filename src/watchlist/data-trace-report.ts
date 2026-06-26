@@ -374,6 +374,16 @@ mark { background: rgba(255,167,38,0.35); color: inherit; border-radius: 2px; pa
 .shortcut-panel kbd { background: var(--bg); border: 1px solid var(--border); padding: 1px 6px; border-radius: 3px; font-family: 'SF Mono', monospace; font-size: 0.85em; }
 .shortcut-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 199; display: none; }
 .shortcut-overlay.show { display: block; }
+
+/* 股票切换器 */
+.stock-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 12px 0 20px; }
+.stock-tab { background: var(--card); border: 1px solid var(--border); color: var(--muted); padding: 5px 12px;
+  border-radius: 6px; cursor: pointer; font-size: 0.82em; font-family: inherit; white-space: nowrap; transition: all 0.15s; }
+.stock-tab:hover { border-color: var(--accent); color: var(--text); }
+.stock-tab.active { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
+.stock-tab .tab-fit { font-size: 0.85em; opacity: 0.8; margin-left: 4px; }
+.stock-panel { display: none; }
+.stock-panel.active { display: block; }
 </style>`;
 
 // ── JavaScript ───────────────────────────────────────────────────────────────
@@ -464,6 +474,35 @@ const JS = `
     });
   }
 
+  // ── 股票切换 ──
+  // 点击 tab → 显示对应 stock-panel，隐藏其余；导航锚点重定向到当前活动股票。
+  var stockTabs = document.querySelectorAll('.stock-tab');
+  var stockPanels = document.querySelectorAll('.stock-panel');
+  var currentTicker = null;
+  function activateStock(ticker) {
+    if (currentTicker === ticker) return;
+    currentTicker = ticker;
+    stockTabs.forEach(function(t) {
+      t.classList.toggle('active', t.getAttribute('data-ticker') === ticker);
+    });
+    stockPanels.forEach(function(p) {
+      p.classList.toggle('active', p.getAttribute('data-ticker') === ticker);
+    });
+    // 导航锚点重定向：所有 .nav-links a 的 href 指向当前股票的 section
+    document.querySelectorAll('.nav-links a[data-sec]').forEach(function(a) {
+      var sec = a.getAttribute('data-sec');
+      a.setAttribute('href', '#stock-' + ticker + '-' + sec);
+    });
+    // 切股后回到顶部 + 清搜索（避免高亮残留到隐藏的内容）
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (searchInput && searchInput.value) { searchInput.value = ''; clearSearch(); }
+  }
+  stockTabs.forEach(function(t) {
+    t.addEventListener('click', function() { activateStock(this.getAttribute('data-ticker')); });
+  });
+  // 初始激活第一只
+  if (stockTabs.length > 0) activateStock(stockTabs[0].getAttribute('data-ticker'));
+
   // ── 平滑滚动导航 ──
   document.querySelectorAll('.nav-bar a[href^="#"]').forEach(function(a) {
     a.addEventListener('click', function(e) {
@@ -518,8 +557,8 @@ const SHORTCUT_PANEL = `
 
 // ── 6 个数据源的链路追踪 ────────────────────────────────────────────────────
 
-function traceKline(d: StockData): string {
-  let h = `<h3 id="sec-kline">1. K 线（kline.py）</h3>`;
+function traceKline(d: StockData, idPrefix = ""): string {
+  let h = `<h3 id="${idPrefix}kline">1. K 线（kline.py）</h3>`;
   h += `<p class="muted">脚本: skills/trading-kline/scripts/kline.py &nbsp;|&nbsp; API: mootdx TDX TCP → akshare fallback</p>`;
   const r2 = (v: number) => Number.isFinite(v) ? v.toFixed(2) : String(v);
   h += summaryTableHtml("parseKline() 处理后", [
@@ -544,8 +583,8 @@ function traceKline(d: StockData): string {
   return h;
 }
 
-function traceNews(d: StockData): string {
-  let h = `<h3 id="sec-news">2. 新闻（news.py）</h3>`;
+function traceNews(d: StockData, idPrefix = ""): string {
+  let h = `<h3 id="${idPrefix}news">2. 新闻（news.py）</h3>`;
   h += `<p class="muted">脚本: skills/trading-news/scripts/news.py &nbsp;|&nbsp; API: 东方财富搜索</p>`;
 
   // news_layer_stats 卡片
@@ -594,8 +633,8 @@ function traceNews(d: StockData): string {
   return h;
 }
 
-function traceHotMoney(d: StockData): string {
-  let h = `<h3 id="sec-hotmoney">3. 资金流向（hot_money.py）</h3>`;
+function traceHotMoney(d: StockData, idPrefix = ""): string {
+  let h = `<h3 id="${idPrefix}hotmoney">3. 资金流向（hot_money.py）</h3>`;
   h += `<p class="muted">脚本: skills/trading-hot-money/scripts/hot_money.py &nbsp;|&nbsp; 3 个全局子源并行</p>`;
   const rYi = (v: number) => v !== 0 ? `${(v / 1e8).toFixed(2)}亿` : "0";
   h += summaryTableHtml("parseHotMoney() 处理后", [
@@ -611,8 +650,8 @@ function traceHotMoney(d: StockData): string {
   return h;
 }
 
-function traceFundamentals(d: StockData): string {
-  let h = `<h3 id="sec-fundamentals">4. 基本面（fundamentals.py）</h3>`;
+function traceFundamentals(d: StockData, idPrefix = ""): string {
+  let h = `<h3 id="${idPrefix}fundamentals">4. 基本面（fundamentals.py）</h3>`;
   h += `<p class="muted">脚本: skills/trading-fundamentals/scripts/fundamentals.py &nbsp;|&nbsp; 10 个子源</p>`;
   const rYi = (v: number) => v > 0 ? `${(v / 1e8).toFixed(2)}亿` : String(v);
   const industry = d.fundamentals.industry;
@@ -643,8 +682,8 @@ function traceFundamentals(d: StockData): string {
   return h;
 }
 
-function traceVpaMacd(d: StockData): string {
-  let h = `<h3 id="sec-vpa">5. VPA 量价预计算 + MACD</h3>`;
+function traceVpaMacd(d: StockData, idPrefix = ""): string {
+  let h = `<h3 id="${idPrefix}vpa">5. VPA 量价预计算 + MACD</h3>`;
   h += `<p class="muted">来源: skills/trading-kline/scripts/kline.py（与 K 线同一脚本）</p>`;
   if (d.vpa_text) {
     h += `<h4>VPA 量价预计算 → 注入 risk prompt</h4>`;
@@ -659,8 +698,8 @@ function traceVpaMacd(d: StockData): string {
   return h;
 }
 
-function traceLockup(d: StockData): string {
-  let h = `<h3 id="sec-lockup">6. 解禁与减持（lockup.py）</h3>`;
+function traceLockup(d: StockData, idPrefix = ""): string {
+  let h = `<h3 id="${idPrefix}lockup">6. 解禁与减持（lockup.py）</h3>`;
   h += `<p class="muted">脚本: skills/trading-lockup/scripts/lockup.py &nbsp;|&nbsp; 3 个子源</p>`;
   if (d.lockup) {
     h += summaryTable("parseLockup() 处理后", [
@@ -684,7 +723,7 @@ function traceLockup(d: StockData): string {
 }
 
 function traceDecisionChain(stockReport: StockReport, action?: Action, positionTrace?: string): string {
-  let h = `<h3 id="sec-decision">7. 下游决策链</h3>`;
+  let h = `<h3>7. 下游决策链</h3>`;
 
   // fitness 评分醒目展示
   const fitCls = stockReport.fitness_score >= 8 ? "high" : stockReport.fitness_score >= 5 ? "mid" : "low";
@@ -724,55 +763,27 @@ function traceDecisionChain(stockReport: StockReport, action?: Action, positionT
 
 // ── 主入口 ──────────────────────────────────────────────────────────────────
 
-export function generateDataTraceReport(
+/** 单只股票的完整数据管道 sections（调用记录 / 数据处理 / LLM 交互 / 决策）。
+ *  section id 带前缀 stock-{ticker}-，多股并存时锚点不冲突。
+ *  外层由 generateDataTraceReport 包成 <div class="stock-panel">。 */
+function renderStockPanel(
   ticker: string,
-  name: string,
   stockData: StockData,
   stockReport?: StockReport,
   action?: Action,
   positionTrace?: string,
 ): string {
-  let html = `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>数据管道: ${esc(ticker)} ${esc(name)}</title>
-${CSS}
-</head>
-<body>`;
-
-  // ── 置顶导航栏 ──
-  html += `<nav class="nav-bar">
-  <div class="nav-links">
-    <a href="#sec-calls">调用记录</a>
-    <a href="#sec-kline">K 线</a>
-    <a href="#sec-news">新闻</a>
-    <a href="#sec-hotmoney">资金</a>
-    <a href="#sec-fundamentals">基本面</a>
-    <a href="#sec-vpa">VPA</a>
-    <a href="#sec-lockup">解禁</a>
-    <a href="#sec-prompt">Prompt</a>
-    <a href="#sec-decision">决策</a>
-  </div>
-  <div class="search-wrap"><input type="text" id="search-input" placeholder="搜索... (按 / 聚焦)"></div>
-  <div class="nav-actions">
-    <button class="nav-btn" id="btn-expand" title="展开全部 (E)">展开</button>
-    <button class="nav-btn" id="btn-collapse" title="折叠全部 (Shift+E)">折叠</button>
-  </div>
-</nav>`;
-
-  html += `<h1>${esc(ticker)} ${esc(name)}</h1>`;
-  html += `<p class="subtitle">数据管道调试视图 &mdash; API 请求 &rarr; 数据处理 &rarr; LLM prompt &rarr; LLM 响应 &rarr; 下游决策 &nbsp; <span class="muted">(按 <kbd>?</kbd> 查看快捷键)</span></p>`;
+  const pre = `stock-${ticker}-`;
+  let h = "";
 
   // ── 一、子源调用记录 ──
   if (stockData.calls && stockData.calls.length > 0) {
-    html += `<hr class="section-divider"><h2 id="sec-calls">一、子源调用记录</h2>`;
-    html += `<div class="call-flow">`;
+    h += `<hr class="section-divider"><h2 id="${pre}calls">一、子源调用记录</h2>`;
+    h += `<div class="call-flow">`;
     for (const c of stockData.calls) {
-      html += callRow(c);
+      h += callRow(c);
     }
-    html += `</div>`;
+    h += `</div>`;
 
     // 详细记录折叠
     let detailHtml = "";
@@ -801,31 +812,31 @@ ${CSS}
         }
       }
     }
-    html += details("展开全部调用详情", detailHtml);
+    h += details("展开全部调用详情", detailHtml);
   }
 
   // ── 二、数据处理链路 ──
-  html += `<hr class="section-divider"><h2>二、数据处理链路</h2>`;
-  html += `<div class="card">`;
-  html += traceKline(stockData);
-  html += traceNews(stockData);
-  html += traceHotMoney(stockData);
-  html += traceFundamentals(stockData);
-  html += traceVpaMacd(stockData);
-  html += traceLockup(stockData);
-  html += `</div>`;
+  h += `<hr class="section-divider"><h2>二、数据处理链路</h2>`;
+  h += `<div class="card">`;
+  h += traceKline(stockData, pre);
+  h += traceNews(stockData, pre);
+  h += traceHotMoney(stockData, pre);
+  h += traceFundamentals(stockData, pre);
+  h += traceVpaMacd(stockData, pre);
+  h += traceLockup(stockData, pre);
+  h += `</div>`;
 
   // ── 三、LLM 交互 ──
-  html += `<hr class="section-divider"><h2 id="sec-prompt">三、LLM 交互</h2>`;
+  h += `<hr class="section-divider"><h2 id="${pre}prompt">三、LLM 交互</h2>`;
 
   // analyst prompt
-  html += `<h3>完整 analyst prompt</h3>`;
-  html += details("展开 prompt 全文", codeBlockStyled(formatAnalystPrompt(stockData), "prompt"));
+  h += `<h3>完整 analyst prompt</h3>`;
+  h += details("展开 prompt 全文", codeBlockStyled(formatAnalystPrompt(stockData), "prompt"));
 
   if (stockReport) {
     // LLM 返回
-    html += `<h3>LLM 返回（analyst-role）</h3>`;
-    html += codeBlockStyled(JSON.stringify({
+    h += `<h3>LLM 返回（analyst-role）</h3>`;
+    h += codeBlockStyled(JSON.stringify({
       thesis: stockReport.thesis,
       fitness_score: stockReport.fitness_score,
       key_signals: stockReport.key_signals,
@@ -833,7 +844,7 @@ ${CSS}
     }, null, 2), "response");
 
     // risk prompt
-    html += `<h3>完整 risk prompt</h3>`;
+    h += `<h3>完整 risk prompt</h3>`;
     const mockAnalyst = {
       thesis: stockReport.thesis,
       fitness_score: stockReport.fitness_score,
@@ -841,10 +852,85 @@ ${CSS}
       key_signals: stockReport.key_signals,
       data_gaps: stockReport.data_gaps,
     };
-    html += details("展开 prompt 全文", codeBlockStyled(formatRiskPrompt(stockData, mockAnalyst), "prompt"));
+    h += details("展开 prompt 全文", codeBlockStyled(formatRiskPrompt(stockData, mockAnalyst), "prompt"));
 
     // 决策链
-    html += traceDecisionChain(stockReport, action, positionTrace);
+    h += `<div id="${pre}decision">`;
+    h += traceDecisionChain(stockReport, action, positionTrace);
+    h += `</div>`;
+  }
+
+  return h;
+}
+
+/** 单只股票条目（用于 generateDataTraceReport 多股版）。 */
+export interface TraceStockEntry {
+  ticker: string;
+  name: string;
+  stockData: StockData;
+  stockReport?: StockReport;
+  action?: Action;
+  positionTrace?: string;
+}
+
+/** 生成包含所有股票的 data-trace.html。
+ * 顶部股票切换器（tab）切换显示某只股票的数据管道；导航锚点随当前股票重定向。
+ * 多股 sections 各自独立 id（stock-{ticker}-calls 等），靠 CSS .stock-panel
+ * 显示/隐藏切换——不删除 DOM，切换无重渲染开销。
+ * 单股时退化为原行为（一个 tab，无切换感）。 */
+export function generateDataTraceReport(...entries: TraceStockEntry[]): string {
+  if (entries.length === 0) return "<!-- no stock data -->";
+  const titleStocks = entries.length === 1
+    ? `${entries[0].ticker} ${entries[0].name}`
+    : `${entries.length} 只股票`;
+
+  let html = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>数据管道: ${esc(titleStocks)}</title>
+${CSS}
+</head>
+<body>`;
+
+  // ── 置顶导航栏（锚点 data-sec 由 JS 按当前股票重定向到 #stock-{ticker}-{sec}） ──
+  html += `<nav class="nav-bar">
+  <div class="nav-links">
+    <a data-sec="calls">调用记录</a>
+    <a data-sec="kline">K 线</a>
+    <a data-sec="news">新闻</a>
+    <a data-sec="hotmoney">资金</a>
+    <a data-sec="fundamentals">基本面</a>
+    <a data-sec="vpa">VPA</a>
+    <a data-sec="lockup">解禁</a>
+    <a data-sec="prompt">Prompt</a>
+    <a data-sec="decision">决策</a>
+  </div>
+  <div class="search-wrap"><input type="text" id="search-input" placeholder="搜索... (按 / 聚焦)"></div>
+  <div class="nav-actions">
+    <button class="nav-btn" id="btn-expand" title="展开全部 (E)">展开</button>
+    <button class="nav-btn" id="btn-collapse" title="折叠全部 (Shift+E)">折叠</button>
+  </div>
+</nav>`;
+
+  html += `<h1>数据管道调试视图</h1>`;
+  html += `<p class="subtitle">${entries.length} 只股票 &mdash; API 请求 &rarr; 数据处理 &rarr; LLM prompt &rarr; LLM 响应 &rarr; 下游决策 &nbsp; <span class="muted">(按 <kbd>?</kbd> 查看快捷键)</span></p>`;
+
+  // ── 股票切换器（tab）──
+  html += `<div class="stock-tabs">`;
+  for (const e of entries) {
+    const fit = e.stockReport?.fitness_score;
+    const fitBadge = fit !== undefined ? `<span class="tab-fit">fit${fit}</span>` : "";
+    html += `<button class="stock-tab" data-ticker="${esc(e.ticker)}">${esc(e.ticker)} ${esc(e.name)}${fitBadge}</button>`;
+  }
+  html += `</div>`;
+
+  // ── 每只股票一个 panel ──
+  for (const e of entries) {
+    html += `<div class="stock-panel" data-ticker="${esc(e.ticker)}">`;
+    html += renderStockPanel(e.ticker, e.stockData, e.stockReport, e.action, e.positionTrace);
+    html += `</div>`;
   }
 
   html += SHORTCUT_PANEL;

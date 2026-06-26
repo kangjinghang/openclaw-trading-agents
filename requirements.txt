@@ -4,3 +4,4 @@ pandas>=2.0,<3
 requests>=2.0,<3
 python-dateutil>=2.8,<3
 pywencai>=0.7,<1
+curl_cffi>=0.13.0,<1

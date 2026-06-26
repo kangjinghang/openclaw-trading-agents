@@ -159,6 +159,37 @@ def http_get(url, **kwargs):
     return _with_retry(lambda: requests.get(url, **kwargs))
 
 
+# ── curl_cffi (TLS-fingerprint impersonation) ────────────────────────
+# 东财 search-api-web 等接口现已启用 TLS 指纹反爬（JA3 指纹检测）：
+# 普通 requests 被识别为爬虫 → 返回降级假数据（passportWeb 股吧用户），
+# 真实的 cmsArticleWebOld 文章字段消失。必须用 curl_cffi 的 impersonate
+# 模拟 Chrome 的 JA3 指纹才能拿到真实数据。akshare 的 stock_news_em 即依赖
+# curl_cffi。本项目复刻其请求逻辑到原生 HTTP 调用（而非调 akshare 库），
+# 以便走 record_call 采集子源级请求/响应详情 → data-trace.html 可观测。
+def cffi_get(url, params=None, headers=None, timeout=15, impersonate="chrome"):
+    """curl_cffi GET with TLS-fingerprint impersonation.
+
+    For anti-bot endpoints that fingerprint the TLS handshake (e.g. eastmoney
+    search-api-web). Returns a curl_cffi Response (same interface as requests:
+    .text / .status_code / .content). Raises RuntimeError if curl_cffi is not
+    installed — callers should try/except and record_call the failure so the
+    outage is observable in data-trace.
+
+    Unlike em_get/http_get, this does NOT auto-retry or auto-record — the caller
+    owns record_call (to set the right stage name and capture response details).
+    Kept thin so the call site mirrors _fetch_news_eastmoney's existing pattern.
+    """
+    try:
+        from curl_cffi import requests as cffi_requests
+    except ImportError as e:
+        raise RuntimeError(
+            "curl_cffi not installed — required for TLS-fingerprinted endpoints "
+            "(eastmoney search-api-web). Install: pip install curl_cffi>=0.13.0"
+        ) from e
+    return cffi_requests.get(url, params=params, headers=headers,
+                             timeout=timeout, impersonate=impersonate)
+
+
 def eastmoney_datacenter(report_name, columns="ALL", filter_str="",
                          page_size=50, sort_columns="", sort_types="-1"):
     """Eastmoney Datacenter unified query (shared by dragon-tiger, lockup, etc.).

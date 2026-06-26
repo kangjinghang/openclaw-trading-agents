@@ -405,7 +405,7 @@ describe("fetchStockData news 调用参数 + layer_stats", () => {
     expect(args).toContain("--ticker");
     expect(args).toContain("--date");
     expect(args).toContain("--lookback-days");
-    expect(args).toContain("7");
+    expect(args).toContain("60");  // watchlist 中期持仓视角用 60 天（跨12股实测全覆盖，分析师 news 角色 7 天）
     expect(args).toContain("--company-name");
     const nameIdx = args.indexOf("--company-name");
     expect(args[nameIdx + 1]).toBe("贵州茅台");

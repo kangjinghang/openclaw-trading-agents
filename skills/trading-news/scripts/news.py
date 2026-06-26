@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
-from http_helpers import em_get, http_get, output_json, normalize_ticker, record_call, pywencai_query
+from http_helpers import em_get, http_get, cffi_get, output_json, normalize_ticker, record_call
 
 _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
@@ -33,11 +33,33 @@ def _clean_content(text):
     return text
 
 
+def _strip_em_tags(text):
+    """去除东财搜索结果中的 <em>关键词高亮</em> 标签（akshare stock_news_em 同款清洗）。
+
+    search-api-web 的 cmsArticleWebOld 返回的 title/content 把匹配关键词包在
+    <em>...</em> 里做高亮，对 LLM 是噪声。清洗后还原纯文本。
+    """
+    if not text:
+        return text
+    return re.sub(r"</?em>", "", text)
+
+
 def _fetch_news_eastmoney(code, page_size=50):
-    """Fetch individual stock news from Eastmoney search API."""
+    """Fetch individual stock news from Eastmoney search API (search-api-web).
+
+    复刻 akshare stock_news_em 的请求逻辑（同 URL / 同 type / 同 param 结构），
+    但用 curl_cffi 走 TLS 指纹而非调 akshare 库——这样能走 record_call 采集
+    子源级请求/响应详情（URL/status/snippet）进 data-trace.html，且不引入
+    akshare 的 DataFrame 转换开销。
+
+    关键：search-api-web 现已启用 TLS 指纹反爬（JA3 检测），普通 requests 被
+    识别为爬虫 → 返回降级假数据 passportWeb（股吧用户），真实的文章字段
+    cmsArticleWebOld 消失。必须用 curl_cffi impersonate='chrome' 模拟 Chrome
+    的 JA3 指纹。akshare 即因此依赖 curl_cffi。
+    """
     start = time.monotonic()
+    url = "https://search-api-web.eastmoney.com/search/jsonp"
     try:
-        url = "https://search-api-web.eastmoney.com/search/jsonp"
         inner_param = {
             "uid": "",
             "keyword": code,
@@ -51,21 +73,24 @@ def _fetch_news_eastmoney(code, page_size=50):
                     "sort": "default",
                     "pageIndex": 1,
                     "pageSize": page_size,
-                    "preTag": "",
-                    "postTag": "",
+                    "preTag": "<em>",
+                    "postTag": "</em>",
                 }
             },
         }
         params = {
             "cb": "callback",
             "param": json.dumps(inner_param, ensure_ascii=False),
-            "_": "1",
+            "_": str(int(time.time() * 1000)),
         }
         headers = {
-            "Referer": "https://so.eastmoney.com/",
-            "User-Agent": _UA,
+            "accept": "*/*",
+            "referer": f"https://so.eastmoney.com/news/s?keyword={code}",
+            "user-agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) "
+                           "Chrome/142.0.0.0 Safari/537.36"),
         }
-        resp = em_get(url, params=params, headers=headers, timeout=15)
+        resp = cffi_get(url, params=params, headers=headers, timeout=15)
         text = resp.text
         # JSONP: extract JSON from callback wrapper; fall back to raw JSON
         try:
@@ -73,11 +98,14 @@ def _fetch_news_eastmoney(code, page_size=50):
         except ValueError:
             pass  # no parentheses → try raw JSON
         data = json.loads(text)
+        raw_articles = data.get("result", {}).get("cmsArticleWebOld", [])
         articles = []
-        for item in data.get("result", {}).get("cmsArticleWebOld", []):
+        for item in raw_articles:
+            title = _strip_em_tags(item.get("title", "") or "")
+            content = _clean_content(_strip_em_tags((item.get("content", "") or "")[:300]))
             articles.append({
-                "title": item.get("title", ""),
-                "content": _clean_content((item.get("content", "") or "")[:300]),
+                "title": title,
+                "content": content,
                 "time": item.get("date", ""),
                 "source": item.get("mediaName", "东方财富"),
             })
@@ -89,57 +117,8 @@ def _fetch_news_eastmoney(code, page_size=50):
         return articles
     except Exception as e:
         record_call("news/stock_em", success=False, error=str(e),
-                    duration_ms=(time.monotonic() - start) * 1000)
+                    duration_ms=(time.monotonic() - start) * 1000, url=url)
         return []
-
-
-def _normalize_pywencai_time(time_str):
-    """将 pywencai 的相对时间（'今天 09:22'、'昨天 22:44'）转为绝对日期格式。
-
-    排序需要统一的时间格式，'今天'/'昨天' 作为字符串会排到 '2026-MM-DD' 之后。
-    转换后格式：YYYY-MM-DD HH:MM，与东财 search 对齐。
-    """
-    if not time_str:
-        return ""
-    now = datetime.now()
-    if time_str.startswith("今天"):
-        t = time_str.replace("今天", "").strip()
-        return now.strftime("%Y-%m-%d") + (" " + t if t else "")
-    if time_str.startswith("昨天"):
-        t = time_str.replace("昨天", "").strip()
-        yesterday = now - timedelta(days=1)
-        return yesterday.strftime("%Y-%m-%d") + (" " + t if t else "")
-    # 已是绝对日期（如 '2026-06-24 19:17'）或未知格式，原样返回
-    return time_str[:16]
-
-
-def _fetch_news_pywencai(code, limit=20):
-    """Fetch stock news from pywencai (同花顺问财) as primary source.
-
-    pywencai returns articles where the company is the main subject (财报、战略、
-    产品动态)，信噪比远高于东财 search API 的榜单新闻。返回 [] 表示不可用
-    或无结果，调用方据此降级到兜底源。
-    """
-    rows = pywencai_query(f"{code}新闻")
-    if not rows:
-        return []
-    articles = []
-    for row in rows[:limit]:
-        # pywencai 返回格式：{title: {value: "...", key: "title"}, ...}
-        def _v(col):
-            val = row.get(col)
-            if isinstance(val, dict):
-                return str(val.get("value", ""))
-            return str(val) if val else ""
-        title = _v("title")
-        content = _v("content")[:300]
-        pub_time = _normalize_pywencai_time(_v("date"))
-        source = _v("source") or "问财"
-        # 过滤非新闻条目（公司简介、行情页等）
-        if title and "股票行情" not in title and "主营业务" not in content[:20]:
-            articles.append({"title": title, "content": content,
-                             "time": pub_time[:16], "source": source})
-    return articles
 
 
 def _rank_news_by_relevance(articles, company_name=None, code="", top_n=20):
@@ -547,6 +526,82 @@ def _parse_news_time(time_str):
     return None
 
 
+def _filter_recent(articles, reference_date_str, lookback_days):
+    """对个股新闻做 lookback 窗口裁剪 + 去重，保证 stock_news 与 news_layers 语义一致。
+
+    背景：_categorize_news 把老新闻挡在 news_layers 之外（分层是干净的），但注释
+    明写 "keep in flat list"——老新闻仍留在 stock_news 扁平列表里，而 orchestrator
+    和 watchlist data-fetcher 注入 prompt 的正是这个未裁剪的 stock_news，导致跨年
+    研报（如 2024 半年报点评）混进 LLM 视野。本函数在 _categorize_news 之后对
+    stock_news 做同口径裁剪，根治该问题。
+
+    两步：
+      1. lookback 裁剪：复用 _parse_news_time + cutoff_history（与 _categorize_news
+         同一参考日 + 同一窗口）。时间解析失败的文章**保留**（宁多勿少——防误杀当天
+         突发新闻，东财 date 格式偶有 "MM-DD" 无年份的简写）。
+      2. 去重：title（trim 后）完全相同视为重复，保留首条。修 pywencai 同篇研报
+         返回多次的问题；东财本身实测无重复，但保留作防御。
+    """
+    try:
+        ref_date = datetime.strptime(reference_date_str, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        ref_date = datetime.now()
+    cutoff = ref_date.replace(hour=23, minute=59, second=59) - timedelta(days=max(1, lookback_days))
+
+    seen_titles = set()
+    kept = []
+    for article in articles:
+        # 去重：归一化 title 后判等。空 title 不参与去重（无可判等标识，
+        # 误把多条无标题新闻合并成一条会丢真实信息）。
+        title_key = (article.get("title", "") or "").strip()
+        if title_key and title_key in seen_titles:
+            continue
+        # lookback 裁剪：解析失败（None）→ 保留；解析成功但早于 cutoff → 丢弃
+        pub_time = _parse_news_time(article.get("time", ""))
+        if pub_time is not None and pub_time < cutoff:
+            continue
+        if title_key:
+            seen_titles.add(title_key)
+        kept.append(article)
+    return kept
+
+
+def _filter_relevance(articles, company_name, code):
+    """过滤纯板块/市场新闻，只保留个股相关新闻。
+
+    背景：东财 search-api-web 的搜索语义是"全文提及股票代码的文章"，返回的
+    50 条里约一半是板块新闻（计算机行业资金流、概念涨跌、涨停复盘），股票代码
+    只出现在 content 末尾的关联股票列表里——对个股决策无增量，LLM 看到会误判为
+    个股信号。本函数在 _noise_re 之后做第二道过滤，挡掉这类纯板块新闻。
+
+    规则（实测验证：50 条 → noise 挡 25 → 本函数再挡 14，留 11 条个股新闻）：
+      - 有 company_name：title 或 content **前 80 字**（正文开头，排除末尾关联列表）
+        含**完整公司名** → 保留。
+        用 content 前 80 字而非全文：东财把关联股票列表拼在 content 末尾，全名
+        匹配全文会误放行"末尾列表里恰好含公司全名"的板块新闻。
+        不用简称切片（company_name[:2]）——"中科"会误匹配中科信息等同源公司。
+      - 无 company_name（降级）：代码必须出现在 **title**（而非仅 content）→ 保留。
+        分析师 pipeline 的 news 角色不传 --company-name，走此降级路径。
+      - 其余丢弃（纯板块新闻：代码只在 content 末尾关联列表）。
+
+    附带保留：content 提及公司名的汇总文（中证快报、大盘蓝筹）会通过——它们至少
+    相关且数量少，危害远小于挡掉真个股新闻的代价。
+    """
+    name = (company_name or "").strip()
+    code_str = str(code or "").strip()
+    kept = []
+    for article in articles:
+        title = article.get("title", "") or ""
+        content = article.get("content", "") or ""
+        body_start = content[:80]  # 正文开头，排除末尾关联股票列表
+        if name and (name in title or name in body_start):
+            kept.append(article)
+        elif code_str and code_str in title:
+            kept.append(article)
+        # else: 纯板块新闻（代码只在 content 末尾关联列表）→ 丢弃
+    return kept
+
+
 def _categorize_news(articles, reference_date_str, lookback_days=7):
     """Categorize articles into time layers based on reference date.
 
@@ -613,30 +668,29 @@ def fetch_news(ticker, date, lookback_days=7, skip_macro=False, company_name=Non
     data = {"ticker": code, "date": date, "lookback_days": lookback_days}
 
     try:
-        # pywencai 主源：问财返回公司层面具体新闻（财报、战略、产品动态），
-        # 信噪比远高于东财 search 的榜单新闻。未装/失败 → 降级到东财兜底。
-        articles = []
-        try:
-            articles = _fetch_news_pywencai(code)
-        except Exception as e:
-            data["stock_news_pywencai_error"] = str(e)
+        # 东财 search-api-web 为唯一源（复刻 akshare stock_news_em 请求逻辑，
+        # 走 curl_cffi TLS 指纹）。返回按时间倒序的最新新闻（实测当天有效），
+        # 无 pywencai 那种 2024 老研报/重复条目问题。
+        # 历史上曾用 pywencai 作主源，但实测问财返回公司关联文档（含跨年研报 +
+        # 同篇重复），信噪比差；已移除，东财为唯一源。
+        articles = _fetch_news_eastmoney(code)
 
-        # 东财 search 兜底：pywencai 不足 10 条时补充，过滤榜单噪音。
-        if len(articles) < 10:
-            try:
-                em_articles = _fetch_news_eastmoney(code)
-                # 过滤榜单类噪音：资金流向榜、概念涨跌、特大单统计等
-                # 这些对个股决策无增量，LLM 看到可能误判为个股信号
-                _noise_re = re.compile(
-                    r"(净流入|净流出|主力资金|特大单|出逃|融资客|概念涨|概念跌|"
-                    r"概念上涨|概念下跌|资金撤离|资金流入|榜单|资金流向)")
-                em_filtered = [a for a in em_articles
-                               if not _noise_re.search(a["title"])]
-                articles = articles + em_filtered
-            except Exception as e:
-                data["stock_news_eastmoney_error"] = str(e)
+        # 过滤榜单类噪音：资金流向榜、概念涨跌、特大单统计等。
+        # 这些是市场面/板块面信号，对个股决策无增量，LLM 看到可能误判为个股信号。
+        _noise_re = re.compile(
+            r"(净流入|净流出|主力资金|特大单|出逃|融资客|概念涨|概念跌|"
+            r"概念上涨|概念下跌|资金撤离|资金流入|榜单|资金流向)")
+        articles = [a for a in articles if not _noise_re.search(a["title"])]
 
-        # 相关性排序：公司名 > 代码 > 简称 > 概念相关
+        # 相关性过滤：挡掉纯板块新闻（代码只在 content 末尾关联列表），
+        # 只保留个股相关新闻（title 或正文开头含公司名/代码）。
+        articles = _filter_relevance(articles, company_name, code)
+
+        # lookback 裁剪 + 去重：防御任何源的老数据/重复混入（与 news_layers
+        # 的 cutoff_history 同口径，保证 stock_news 扁平列表与分层语义一致）。
+        articles = _filter_recent(articles, date, lookback_days)
+
+        # 相关性排序：公司名 > 代码 > 简称 > 概念相关（同 tier 内按时间倒序）
         articles = _rank_news_by_relevance(articles, company_name=company_name, code=code)
         data["stock_news"] = articles
 

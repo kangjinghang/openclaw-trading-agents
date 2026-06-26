@@ -15,6 +15,7 @@ import { fetchAllStockData, fetchMacroData, type MacroView } from "./watchlist/d
 import { formatPlanMarkdown } from "./watchlist/plan-formatter";
 import { generateDataHealthReport } from "./watchlist/data-health-aggregator";
 import { generateDataTraceReport } from "./watchlist/data-trace-report";
+import type { TraceStockEntry } from "./watchlist/data-trace-report";
 import { FitnessHistoryStore, type FitnessRecord } from "./watchlist/fitness-history-store";
 import { backfillReturns } from "./watchlist/fitness-backfiller";
 import type { LastRebalance, RebalancePlanFile, ActionType } from "./watchlist/rebalance-types";
@@ -264,19 +265,21 @@ Options:
   const planMd = formatPlanMarkdown(planFile);
   fs.writeFileSync(path.join(rebalanceDir, "plan.md"), planMd, "utf-8");
 
-  // 写 data-trace.html：选第一只股作为代表，展示完整的数据管道调试视图
-  if (result.reports.length > 0) {
-    const exampleReport = result.reports[0];
-    const exampleData = dataByTicker.get(exampleReport.ticker);
-    if (exampleData) {
-      const exampleAction = result.rebalancer_output.actions.find(a => a.ticker === exampleReport.ticker);
-      const positionTrace = result.position_traces?.[exampleReport.ticker];
-      const traceHtml = generateDataTraceReport(
-        exampleReport.ticker, exampleReport.name, exampleData, exampleReport,
-        exampleAction, positionTrace,
-      );
-      fs.writeFileSync(path.join(rebalanceDir, "data-trace.html"), traceHtml, "utf-8");
-    }
+  // 写 data-trace.html：包含全部股票的数据管道调试视图（顶部 tab 切换）。
+  // 每只股票各自的调用记录/数据处理/LLM 交互/决策各占一组 section，靠 CSS
+  // 显示/隐藏切换。无数据的股跳过（理论上 reports 与 dataByTicker 一一对应）。
+  const traceEntries = result.reports
+    .map(r => {
+      const sd = dataByTicker.get(r.ticker);
+      if (!sd) return null;
+      const action = result.rebalancer_output.actions.find(a => a.ticker === r.ticker);
+      const positionTrace = result.position_traces?.[r.ticker];
+      return { ticker: r.ticker, name: r.name, stockData: sd, stockReport: r, action, positionTrace };
+    })
+    .filter((e): e is NonNullable<typeof e> => e !== null);
+  if (traceEntries.length > 0) {
+    const traceHtml = generateDataTraceReport(...traceEntries);
+    fs.writeFileSync(path.join(rebalanceDir, "data-trace.html"), traceHtml, "utf-8");
   }
 
   // 更新 last_rebalance.json（含 recent_sells 跨次累积，供 anti-churn 买锁）。
