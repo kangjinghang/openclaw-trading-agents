@@ -71,7 +71,8 @@ function details(summary, content) {
     return `<details><summary>${summary}</summary><div class="detail-body">${content}</details>`;
 }
 /** 尝试从 response_snippet（可能是 JSONP callback({...}) 包裹）解析出 JSON 对象。
- *  失败返回 null（调用方降级为纯文本展示）。 */
+ *  失败返回 null（调用方降级为纯文本展示）。
+ *  对截断的 JSON（snippet 只有前 200 字符）做容错：尝试补全末尾括号。 */
 function tryParseResponseJson(snippet) {
     let s = snippet.trim();
     // JSONP: callback({...}) / jsonp({...}) — 取第一个 ( 到最后一个 ) 之间
@@ -80,12 +81,65 @@ function tryParseResponseJson(snippet) {
     if (parenStart >= 0 && parenEnd > parenStart) {
         s = s.slice(parenStart + 1, parenEnd).trim();
     }
+    // 先尝试直接解析
     try {
         return JSON.parse(s);
     }
     catch {
+        // 截断容错：如果看起来像 JSON（以 { 或 [ 开头），尝试补全末尾
+        if (s.startsWith("{") || s.startsWith("[")) {
+            return tryParseTruncatedJson(s);
+        }
         return null;
     }
+}
+/** 尝试解析截断的 JSON：逐步从末尾裁剪，再补全括号直到解析成功。
+ *  返回补全后的对象，或 null（无法修复）。 */
+function tryParseTruncatedJson(s) {
+    for (let trim = 0; trim <= Math.min(s.length, 50); trim++) {
+        const candidate = trim > 0 ? s.slice(0, -trim) : s;
+        let braces = 0, brackets = 0, inStr = false, esc = false;
+        for (const ch of candidate) {
+            if (esc) {
+                esc = false;
+                continue;
+            }
+            if (ch === "\\") {
+                esc = true;
+                continue;
+            }
+            if (ch === '"') {
+                inStr = !inStr;
+                continue;
+            }
+            if (inStr)
+                continue;
+            if (ch === "{")
+                braces++;
+            if (ch === "}")
+                braces--;
+            if (ch === "[")
+                brackets++;
+            if (ch === "]")
+                brackets--;
+        }
+        let fixed = candidate;
+        if (inStr)
+            fixed += '"';
+        while (braces > 0) {
+            fixed += "}";
+            braces--;
+        }
+        while (brackets > 0) {
+            fixed += "]";
+            brackets--;
+        }
+        try {
+            return JSON.parse(fixed);
+        }
+        catch { }
+    }
+    return null;
 }
 /** 渲染 JSON 为可折叠树（<details> 嵌套）。顶层默认展开，深层默认折叠。
  *  字符串/数字/布尔/null 直接着色显示；对象/数组可折叠并标注元素数。 */
@@ -120,7 +174,12 @@ function renderJsonTree(value, key) {
     for (const [k, v] of entries) {
         body += renderJsonTree(v, isArray ? `[${k}]` : k);
     }
-    return `<details${open}><summary>${summary}</summary><div class="jt-children">${body}</div></details>`;
+    // 顶层（key===undefined）= 一棵 JSON 树的根：summary 右侧加就地「展开/折叠全部」按钮，
+    // 只控制本树内部节点（data-action + 最接近的 .json-tree 容器作用域），无需滚到页面顶部。
+    const treeActions = key === undefined
+        ? ` <span class="jt-tree-actions"><button type="button" class="jt-btn" data-action="expand">展开全部</button><button type="button" class="jt-btn" data-action="collapse">折叠全部</button></span>`
+        : "";
+    return `<details${open}><summary>${summary}${treeActions}</summary><div class="jt-children">${body}</div></details>`;
 }
 // ── 语义化辅助函数 ──────────────────────────────────────────────────────────
 /** 根据数值正负返回 CSS class */
@@ -244,7 +303,12 @@ pre.code-block.response { border-left: 3px solid var(--ok); }
 code { font-family: 'SF Mono', 'Fira Code', monospace; }
 .summary-block { margin: 8px 0; }
 details { margin: 8px 0; }
-details > summary { cursor: pointer; color: var(--accent); font-size: 0.9em; padding: 6px 0; user-select: none; }
+details > summary { cursor: pointer; color: var(--accent); font-size: 0.9em; padding: 6px 0; user-select: none;
+  list-style: none; }  /* 隐藏默认 marker，用自定义 ▶ 三角替代，暗色主题下更醒目 */
+details > summary::-webkit-details-marker { display: none; }  /* Safari */
+details > summary::before { content: "▶"; display: inline-block; color: var(--muted); font-size: 0.75em;
+  margin-right: 6px; transition: transform 0.15s; }
+details[open] > summary::before { transform: rotate(90deg); }  /* 展开时三角朝下 */
 details > summary:hover { text-decoration: underline; }
 .detail-body { padding: 8px 0 8px 16px; border-left: 2px solid var(--border); }
 .call-flow { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
@@ -284,6 +348,10 @@ details > summary:hover { text-decoration: underline; }
 .json-tree .jt-count { color: var(--muted); font-size: 0.9em; margin-left: 2px; }
 .json-tree .jt-bracket { color: var(--muted); }
 .json-tree .jt-children { padding-left: 18px; border-left: 1px dashed var(--border); margin-left: 4px; }
+.json-tree .jt-tree-actions { margin-left: 10px; white-space: nowrap; }
+.json-tree .jt-btn { background: var(--border); border: none; color: var(--muted); padding: 1px 7px;
+  border-radius: 3px; cursor: pointer; font-size: 0.8em; font-family: inherit; margin-left: 4px; }
+.json-tree .jt-btn:hover { color: var(--accent); background: var(--hover); }
 .risk-flag { background: #3a1b1b; border-left: 3px solid var(--fail); padding: 6px 10px; margin: 4px 0; border-radius: 0 4px 4px 0; font-size: 0.88em; }
 .risk-flag .sev { color: var(--fail); font-weight: 600; }
 .action-sell { color: var(--fail); font-weight: 600; }
@@ -336,16 +404,30 @@ const JS = `
 <script>
 (function(){
   // ── 一键展开/折叠 ──
-  function toggleAll(open) {
-    document.querySelectorAll('.json-tree details').forEach(function(d) {
+  // toggleTree(scope, open)：scope=容器元素，只操作该容器内的 details；
+  // toggleTree(null, open)：全局（顶部按钮/快捷键），操作页面上所有 .json-tree。
+  function toggleTree(scope, open) {
+    var sel = scope ? (scope.matches('.json-tree') ? scope : scope.closest('.json-tree') || scope) : null;
+    var root = sel || document;
+    root.querySelectorAll('details').forEach(function(d) {
       if (open) d.setAttribute('open', '');
       else d.removeAttribute('open');
     });
   }
   var expandBtn = document.getElementById('btn-expand');
   var collapseBtn = document.getElementById('btn-collapse');
-  if (expandBtn) expandBtn.addEventListener('click', function() { toggleAll(true); });
-  if (collapseBtn) collapseBtn.addEventListener('click', function() { toggleAll(false); });
+  if (expandBtn) expandBtn.addEventListener('click', function() { toggleTree(null, true); });
+  if (collapseBtn) collapseBtn.addEventListener('click', function() { toggleTree(null, false); });
+
+  // 就地按钮（每棵 JSON 树根 summary 上）：只控制本树，且阻止冒泡到 summary
+  document.addEventListener('click', function(e) {
+    var btn = e.target.closest && e.target.closest('.jt-btn[data-action]');
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    var tree = btn.closest('.json-tree');
+    toggleTree(tree, btn.getAttribute('data-action') === 'expand');
+  });
 
   // ── 搜索高亮 ──
   var searchInput = document.getElementById('search-input');
@@ -434,8 +516,8 @@ const JS = `
       if (e.key === 'Escape' && e.target === searchInput) { searchInput.value = ''; clearSearch(); searchInput.blur(); }
       return;
     }
-    if (e.key === 'e' && !e.shiftKey && !e.ctrlKey && !e.metaKey) { e.preventDefault(); toggleAll(true); }
-    if (e.key === 'E' && e.shiftKey && !e.ctrlKey && !e.metaKey) { e.preventDefault(); toggleAll(false); }
+    if (e.key === 'e' && !e.shiftKey && !e.ctrlKey && !e.metaKey) { e.preventDefault(); toggleTree(null, true); }
+    if (e.key === 'E' && e.shiftKey && !e.ctrlKey && !e.metaKey) { e.preventDefault(); toggleTree(null, false); }
     if (e.key === '/' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); if (searchInput) searchInput.focus(); }
     if (e.key === '?') { e.preventDefault(); toggleShortcuts(); }
     if (e.key === 'Escape') { hideShortcuts(); }

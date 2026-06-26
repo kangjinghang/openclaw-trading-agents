@@ -329,6 +329,9 @@ function parseFundamentals(raw) {
         // PE/PB 历史分位（baidu 近5年），缺/非法 → undefined，prompt 据此省略方括号标注
         pe_percentile: pct(valPct.pe_percentile),
         pb_percentile: pct(valPct.pb_percentile),
+        // 同花顺 8 维能力评分（pywencai），缺/非法 → undefined
+        capability_scores: raw?.capability_scores && typeof raw.capability_scores === "object" && !Array.isArray(raw.capability_scores)
+            ? raw.capability_scores : undefined,
     };
 }
 /** 从 lockup.py 输出解析解禁与减持摘要。

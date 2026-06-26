@@ -48,6 +48,10 @@ export declare function parseFundamentals(raw: any): {
     consensus_eps?: ConsensusEps;
     pe_percentile?: number;
     pb_percentile?: number;
+    capability_scores?: Record<string, {
+        score: number;
+        label: string;
+    }>;
 };
 /** 从 lockup.py 输出解析解禁与减持摘要。
  *

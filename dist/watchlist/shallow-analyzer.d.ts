@@ -142,9 +142,13 @@ export interface StockData {
         consensus_eps?: ConsensusEps;
         pe_percentile?: number;
         pb_percentile?: number;
+        capability_scores?: Record<string, {
+            score: number;
+            label: string;
+        }>;
     };
     ranker_thesis?: string;
-    /** kline.py 预计算的 VPA 量价分析文本（含"顶部背离信号/放量滞涨"等结论）。
+    /** kline.py 预计算的 VPA 量价分析文本（纯事实：价量变动%、交叉事件，无方向性结论）。
      *  undefined = 无 VPA 数据（非 kline 脚本或拉取失败）。 */
     vpa_text?: string;
     /** kline.py 预计算的 MACD 结构化数据（DIF/DEA/histogram/方向/金叉死叉）。

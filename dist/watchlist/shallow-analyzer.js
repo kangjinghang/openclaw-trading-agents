@@ -42,7 +42,7 @@ const ANALYST_PROMPT_TEMPLATE = `# 角色
 {ticker} {name}（行业：{sector}）
 
 # 数据
-## K 线（5 日 +{pct_5d}% / 20 日 +{pct_20d}%，支撑 {support} / 压力 {resistance}）
+## K 线（5 日 +{pct_5d}% / 20 日 +{pct_20d}%，支撑 {support} / 压力 {resistance}，量比 {volume_ratio}）
 ## 新闻（最近 7 天 top，含时间与正文摘要）
 {news_density}{news_bullets}
 （注意时效：最近 1-2 天的突发新闻权重高于一周前的旧闻；标题党风险——标题与正文矛盾时以正文为准）
@@ -53,6 +53,8 @@ const ANALYST_PROMPT_TEMPLATE = `# 角色
 {quarterly_trends}
 ## 机构一致预期（卖方覆盖数 / EPS 预期 / 目标价 / 评级）
 {consensus_eps}
+## 同花顺能力评分（8维度，0-10分，仅作参考）
+{capability_scores}
 {ranker_section}
 
 # 输出格式（严格 JSON）
@@ -76,17 +78,16 @@ function signPrefix(n) {
 }
 function renderHotMoneySummary(h) {
     const parts = [];
-    // 北向资金（全市场外资情绪风向标）
-    if (h.northbound_signal) {
-        const sig = h.northbound_signal === "inflow" ? "流入" : "流出";
-        parts.push(`北向${signPrefix(h.northbound_yi)}${h.northbound_yi.toFixed(2)}亿(${sig})`);
-    }
-    // 龙虎榜（游资/机构席位动向）+ 上榜原因（区分游资炒作 vs 业绩驱动）
+    // 龙虎榜（游资/机构席位动向）+ 上榜原因（区分游资炒作 vs 业务驱动）
+    // 个股级信号，有价值——但多数股票不上榜，"缺失"措辞有歧义（正常 vs 故障）
     if (h.dragon_tiger_recent) {
         const reason = h.dragon_tiger_reason ? `，原因:${h.dragon_tiger_reason}` : "";
         parts.push(`龙虎榜近30天:${h.dragon_tiger_recent}${reason}`);
     }
-    // 板块轮动（标的行业是否当日主线）+ 流入/流出 top 名单
+    else {
+        parts.push(`龙虎榜近30天:未上榜`);
+    }
+    // 板块轮动（标的行业是否当日主线）—— 个股级信号，有价值
     if (h.sector_in_industry_tag) {
         const tag = h.sector_in_industry_tag === "主线" ? "所在行业在当日流入主线"
             : h.sector_in_industry_tag === "弱势" ? "所在行业在当日流出弱势区"
@@ -95,10 +96,7 @@ function renderHotMoneySummary(h) {
         const outflow = h.sector_outflow_top ? `(流出top:${h.sector_outflow_top})` : "";
         parts.push(`${tag}${inflow}${outflow}`);
     }
-    // 今日热门题材
-    if (h.hot_stocks_top) {
-        parts.push(`今日热门:${h.hot_stocks_top}`);
-    }
+    // 注：北向资金和热门题材已移除——它们是市场级信号，已在 rebalancer macro_section 注入一次
     if (parts.length === 0) {
         return "(资金数据拉取失败或全空)";
     }
@@ -191,6 +189,15 @@ function renderConsensus(c) {
         segs.push(`PEG ${c.peg}`);
     return segs.join(" | ");
 }
+/** 渲染同花顺 8 维能力评分为一行摘要。 */
+function renderCapabilityScores(scores) {
+    if (!scores || Object.keys(scores).length === 0)
+        return "";
+    const entries = Object.entries(scores)
+        .filter(([, v]) => typeof v?.score === "number")
+        .map(([k, v]) => `${v.label || k} ${v.score.toFixed(1)}`);
+    return entries.join(" | ") || "";
+}
 /** 把解禁+减持压成一行（对齐 renderHotMoneySummary/renderQuarterlyTrends 范式）。
  *
  *  格式：「解禁压力：重大压力 | 未来90天2笔(最近 07-15 定增 0.4%；09-20 首发 1.2%) | 近期减持1笔(大股东 2.1%，个人资金需求)」
@@ -259,7 +266,9 @@ function formatAnalystPrompt(d) {
     const newsDensity = d.news_layer_stats
         ? `新闻密度：6h 内 ${d.news_layer_stats.realtime_6h_count} 条突发 / 24h 内 ${d.news_layer_stats.extended_24h_count} 条 / 7 天共 ${d.news_layer_stats.total_categorized} 条\n`
         : "";
-    const rankerSection = d.ranker_thesis ? `## ranker 评估（ranker 给的 thesis）\n${d.ranker_thesis}` : "";
+    const rankerSection = d.ranker_thesis
+        ? `## ranker 补充事实（来自不同数据源，供你独立参考，不是你的前置结论）\n${d.ranker_thesis}\n（注意：以上是 ranker 基于雪球异动等数据源的事实摘要，可能混有解释性措辞。请将其视为额外数据，与你的新闻/基本面/资金流分析独立交叉验证，不要被其方向性措辞锚定。）`
+        : "";
     return ANALYST_PROMPT_TEMPLATE
         .replace("{ticker}", d.ticker)
         .replace("{name}", d.name)
@@ -268,6 +277,7 @@ function formatAnalystPrompt(d) {
         .replace("{pct_20d}", d.kline.pct_20d.toFixed(2))
         .replace("{support}", d.kline.support.toFixed(2))
         .replace("{resistance}", d.kline.resistance.toFixed(2))
+        .replace("{volume_ratio}", d.kline.volume_ratio_5_20.toFixed(2))
         .replace("{news_density}", newsDensity)
         .replace("{news_bullets}", newsBullets)
         .replace("{hot_money_summary}", renderHotMoneySummary(d.hot_money))
@@ -280,6 +290,7 @@ function formatAnalystPrompt(d) {
         // 季度趋势/机构预期：render 返回空串 → 整段标题下内容空白，LLM 理解为"无此数据"。
         .replace("{quarterly_trends}", renderQuarterlyTrends(d.fundamentals.quarterly_trends) || "(无季度趋势数据)")
         .replace("{consensus_eps}", renderConsensus(d.fundamentals.consensus_eps) || "(无机构覆盖)")
+        .replace("{capability_scores}", renderCapabilityScores(d.fundamentals.capability_scores) || "(无评分数据)")
         .replace("{ranker_section}", rankerSection);
 }
 /** 解析 analyst-role 输出。非 JSON / 缺字段返回 null（或填默认值）。 */
@@ -354,8 +365,9 @@ const RISK_PROMPT_TEMPLATE = `# 角色
 
 ## 量价背离识别规则（重点）
 若以下任一成立，应输出对应 risk_flag 并酌情提升 overall_risk（medium→high，low→medium）：
-- VPA 预计算数据出现"顶部背离信号"（价格上涨但成交量递减，动能衰竭）
-- VPA 预计算数据出现"放量滞涨"（巨量但价格不动，多空分歧大）
+- VPA 数据出现"价量背离"（价格上涨但成交量显著递减，>10%）
+- VPA 数据出现"缩量下跌"（价格下跌且成交量递减，可能流动性枯竭）
+- VPA 出现巨量窄幅震荡（量比 >1.8，涨跌幅 <1%，实体宽度 <0.015）
 - 5 日涨幅较大（>10%）但量比 volume_ratio_5_20 < 0.8（缩量上涨，资金不认可）
 这些是技术性见顶信号，与基本面好坏无关——业绩再好，技术见顶也是风险。
 
