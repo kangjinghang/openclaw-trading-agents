@@ -365,7 +365,7 @@ describe("fetchStockData vpa_text 注入", () => {
 });
 
 describe("fetchStockData news 调用参数 + layer_stats", () => {
-  it("调用 news.py 时传 --skip-macro（省 CLS+akshare 两路 HTTP）", async () => {
+  it("调用 news.py 时传 --skip-macro + --company-name（省宏观 + 相关性排序）", async () => {
     mockBySkill();
     await fetchStockData("SH600519", "贵州茅台", "白酒");
     const mocked = vi.mocked(execSkillScript);
@@ -377,6 +377,9 @@ describe("fetchStockData news 调用参数 + layer_stats", () => {
     expect(args).toContain("--date");
     expect(args).toContain("--lookback-days");
     expect(args).toContain("7");
+    expect(args).toContain("--company-name");
+    const nameIdx = args.indexOf("--company-name");
+    expect(args[nameIdx + 1]).toBe("贵州茅台");
   });
 
   it("news.py 返回 layer_stats → StockData.news_layer_stats 被填充", async () => {

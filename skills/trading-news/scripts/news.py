@@ -97,20 +97,92 @@ def _fetch_news_pywencai(code, limit=20):
     return articles
 
 
-def _fetch_announcements_pywencai(code, limit=10):
-    """Fetch company announcements via pywencai natural language query."""
-    rows = pywencai_query(f"{code}公告")
-    if not rows:
+def _fetch_news_akshare_individual(code, limit=20):
+    """Fetch individual stock news from akshare stock_news_em (个股新闻).
+
+    akshare.stock_news_em 按个股代码拉取东财个股新闻页面，返回的新闻天然
+    与该公司相关（公告、研报、公司快讯），信噪比远高于 search API 的概念新闻。
+    失败时 graceful degrade（返回空列表），不阻塞主流程。
+    """
+    start = time.monotonic()
+    try:
+        import akshare as ak
+        df = ak.stock_news_em(symbol=code)
+    except Exception as e:
+        record_call("news/stock_akshare", success=False, error=str(e),
+                    duration_ms=(time.monotonic() - start) * 1000)
         return []
-    items = []
-    for row in rows[:limit]:
-        title = str(row.get("公告标题") or row.get("标题") or "")
-        content = str(row.get("公告内容") or row.get("内容") or "")[:300]
-        pub_time = str(row.get("发布时间") or row.get("日期") or "")
+
+    articles = []
+    if df is None or len(df) == 0:
+        record_call("news/stock_akshare", success=False, error="empty result",
+                    duration_ms=(time.monotonic() - start) * 1000)
+        return articles
+    for _, row in df.head(limit).iterrows():
+        # akshare stock_news_em 列名：标题/内容/发布时间/来源/阅读量 等
+        title = str(row.get("标题", "") or "")
+        content = str(row.get("内容", "") or "")[:300]
+        pub_time = str(row.get("发布时间", "") or "")
+        source = str(row.get("来源", "") or "东方财富个股")
         if title:
-            items.append({"title": title, "content": content,
-                          "time": pub_time[:16], "source": "问财公告"})
-    return items
+            articles.append({
+                "title": title,
+                "content": content,
+                "time": pub_time[:16],
+                "source": source,
+            })
+    record_call("news/stock_akshare", success=True,
+                duration_ms=(time.monotonic() - start) * 1000)
+    return articles
+
+
+def _rank_news_by_relevance(articles, company_name=None, code="", top_n=20):
+    """按相关性分 tier 排序新闻：公司名精确匹配 > 代码出现 > 简称 > 其余.
+
+    同 tier 内按时间倒序（最新优先）。无 company_name 时降级为仅代码匹配。
+
+    Tier 0: title 或 content 包含公司全名（如"海特高新"）
+    Tier 1: title 或 content 包含 ticker code（如"002023"）
+    Tier 2: title 或 content 包含公司简称（取 company_name 前 2 字，如"海特"）
+    Tier 3: 其余（概念/板块相关，保留但排最后）
+    """
+    if not articles:
+        return articles
+
+    # 准备匹配关键词
+    name_upper = (company_name or "").strip().upper()
+    code_str = str(code).strip()
+    # 简称：取公司名前 2 字（仅中文有效，至少 2 字才取）
+    short_name = ""
+    if company_name and len(company_name) >= 2:
+        short_name = company_name[:2]
+
+    def _tier(article):
+        """返回该文章的 tier 编号（0=最高，3=最低）."""
+        text = (article.get("title", "") + " " + article.get("content", "")).upper()
+        # Tier 0: 公司全名精确匹配
+        if name_upper and name_upper in text:
+            return 0
+        # Tier 1: ticker code 出现
+        if code_str and code_str in text:
+            return 1
+        # Tier 2: 公司简称匹配
+        if short_name and short_name.upper() in text:
+            return 2
+        # Tier 3: 概念相关（无精确匹配）
+        return 3
+
+    # 分 tier 后同 tier 内按时间倒序
+    articles_with_tier = [(a, _tier(a)) for a in articles]
+    articles_with_tier.sort(key=lambda x: (x[1], x[0].get("time", "")), reverse=True)
+    # reverse=True 使 tier 升序（0 最高）且时间降序（最新优先）
+    # 但 reverse 同时影响两个 key，需拆开：先 tier 升序，同 tier 时间降序
+    articles_with_tier.sort(key=lambda x: (-x[1], x[0].get("time", "")))
+    result = [a for a, _ in articles_with_tier]
+    # 不足 5 条时不截断（宁缺毋滥）
+    if len(result) <= 5:
+        return result
+    return result[:top_n]
 
 
 def _fetch_global_news_akshare(limit=10):
@@ -517,13 +589,16 @@ def _categorize_news(articles, reference_date_str, lookback_days=7):
     return layers, stats
 
 
-def fetch_news(ticker, date, lookback_days=7, skip_macro=False):
+def fetch_news(ticker, date, lookback_days=7, skip_macro=False, company_name=None):
     """Fetch individual stock news + macro news with time-layered categorization.
 
     skip_macro=True 时跳过宏观新闻拉取（CLS + akshare 两路 HTTP 全省）。
     适用于 shallow-analyzer 这类快筛场景：候选池 N 股各自调用 news.py，
     宏观新闻与 ticker 无关、N 次拉取内容相同纯属浪费，且 shallow 不消费宏观。
     跳过后 macro_news 仍输出空数组 + macro_news_source="skipped"，保持结构稳定。
+
+    company_name 用于新闻相关性排序：公司名精确匹配 > 代码 > 简称 > 概念相关。
+    缺失时降级为仅代码匹配。排序后取 top 20 条注入 LLM prompt。
     """
     code = normalize_ticker(ticker)
     data = {"ticker": code, "date": date, "lookback_days": lookback_days}
@@ -537,6 +612,22 @@ def fetch_news(ticker, date, lookback_days=7, skip_macro=False):
                 articles = articles + _fetch_news_pywencai(code)
             except Exception as e:
                 data["stock_news_pywencai_error"] = str(e)
+
+        # akshare 个股新闻：按代码拉取个股维度新闻（公告/研报/公司快讯），信噪比高。
+        # 与东财搜索结果合并后统一排序。失败 → 不阻塞，降级为仅东财 + 后过滤。
+        try:
+            ak_articles = _fetch_news_akshare_individual(code)
+            if ak_articles:
+                # 标记来源以区分
+                for a in ak_articles:
+                    a["source"] = a.get("source", "东方财富个股")
+                articles = articles + ak_articles
+                data["stock_news_akshare_count"] = len(ak_articles)
+        except Exception as e:
+            data["stock_news_akshare_error"] = str(e)
+
+        # 相关性排序：公司名 > 代码 > 简称 > 概念相关
+        articles = _rank_news_by_relevance(articles, company_name=company_name, code=code)
         data["stock_news"] = articles
 
         # Categorize into time layers (history window = lookback_days)
@@ -605,6 +696,9 @@ def main():
     parser.add_argument("--skip-macro", action="store_true",
                         help="Skip macro news fetch (CLS+akshare). For shallow-analyzer "
                              "batch scenarios where macro is unused and per-ticker duplicate.")
+    parser.add_argument("--company-name", required=False, default=None,
+                        help="Company name (e.g. 海特高新) for news relevance ranking. "
+                             "Articles mentioning the company name are ranked higher.")
     parser.add_argument("--macro-only", action="store_true",
                         help="Only fetch macro data (NBS indicators + commodities + "
                              "sector_view), skip per-stock news. For rebalancer pipeline "
@@ -641,7 +735,7 @@ def main():
 
     try:
         data = fetch_news(args.ticker, args.date, args.lookback_days,
-                          skip_macro=args.skip_macro)
+                          skip_macro=args.skip_macro, company_name=args.company_name)
         # Reflect the macro source actually used (cls/akshare/skipped/none) in the
         # top-level _source so it's visible without drilling into data.
         macro_src = data.get("macro_news_source", "none")
