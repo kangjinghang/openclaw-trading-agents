@@ -343,37 +343,39 @@ def compute_vpa(data: list) -> str:
         )
 
     # ── Pattern recognition ──
+    # 原则：代码只输出可验证的事实（数值、方向、交叉），不输出解释（信号方向、含义）。
+    # LLM 负责从事实推导结论，避免代码预设偏见锚定 LLM。
     lines.append("\n### 关键量价模式识别\n")
     last5 = rows[-5:]
-    price_up = last5[-1]["close"] > last5[0]["close"]
-    vol_down = last5[-1]["volume"] < last5[0]["volume"]
-    price_down = last5[-1]["close"] < last5[0]["close"]
-    vol_up = last5[-1]["volume"] > last5[0]["volume"]
+    price_change_pct = (last5[-1]["close"] - last5[0]["close"]) / last5[0]["close"] * 100
+    vol_change_pct = (last5[-1]["volume"] - last5[0]["volume"]) / last5[0]["volume"] * 100 if last5[0]["volume"] > 0 else 0
+    lines.append(f"- 近5日价格变动: {'+' if price_change_pct >= 0 else ''}{price_change_pct:.1f}%")
+    lines.append(f"- 近5日成交量变动: {'+' if vol_change_pct >= 0 else ''}{vol_change_pct:.1f}%")
 
     found_pattern = False
-    if price_up and vol_down:
-        lines.append("- **顶部背离信号**: 近5日价格上涨但成交量递减，上涨动能可能衰竭")
+    if price_change_pct > 0 and vol_change_pct < -10:
+        lines.append("- 价量背离: 价格上涨但成交量显著递减")
         found_pattern = True
-    if price_down and vol_up:
-        lines.append("- **底部放量信号**: 近5日价格下跌但成交量递增，可能是恐慌抛售或换手")
+    if price_change_pct < 0 and vol_change_pct > 10:
+        lines.append("- 放量下跌: 价格下跌且成交量递增")
         found_pattern = True
-    if price_down and vol_down:
-        lines.append("- **卖压衰竭信号**: 近5日价格下跌且成交量递减，空方力量可能枯竭")
+    if price_change_pct < 0 and vol_change_pct < -10:
+        lines.append("- 缩量下跌: 价格下跌且成交量递减")
         found_pattern = True
-    if price_up and vol_up:
-        lines.append("- **健康上涨信号**: 近5日价格上涨且成交量配合递增")
+    if price_change_pct > 0 and vol_change_pct > 10:
+        lines.append("- 量价齐升: 价格上涨且成交量配合递增")
         found_pattern = True
 
     # Selling climax / 放量滞涨 in last 3 days
     for r in rows[-3:]:
         if r["volume_ratio"] > 2.0 and r["pct_change"] < -0.03 and r["close_position"] > 0.5:
             lines.append(
-                f"- **卖出高潮(Selling Climax)**: {r['date']} 急跌巨量但收盘收回过半，可能是恐慌见底"
+                f"- {r['date']}: 量比 {r['volume_ratio']:.1f}，跌幅 {r['pct_change']:.1%}，收盘位置 {r['close_position']:.2f}（放量急跌后回收过半）"
             )
             found_pattern = True
         if r["volume_ratio"] > 1.8 and abs(r["pct_change"]) < 0.01 and r["bar_spread"] < 0.015:
             lines.append(
-                f"- **放量滞涨**: {r['date']} 巨量但价格几乎不动（窄实体），多空分歧大"
+                f"- {r['date']}: 量比 {r['volume_ratio']:.1f}，涨跌幅 {r['pct_change']:.2%}，实体宽度 {r['bar_spread']:.4f}（巨量窄幅震荡）"
             )
             found_pattern = True
 
@@ -490,24 +492,24 @@ def compute_technical_indicators(data: list) -> str:
     lines.append(f"- SMA200: {sma200:.2f}" if sma200 else "- SMA200: 数据不足")
 
     last_close = closes[-1]
-    # Determine alignment
+    # Determine alignment — factual description only
     sma_vals = [v for v in [sma5, sma10, sma20, sma50] if v is not None]
     if sma_vals:
         if all(last_close > v for v in sma_vals):
-            lines.append(f"- **均线排列**: 多头排列（价格 {last_close:.2f} 在所有短期均线之上）")
+            lines.append(f"- **均线位置**: 价格 {last_close:.2f} 在所有短期均线之上")
         elif all(last_close < v for v in sma_vals):
-            lines.append(f"- **均线排列**: 空头排列（价格 {last_close:.2f} 在所有短期均线之下）")
+            lines.append(f"- **均线位置**: 价格 {last_close:.2f} 在所有短期均线之下")
         else:
-            lines.append(f"- **均线排列**: 交织排列（价格与均线关系不一致）")
+            lines.append(f"- **均线位置**: 价格与均线交织")
 
-    # SMA crossover signals (5/10 short-term)
+    # SMA crossover events (5/10 short-term) — factual: just report the cross
     if sma5 and sma10 and n >= 2:
         prev_sma5 = sum(closes[-6:-1]) / 5
         prev_sma10 = sum(closes[-11:-1]) / 10
         if prev_sma5 <= prev_sma10 and sma5 > sma10:
-            lines.append("- **金叉信号**: SMA5 上穿 SMA10（短期看多）")
+            lines.append("- **SMA5/10 交叉**: SMA5 上穿 SMA10")
         elif prev_sma5 >= prev_sma10 and sma5 < sma10:
-            lines.append("- **死叉信号**: SMA5 下穿 SMA10（短期看空）")
+            lines.append("- **SMA5/10 交叉**: SMA5 下穿 SMA10")
 
     lines.append("")
 
@@ -521,15 +523,14 @@ def compute_technical_indicators(data: list) -> str:
         lines.append(f"- MACD 柱状图: {macd_hist:.4f}")
 
         crossover = macd_data["crossover"]
-        direction = macd_data["direction"]
         if crossover == "golden":
-            lines.append("- **金叉信号**: DIF 上穿 DEA（看多）")
+            lines.append("- **MACD 交叉**: DIF 上穿 DEA")
         elif crossover == "death":
-            lines.append("- **死叉信号**: DIF 下穿 DEA（看空）")
-        elif direction == "看多":
-            lines.append("- MACD 多头运行（DIF > DEA，柱状图为正）")
-        elif direction == "看空":
-            lines.append("- MACD 空头运行（DIF < DEA，柱状图为负）")
+            lines.append("- **MACD 交叉**: DIF 下穿 DEA")
+        elif dif > dea:
+            lines.append(f"- MACD: DIF({dif:.4f}) > DEA({dea:.4f})，柱状图 {'正' if macd_hist > 0 else '负'}")
+        elif dif < dea:
+            lines.append(f"- MACD: DIF({dif:.4f}) < DEA({dea:.4f})，柱状图 {'正' if macd_hist > 0 else '负'}")
         lines.append("")
 
     # ── RSI (14) ──
@@ -555,15 +556,15 @@ def compute_technical_indicators(data: list) -> str:
         lines.append("### RSI (14)")
         lines.append(f"- RSI: {rsi:.2f}")
         if rsi > 70:
-            lines.append("- **超买区域** (>70)：可能面临回调压力")
+            lines.append("- RSI > 70（超买区间）")
         elif rsi > 60:
-            lines.append("- 偏强区域 (60-70)：多头占优")
+            lines.append("- RSI 60-70（偏强区间）")
         elif rsi < 30:
-            lines.append("- **超卖区域** (<30)：可能出现技术反弹")
+            lines.append("- RSI < 30（超卖区间）")
         elif rsi < 40:
-            lines.append("- 偏弱区域 (30-40)：空头占优")
+            lines.append("- RSI 30-40（偏弱区间）")
         else:
-            lines.append("- 中性区域 (40-60)：多空均衡")
+            lines.append("- RSI 40-60（中性区间）")
         lines.append("")
 
     # ── KDJ (9, 3, 3) ──
@@ -599,14 +600,14 @@ def compute_technical_indicators(data: list) -> str:
             prev_k = k_values[-2]
             prev_d = d_values[-2]
             if prev_k <= prev_d and k_val > d_val:
-                lines.append("- **金叉信号**: K 上穿 D（看多）")
+                lines.append("- **KDJ 交叉**: K 上穿 D")
             elif prev_k >= prev_d and k_val < d_val:
-                lines.append("- **死叉信号**: K 下穿 D（看空）")
+                lines.append("- **KDJ 交叉**: K 下穿 D")
 
         if j_val > 100:
-            lines.append("- J 值超过 100，超买警告")
+            lines.append(f"- J 值 {j_val:.1f} > 100")
         elif j_val < 0:
-            lines.append("- J 值低于 0，超卖警告")
+            lines.append(f"- J 值 {j_val:.1f} < 0")
         lines.append("")
 
     # ── Bollinger Bands (20, 2) ──
@@ -629,60 +630,31 @@ def compute_technical_indicators(data: list) -> str:
         if band_width > 0:
             position = (last_close - lower) / band_width
             lines.append(f"- 价格位置: {position:.1%}（0%=下轨，100%=上轨）")
-            if position > 0.9:
-                lines.append("- **接近上轨**：短期超买，可能回调")
-            elif position < 0.1:
-                lines.append("- **接近下轨**：短期超卖，可能反弹")
-            elif position > 0.5:
-                lines.append("- 偏向上轨运行")
-            else:
-                lines.append("- 偏向下轨运行")
         lines.append("")
 
-    # ── Summary signal table ──
-    lines.append("### 综合信号汇总")
+    # ── Summary: factual overview only ──
+    lines.append("### 指标概览")
     lines.append("")
-    lines.append("| 指标 | 数值 | 信号方向 | 信号强度 |")
-    lines.append("|------|------|----------|----------|")
+    lines.append("| 指标 | 数值 | 状态 |")
+    lines.append("|------|------|------|")
 
-    signals = []
-
-    # SMA signal
     if sma_vals:
-        sma_dir = "看多" if all(last_close > v for v in sma_vals) else "看空" if all(last_close < v for v in sma_vals) else "中性"
-        sma_strength = "强" if sma_dir != "中性" else "弱"
-        signals.append(("SMA 排列", f"价={last_close:.2f}", sma_dir, sma_strength))
+        sma_pos = "在均线上方" if all(last_close > v for v in sma_vals) else "在均线下方" if all(last_close < v for v in sma_vals) else "与均线交织"
+        lines.append(f"| SMA 排列 | 价={last_close:.2f} | {sma_pos} |")
 
-    # MACD signal
     if dif_series and dea_series:
-        macd_dir = "看多" if dif > dea else "看空"
-        macd_str = "强" if abs(macd_hist) > abs(dif) * 0.3 else "中"
-        signals.append(("MACD", f"DIF={dif:.3f}", macd_dir, macd_str))
+        macd_state = f"DIF {'>' if dif > dea else '<'} DEA" if dif != dea else "DIF = DEA"
+        lines.append(f"| MACD | DIF={dif:.3f} | {macd_state}，柱={'+'if macd_hist>0 else ''}{macd_hist:.3f} |")
 
-    # RSI signal
     if rsi is not None:
-        rsi_dir = "看多" if rsi > 60 else "看空" if rsi < 40 else "中性"
-        rsi_str = "强" if rsi > 70 or rsi < 30 else "中"
-        signals.append(("RSI(14)", f"{rsi:.1f}", rsi_dir, rsi_str))
+        rsi_zone = ">70" if rsi > 70 else "60-70" if rsi > 60 else "<30" if rsi < 30 else "30-40" if rsi < 40 else "40-60"
+        lines.append(f"| RSI(14) | {rsi:.1f} | {rsi_zone} |")
 
-    # KDJ signal
     if k_val is not None:
-        kdj_dir = "看多" if k_val > d_val else "看空"
-        kdj_str = "强" if j_val > 100 or j_val < 0 else "中"
-        signals.append(("KDJ", f"K={k_val:.1f} D={d_val:.1f}", kdj_dir, kdj_str))
+        lines.append(f"| KDJ | K={k_val:.1f} D={d_val:.1f} J={j_val:.1f} | {'J>100' if j_val>100 else 'J<0' if j_val<0 else '正常'} |")
 
-    # Bollinger signal
     if boll_ma is not None and band_width > 0:
-        boll_dir = "看多" if position < 0.2 else "看空" if position > 0.8 else "中性"
-        boll_str = "强" if position < 0.1 or position > 0.9 else "中"
-        signals.append(("Bollinger", f"位={position:.0%}", boll_dir, boll_str))
-
-    for name, val, direction, strength in signals:
-        lines.append(f"| {name} | {val} | {direction} | {strength} |")
-
-    bull_count = sum(1 for s in signals if s[2] == "看多")
-    bear_count = sum(1 for s in signals if s[2] == "看空")
-    lines.append(f"\n**多头信号**: {bull_count} | **空头信号**: {bear_count} | **中性**: {len(signals) - bull_count - bear_count}")
+        lines.append(f"| Bollinger | 位={position:.0%} | {'近上轨' if position>0.9 else '近下轨' if position<0.1 else '中间'} |")
 
     return "\n".join(lines)
 
