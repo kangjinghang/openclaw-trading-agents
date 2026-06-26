@@ -175,7 +175,7 @@ const ANALYST_PROMPT_TEMPLATE = `# 角色
 {ticker} {name}（行业：{sector}）
 
 # 数据
-## K 线（5 日 +{pct_5d}% / 20 日 +{pct_20d}%，支撑 {support} / 压力 {resistance}）
+## K 线（5 日 +{pct_5d}% / 20 日 +{pct_20d}%，支撑 {support} / 压力 {resistance}，量比 {volume_ratio}）
 ## 新闻（最近 7 天 top，含时间与正文摘要）
 {news_density}{news_bullets}
 （注意时效：最近 1-2 天的突发新闻权重高于一周前的旧闻；标题党风险——标题与正文矛盾时以正文为准）
@@ -408,6 +408,7 @@ export function formatAnalystPrompt(d: StockData): string {
     .replace("{pct_20d}", d.kline.pct_20d.toFixed(2))
     .replace("{support}", d.kline.support.toFixed(2))
     .replace("{resistance}", d.kline.resistance.toFixed(2))
+    .replace("{volume_ratio}", d.kline.volume_ratio_5_20.toFixed(2))
     .replace("{news_density}", newsDensity)
     .replace("{news_bullets}", newsBullets)
     .replace("{hot_money_summary}", renderHotMoneySummary(d.hot_money))
