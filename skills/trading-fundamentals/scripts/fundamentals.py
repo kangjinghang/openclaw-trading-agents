@@ -6,6 +6,7 @@ import json
 import math
 import sys
 import os
+import requests
 
 # Add parent skills dir to path for shared imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
@@ -237,7 +238,7 @@ def fetch_fundamentals(ticker, date):
         if pe_ttm and growth and growth > 0:
             consensus["peg"] = round(pe_ttm / growth, 2)
 
-    # 7. Three-statement derived financial-health ratios (akshare sina).
+    # 7. Three-statement derived financial-health ratios (Sina HTTP API, inlined).
     #    Fills gaps the snapshot/quarterly don't cover: 商誉占比 (goodwill
     #    exposure), OCF/归母净利 (earnings quality), leverage & liquidity
     #    trend, capex/FCF. Pre-computed and lean (~4 periods × ~10 numbers)
@@ -247,19 +248,19 @@ def fetch_fundamentals(ticker, date):
     try:
         health = _fetch_financial_health(code)
         # success 标准是"拿到了数据"，不是"没抛异常"。
-        # _fetch_financial_health 在 akshare 缺失/拉取失败/无重叠报告期时返回 None，
-        # 老实现误报 success=True 掩盖了这些情况（_source-health.json 实证：
-        # akshare_internal 失败但外壳 akshare success=True）。
+        # _fetch_financial_health 在拉取失败/无重叠报告期时返回 None，
+        # 老实现误报 success=True 掩盖了这些情况。
+        # 各子源 (sina_fzb/sina_lrb/sina_llb) 已有独立 trace。
         data["financial_health"] = health
         record_call("fundamentals/akshare", success=health is not None,
-                    error=None if health else "no overlapping report periods or akshare unavailable",
+                    error=None if health else "no overlapping report periods or sina fetch failed",
                     duration_ms=(time.monotonic() - start) * 1000)
     except Exception as e:
         record_call("fundamentals/akshare", success=False, error=str(e),
                     duration_ms=(time.monotonic() - start) * 1000)
         data["financial_health_error"] = str(e)
 
-    # 8. PE/PB historical percentile (baidu valuation, akshare).
+    # 8. PE/PB historical percentile (baidu valuation HTTP API, inlined from akshare).
     #    当前 PE 在近 5 年序列的分位（0-100），治"PE=18 在化工合理/白酒偏低"的判断盲区——
     #    LLM 之前只看到 PE 绝对值无法判断贵贱。近 5 年裁剪避免远古失真（行业转型）。
     start = time.monotonic()
@@ -276,15 +277,16 @@ def fetch_fundamentals(ticker, date):
 
     # 9. Market sentiment extra: ARBR(26日) + turnover interpretation + fear/greed.
     #    Cross-validates market temperature alongside valuation. Sourced from
-    #    akshare (already imported for financials). Computed here (not in sentiment.py)
+    #    mootdx (TDX protocol) and tencent_quote. Computed here (not in sentiment.py)
     #    so fundamentals analyst can reference it for a more complete picture.
     start = time.monotonic()
     try:
-        mse = _fetch_market_sentiment_extra(code, date)
+        mse, turnover_http = _fetch_market_sentiment_extra(code, date)
         data["market_sentiment_extra"] = mse
         record_call("fundamentals/market_sentiment", success=mse is not None,
                     error=None if mse else "market sentiment unavailable",
-                    duration_ms=(time.monotonic() - start) * 1000)
+                    duration_ms=(time.monotonic() - start) * 1000,
+                    **(turnover_http or {}))
     except Exception as e:
         record_call("fundamentals/market_sentiment", success=False, error=str(e),
                     duration_ms=(time.monotonic() - start) * 1000)
@@ -460,8 +462,9 @@ def _fetch_consensus_eps(code):
 def _fetch_financial_health(code, periods=4):
     """Derive a lean financial-health ratio block from the three statements.
 
-    Fetches 资产负债表 / 现金流量表 / 利润表 via akshare (sina) and computes
-    pre-derived ratios over the last N common reporting periods:
+    Fetches 资产负债表 / 现金流量表 / 利润表 via Sina HTTP API (inlined from
+    akshare) and computes pre-derived ratios over the last N common reporting
+    periods:
 
       - goodwill_yi / goodwill_to_equity_pct   (商誉占比 — impairment exposure)
       - debt_ratio_pct                          (资产负债率 trend)
@@ -469,17 +472,10 @@ def _fetch_financial_health(code, periods=4):
       - ocf_yi / capex_yi / fcf_yi              (现金流与资本开支)
       - net_profit_parent_yi / ocf_to_ni_ratio  (归母净利 + 盈利质量)
 
-    Returns None on structural failure (akshare missing / fetch error / no
-    overlapping periods); per-field gaps degrade to null. Note: sina 利润表
-    does not expose 扣非净利润 (reported only in the notes), so 扣非 is not
-    derivable here.
+    Returns None on structural failure (fetch error / no overlapping periods);
+    per-field gaps degrade to null. Note: sina 利润表 does not expose 扣非净利
+    (reported only in the notes), so 扣非 is not derivable here.
     """
-    try:
-        import akshare as ak
-    except Exception as e:
-        record_call("fundamentals/akshare_internal", success=False, error=str(e))
-        return None
-
     # Exchange prefix: 6/9→sh, 8→bj, else sz (mirrors http_helpers tencent logic)
     prefix = "bj" if code.startswith("8") else ("sh" if code.startswith(("6", "9")) else "sz")
     sym = f"{prefix}{code}"
@@ -490,38 +486,52 @@ def _fetch_financial_health(code, periods=4):
                "购建固定资产、无形资产和其他长期资产所支付的现金"]
     IS_COLS = ["报告日", "归属于母公司所有者的净利润"]
 
+    _SINA_URL = "https://quotes.sina.cn/cn/api/openapi.php/CompanyFinanceService.getFinanceReport2022"
+    _STMT_MAP = {"资产负债表": "fzb", "利润表": "lrb", "现金流量表": "llb"}
+
     def load(statement, want):
         """Return {报告日(YYYYMMDD): {col: float|None}} for present columns."""
-        df = None
-        for attempt in range(2):  # retry once on transient failure
-            try:
-                df = ak.stock_financial_report_sina(stock=sym, symbol=statement)
-                break
-            except Exception:
-                if attempt == 0:
-                    import time; time.sleep(0.5)
-                else:
-                    return {}
-        if df is None or getattr(df, "empty", True):
+        label = f"fundamentals/sina_{_STMT_MAP[statement]}"
+        params = {"paperCode": sym, "source": _STMT_MAP[statement],
+                  "type": "0", "page": "1", "num": "1000"}
+        start = time.monotonic()
+        try:
+            r = requests.get(_SINA_URL, params=params, timeout=15)
+            data_json = r.json()
+            record_call(label, success=True,
+                        duration_ms=(time.monotonic() - start) * 1000,
+                        url=_SINA_URL, status_code=r.status_code,
+                        response_size=len(r.content),
+                        response_snippet=r.text[:200])
+        except Exception as e:
+            record_call(label, success=False, error=str(e),
+                        duration_ms=(time.monotonic() - start) * 1000,
+                        url=_SINA_URL)
             return {}
-        # Defend against duplicate column labels (sina occasionally repeats).
-        df = df.loc[:, ~df.columns.duplicated()]
-        if "报告日" not in df.columns:
+
+        # Parse JSON into {报告日(YYYYMMDD): {col: val}} directly (no DataFrame).
+        report_dates = [item["date_value"] for item in
+                        data_json.get("result", {}).get("data", {}).get("report_date", [])]
+        report_list = data_json.get("result", {}).get("data", {}).get("report_list", {})
+        if not report_dates or not report_list:
             return {}
+
         out = {}
-        for _, row in df.iterrows():
-            d = str(row["报告日"]).strip()[:8]
+        for date_str in report_dates:
+            report = report_list.get(date_str, {})
+            items = report.get("data", [])
+            # Build {item_title: item_value} for this report period.
+            row_data = {item.get("item_title"): item.get("item_value") for item in items}
+            d = date_str.strip()[:8]
             if not (d.isdigit() and len(d) == 8):
                 continue
             rec = {}
-            for c in want[1:]:  # skip 报告日
-                if c not in df.columns:
+            for c in want[1:]:  # skip 報告日
+                raw = row_data.get(c)
+                if raw is None:
                     continue
-                v = row[c]
                 try:
-                    fv = float(v)
-                    # Coerce NaN/inf (pandas missing → NaN) to None so the
-                    # emitted JSON stays valid (json.dumps emits bare NaN).
+                    fv = float(raw)
                     rec[c] = fv if math.isfinite(fv) else None
                 except (TypeError, ValueError):
                     rec[c] = None
@@ -550,39 +560,58 @@ def _percentile_of_latest(values):
 
 
 def _fetch_valuation_percentile(code, window_years=5):
-    """Fetch PE(TTM)/PB historical percentile via akshare baidu valuation.
+    """Fetch PE(TTM)/PB historical percentile via Baidu valuation HTTP API
+    (inlined from akshare).
 
-    Source: ak.stock_zh_valuation_baidu(symbol=纯6位, indicator, period="近十年")
-    → DataFrame[date, value]，10 年日线序列（~731 行）。裁剪到最近 5 年后算
-    当前值的百分位。治"PE 绝对值无法判断贵贱"的盲区。
+    Source: https://gushitong.baidu.com/opendata → 10-year daily series (~731
+    rows). Trimmed to recent N years, then current value's percentile computed.
+   治"PE 绝对值无法判断贵贱"的盲区。
 
-    Returns None on structural failure (akshare missing / fetch error / series
-    too short for a meaningful percentile). Both indicators fail → None.
+    Returns None on structural failure (fetch error / series too short for a
+    meaningful percentile). Both indicators fail → None.
     """
-    try:
-        import akshare as ak
-    except Exception as e:
-        record_call("fundamentals/akshare_baidu", success=False, error=str(e))
-        return None
-
     result = {}
     for indicator, key in (("市盈率(TTM)", "pe_percentile"), ("市净率", "pb_percentile")):
+        label = f"fundamentals/baidu_{key}"
+        url = "https://gushitong.baidu.com/opendata"
+        params = {
+            "openapi": "1", "dspName": "iphone", "tn": "tangram", "client": "app",
+            "query": indicator, "code": code, "word": "", "resource_id": "51171",
+            "market": "ab", "tag": indicator, "chart_select": "近十年",
+            "industry_select": "", "skip_industry": "1", "finClientType": "pc",
+        }
+        start = time.monotonic()
         try:
-            df = ak.stock_zh_valuation_baidu(symbol=code, indicator=indicator, period="近十年")
-            if df is None or len(df) == 0:
+            r = requests.get(url, params=params, timeout=15)
+            data_json = r.json()
+            record_call(label, success=True,
+                        duration_ms=(time.monotonic() - start) * 1000,
+                        url=url, status_code=r.status_code,
+                        response_size=len(r.content),
+                        response_snippet=r.text[:200])
+            body = (data_json["Result"][0]["DisplayData"]["resultData"]
+                    ["tplData"]["result"]["chartInfo"][0]["body"])
+            if not body:
                 continue
-            # 裁剪到最近 window_years 年（按 date 列过滤）
-            # date 可能是 datetime.date 对象或 'YYYY-MM-DD' 字符串，统一转 str 比较
-            if "date" in df.columns:
-                last_date = str(df['date'].iloc[-1])
-                cutoff = f"{int(last_date[:4]) - window_years}-01-01"
-                df = df[df["date"].astype(str) >= cutoff]
-            values = df["value"].tolist() if "value" in df.columns else []
-            pct = _percentile_of_latest(values)
+            # Parse [date, value] pairs, trim to window_years, compute percentile.
+            cutoff_year = int(str(body[-1][0])[:4]) - window_years
+            values = []
+            for row in body:
+                date_str, val = str(row[0]), row[1]
+                if int(date_str[:4]) >= cutoff_year:
+                    try:
+                        v = float(val)
+                        if v > 0:
+                            values.append(v)
+                    except (TypeError, ValueError):
+                        pass
+            pct = _percentile_of_latest(values) if len(values) >= 30 else None
             if pct is not None:
                 result[key] = pct
-        except Exception:
-            # 单指标失败不影响另一个（PE/PB 独立），整体都失败则 result 为空
+        except Exception as e:
+            record_call(label, success=False, error=str(e),
+                        duration_ms=(time.monotonic() - start) * 1000,
+                        url=url)
             continue
 
     return result if result else None
@@ -737,8 +766,10 @@ def _fetch_market_sentiment_extra(code, date):
     # 注意：tencent_quote 返回 (dict, http_stats) 元组，必须解包两个值。
     # 老实现 `tq = tencent_quote([code])` 漏解包 → tq 是元组 → `code in tq` 恒 false → 换手率恒缺失
     valuation = None
+    turnover_http = None
     try:
-        tq, _ = tencent_quote([code])
+        tq, t_http = tencent_quote([code])
+        turnover_http = t_http
         if code in tq:
             valuation = tq[code]
     except Exception:
@@ -761,7 +792,7 @@ def _fetch_market_sentiment_extra(code, date):
             "label": turnover_label,
         }
 
-    return result if result else None
+    return (result if result else None), turnover_http
 
 
 def main():
@@ -775,7 +806,7 @@ def main():
         if data is None:
             output_json(False, error="fetch_fundamentals returned no data")
         else:
-            output_json(True, data=data, source="tencent+mootdx+eastmoney+akshare+pywencai")
+            output_json(True, data=data, source="tencent+mootdx+eastmoney+sina+pywencai")
     except Exception as e:
         output_json(False, error=str(e))
 

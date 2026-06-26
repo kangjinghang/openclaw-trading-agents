@@ -357,7 +357,8 @@ def _fetch_commodities():
             bars = json.loads(m.group(1))
             if not bars:
                 record_call(f"news/commodity_{symbol}", success=False,
-                            error="empty kline", duration_ms=(time.monotonic() - start) * 1000, url=url)
+                            error="empty kline", duration_ms=(time.monotonic() - start) * 1000, url=url,
+                            status_code=r.status_code, response_size=len(r.content))
                 continue
             closes = [float(b["c"]) for b in bars if b.get("c")]
             chg_5d = _price_change_pct(closes, 5)
@@ -385,7 +386,9 @@ def _fetch_commodities():
                         status_code=r.status_code, response_size=len(r.content))
         except Exception as e:
             record_call(f"news/commodity_{symbol}", success=False, error=str(e),
-                        duration_ms=(time.monotonic() - start) * 1000, url=url)
+                        duration_ms=(time.monotonic() - start) * 1000, url=url,
+                        status_code=getattr(r, 'status_code', None),
+                        response_size=len(r.content) if hasattr(r, 'content') else None)
     return result
 
 

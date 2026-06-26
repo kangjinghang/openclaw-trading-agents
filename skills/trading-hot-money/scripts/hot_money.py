@@ -261,7 +261,12 @@ def _fetch_sector_fund_flow(top_n=8):
 
     同花顺 净额 单位是「亿」(与东财 f62/1e8 对齐)，无超大单净额
     (super_net_yi 置 0；下游只用 name + main_net_yi)。
+
+    Note: akshare uses py_mini_racer (JS runtime) for anti-bot hexin-v header
+    + BeautifulSoup HTML parsing — not feasible to inline. Trace records the
+    request URL and DataFrame row count as response_size proxy.
     """
+    _URL = "http://data.10jqka.com.cn/funds/hyzjl/field/tradezdf/order/desc/ajax/1/free/1/"
     start = time.monotonic()
     try:
         import akshare as ak
@@ -275,16 +280,19 @@ def _fetch_sector_fund_flow(top_n=8):
             }
             for _, row in df.iterrows()
         ]
+        record_call("hot_money/sector_fund_flow", success=True,
+                    duration_ms=(time.monotonic() - start) * 1000,
+                    url=_URL, response_size=len(df))
     except Exception as e:
         record_call("hot_money/sector_fund_flow", success=False, error=str(e),
                     duration_ms=(time.monotonic() - start) * 1000,
-                    url="akshare:stock_fund_flow_industry(10jqka)")
+                    url=_URL)
         return None
 
     if not boards:
         record_call("hot_money/sector_fund_flow", success=False, error="No items returned",
                     duration_ms=(time.monotonic() - start) * 1000,
-                    url="akshare:stock_fund_flow_industry(10jqka)")
+                    url=_URL)
         return None
 
     boards_sorted = sorted(boards, key=lambda x: x["main_net_yi"], reverse=True)
@@ -293,8 +301,6 @@ def _fetch_sector_fund_flow(top_n=8):
         "outflow_top": list(reversed(boards_sorted[-top_n:])),
         "total_boards": len(boards_sorted),
     }
-    record_call("hot_money/sector_fund_flow", success=True, duration_ms=(time.monotonic() - start) * 1000,
-                url="akshare:stock_fund_flow_industry(10jqka)", response_size=len(df))
     return result
 
 

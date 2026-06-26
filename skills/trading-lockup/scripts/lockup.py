@@ -168,24 +168,27 @@ def _fetch_announcements(code, date, lookback_days=60):
 
 
 def _fetch_reduce_em(code, date=None):
-    """Fetch Eastmoney reduce holdings information."""
+    """Fetch Eastmoney reduce holdings information.
+
+    Uses RPT_SHARE_HOLDER_INCREASE (2025-06 update, replaces deprecated
+    RPT_REDUCED_HOLDINGS which returns code 9501).
+    """
     start = time.monotonic()
-    filter_date = date or datetime.now().strftime("%Y-%m-%d")
     try:
         data, http = eastmoney_datacenter(
-            "RPT_REDUCED_HOLDINGS",
-            filter_str=f'(SECURITY_CODE="{code}")(REDUCE_DATE>={filter_date})',
+            "RPT_SHARE_HOLDER_INCREASE",
+            filter_str=f'(SECURITY_CODE="{code}")(DIRECTION="减持")',
             page_size=10,
-            sort_columns="REDUCE_DATE",
+            sort_columns="END_DATE",
             sort_types="-1",
         )
         result = [
             {
-                "date": str(row.get("REDUCE_DATE", ""))[:10],
-                "reducing_shareholder": row.get("REDUCING_SHAREHOLDER", ""),
-                "reducing_shares": row.get("REDUCING_SHARES", ""),
-                "reducing_ratio": row.get("REDUCING_RATIO", ""),
-                "reduce_reason": row.get("REDUCE_REASON", ""),
+                "date": str(row.get("END_DATE", ""))[:10],
+                "reducing_shareholder": row.get("HOLDER_NAME", ""),
+                "reducing_shares": row.get("HOLDNUM_CHANGE", ""),
+                "reducing_ratio": row.get("HOLDNUM_CHANGE_RATIO", ""),
+                "reduce_reason": row.get("CHANGE_REASON", ""),
             }
             for row in data
         ]
