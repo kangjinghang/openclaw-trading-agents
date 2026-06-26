@@ -21,8 +21,18 @@ export const MODEL_COSTS: Record<string, { input: number; output: number }> = {
   "claude-opus-4-8": { input: 15, output: 75 },
   // ZhiPu GLM — official promo tier (¥2 / ¥8 per M tokens, [0,32K) input)
   "glm-4.7": { input: 2 / 7.2, output: 8 / 7.2 },
-  // flash is free at the basic tier; nominal fallback (~1/5 of paid flash rate)
   "glm-4.7-flash": { input: 0.06, output: 0.22 },
+  // GLM-5 系列 — 同 ¥2/¥8 定价（coding 端点）
+  "glm-5-turbo": { input: 2 / 7.2, output: 8 / 7.2 },
+  "glm-5": { input: 2 / 7.2, output: 8 / 7.2 },
+  "glm-5.2": { input: 2 / 7.2, output: 8 / 7.2 },
+  // 旧模型兼容
+  "glm-4.7-flashx": { input: 0.06, output: 0.22 },
+  "glm-4.6": { input: 2 / 7.2, output: 8 / 7.2 },
+  "glm-4.5-air": { input: 0.06, output: 0.22 },
+  "glm-4.5-airx": { input: 0.06, output: 0.22 },
+  "glm-4.5-flash": { input: 0.06, output: 0.22 },
+  "glm-4-flash": { input: 0.06, output: 0.22 },
 };
 
 export interface LLMCallOptions {
