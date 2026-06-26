@@ -143,7 +143,7 @@ describe("formatRiskPrompt", () => {
     expect(p).toContain("VPA");
   });
 
-  it("无 vpa_text → 标注（无 VPA 数据），不报错", () => {
+  it("无 vpa_text → 整块省略（不留空标题占注意力），不报错", () => {
     const data: any = {
       ticker: "SZ300319", name: "麦捷科技", sector: "电子",
       kline: { pct_5d: 12, pct_20d: 45, support: 25, resistance: 30, volume_ratio_5_20: 0.6 },
@@ -154,7 +154,8 @@ describe("formatRiskPrompt", () => {
       thesis: "x", fitness_score: 8, data_freshness: "2026-06-21", key_signals: [], data_gaps: [],
     };
     const p = formatRiskPrompt(data, analyst);
-    expect(p).toContain("无 VPA 数据");
+    expect(p).not.toContain("量价预计算指标");  // VPA 数据块整块省略（规则说明里的"VPA"字样不算）
+    expect(p).not.toContain("## MACD");          // MACD 块也省略（无数据）
   });
 
   it("注入基本面数据（PE/净利）—— risk-role 独立看数据做风险判断", () => {

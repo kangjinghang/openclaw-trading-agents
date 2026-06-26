@@ -184,9 +184,7 @@ const ANALYST_PROMPT_TEMPLATE = `# 角色
 ## 基本面（PE {pe}{pe_label} / PB {pb}{pb_label} / Q1 营收 {rev_q1} / Q1 净利 {np_q1}）
 ## 季度业绩趋势（近 4 季度营收/净利/ROE + 同比，判断业绩连续性）
 {quarterly_trends}
-## 机构一致预期（卖方覆盖数 / EPS 预期 / 目标价 / 评级）
 {consensus_eps}
-## 同花顺能力评分（8维度，0-10分，仅作参考）
 {capability_scores}
 {ranker_section}
 
@@ -441,10 +439,16 @@ export function formatAnalystPrompt(d: StockData): string {
     .replace("{pb_label}", renderPercentileLabel(d.fundamentals.pb_percentile))
     .replace("{rev_q1}", d.fundamentals.rev_q1 > 0 ? `${(d.fundamentals.rev_q1 / 1e8).toFixed(2)}亿` : String(d.fundamentals.rev_q1))
     .replace("{np_q1}", d.fundamentals.np_q1 > 0 ? `${(d.fundamentals.np_q1 / 1e8).toFixed(2)}亿` : String(d.fundamentals.np_q1))
-    // 季度趋势/机构预期：render 返回空串 → 整段标题下内容空白，LLM 理解为"无此数据"。
+    // 季度趋势：恒定标题（始终有意义）；机构预期/能力评分：有数据才拼标题，无数据 → 空串省略整块（不留空标题占注意力）
     .replace("{quarterly_trends}", renderQuarterlyTrends(d.fundamentals.quarterly_trends) || "(无季度趋势数据)")
-    .replace("{consensus_eps}", renderConsensus(d.fundamentals.consensus_eps) || "(无机构覆盖)")
-    .replace("{capability_scores}", renderCapabilityScores(d.fundamentals.capability_scores) || "(无评分数据)")
+    .replace("{consensus_eps}", (() => {
+      const r = renderConsensus(d.fundamentals.consensus_eps);
+      return r ? `## 机构一致预期（卖方覆盖数 / EPS 预期 / 目标价 / 评级）\n${r}` : "";
+    })())
+    .replace("{capability_scores}", (() => {
+      const r = renderCapabilityScores(d.fundamentals.capability_scores);
+      return r ? `## 同花顺能力评分（8维度，0-10分，仅作参考）\n${r}` : "";
+    })())
     .replace("{ranker_section}", rankerSection);
 }
 
@@ -510,18 +514,17 @@ const RISK_PROMPT_TEMPLATE = `# 角色
 {ticker} {name}（行业：{sector}）
 
 # 数据
-## K 线（5 日 +{pct_5d}% / 20 日 +{pct_20d}%，量比 {volume_ratio_5_20}）
+## K 线（5 日 +{pct_5d}% / 20 日 +{pct_20d}%，支撑 {support} / 压力 {resistance}，量比 {volume_ratio_5_20}）
 - 量比 < 0.8 = 缩量；> 1.2 = 放量；0.8-1.2 = 正常
+- 跌破支撑 / 突破压力 = 技术破位/突破信号，应输出 risk_flag
 ## 资金流向
 {hot_money_summary}
 ## 基本面（PE {pe}{pe_label} / PB {pb}{pb_label} / Q1 营收 {rev_q1} / Q1 净利 {np_q1}）
 ## 季度业绩趋势（营收/净利同比连续下滑 = 业绩拐点风险，应输出 risk_flag）
 {quarterly_trends}
 
-## VPA 量价预计算
 {vpa_text}
 
-## MACD 动量信号
 {macd_text}
 
 ## 解禁与减持（未来 90 天解禁 + 近期减持；未来大额解禁或减持 = 供给压力）
@@ -548,6 +551,8 @@ export function formatRiskPrompt(d: StockData, analyst: AnalystReport): string {
     .replace("{sector}", d.sector)
     .replace("{pct_5d}", d.kline.pct_5d.toFixed(2))
     .replace("{pct_20d}", d.kline.pct_20d.toFixed(2))
+    .replace("{support}", d.kline.support.toFixed(2))
+    .replace("{resistance}", d.kline.resistance.toFixed(2))
     .replace("{volume_ratio_5_20}", d.kline.volume_ratio_5_20.toFixed(2))
     .replace("{hot_money_summary}", renderHotMoneySummary(d.hot_money))
     .replace("{pe}", renderPe(d.fundamentals.pe))
@@ -557,8 +562,10 @@ export function formatRiskPrompt(d: StockData, analyst: AnalystReport): string {
     .replace("{rev_q1}", d.fundamentals.rev_q1 > 0 ? `${(d.fundamentals.rev_q1 / 1e8).toFixed(2)}亿` : String(d.fundamentals.rev_q1))
     .replace("{np_q1}", d.fundamentals.np_q1 > 0 ? `${(d.fundamentals.np_q1 / 1e8).toFixed(2)}亿` : String(d.fundamentals.np_q1))
     .replace("{quarterly_trends}", renderQuarterlyTrends(d.fundamentals.quarterly_trends) || "(无季度趋势数据)")
-    .replace("{vpa_text}", d.vpa_text || "(无 VPA 数据)")
-    .replace("{macd_text}", renderMacd(d.macd) || "(无 MACD 数据)")
+    // vpa_text 自带标题（## VPA 量价预计算指标），缺数据 → 空串省略整块（不留空标题）
+    .replace("{vpa_text}", d.vpa_text || "")
+    // MACD：有数据才拼标题，无数据 → 空串省略整块
+    .replace("{macd_text}", d.macd ? `## MACD 动量信号\n${renderMacd(d.macd)}` : "")
     .replace("{lockup_summary}", d.lockup ? renderLockup(d.lockup) : "(无解禁数据)")
     .replace("{analyst_thesis}", `${analyst.thesis}（fitness ${analyst.fitness_score}）`);
 }
