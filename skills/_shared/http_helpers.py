@@ -53,7 +53,7 @@ def record_call(stage, success, error=None, duration_ms=None,
         if response_size is not None:
             entry["response_size"] = int(response_size)
         if response_snippet is not None:
-            entry["response_snippet"] = str(response_snippet)
+            entry["response_snippet"] = str(response_snippet)[:2000]
         _CALLS.append(entry)
     except Exception:
         pass  # never crash the script over a stats record
@@ -179,7 +179,7 @@ def eastmoney_datacenter(report_name, columns="ALL", filter_str="",
     }
     r = em_get(url, params=params, timeout=15)
     http = {"url": url, "status_code": r.status_code,
-            "response_size": len(r.content), "response_snippet": r.text[:200]}
+            "response_size": len(r.content), "response_snippet": r.text[:2000]}
     d = r.json()
     if d.get("result") and d["result"].get("data"):
         return d["result"]["data"], http

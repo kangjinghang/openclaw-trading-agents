@@ -335,7 +335,7 @@ def _fetch_quarterly_financials(code):
     }
     r = em_get(url, params=params, timeout=15)
     http = {"url": url, "status_code": r.status_code,
-            "response_size": len(r.content), "response_snippet": r.text[:200]}
+            "response_size": len(r.content), "response_snippet": r.text[:2000]}
     d = r.json()
 
     results = []
@@ -398,7 +398,7 @@ def _fetch_consensus_eps(code):
     }
     r = em_get(url, params=params, timeout=15)
     http = {"url": url, "status_code": r.status_code,
-            "response_size": len(r.content), "response_snippet": r.text[:200]}
+            "response_size": len(r.content), "response_snippet": r.text[:2000]}
     j = r.json()
 
     # Defensive: Eastmoney returns "result": null both on failure and when the
@@ -502,7 +502,7 @@ def _fetch_financial_health(code, periods=4):
                         duration_ms=(time.monotonic() - start) * 1000,
                         url=_SINA_URL, status_code=r.status_code,
                         response_size=len(r.content),
-                        response_snippet=r.text[:200])
+                        response_snippet=r.text[:2000])
         except Exception as e:
             record_call(label, success=False, error=str(e),
                         duration_ms=(time.monotonic() - start) * 1000,
@@ -588,7 +588,7 @@ def _fetch_valuation_percentile(code, window_years=5):
                         duration_ms=(time.monotonic() - start) * 1000,
                         url=url, status_code=r.status_code,
                         response_size=len(r.content),
-                        response_snippet=r.text[:200])
+                        response_snippet=r.text[:2000])
             body = (data_json["Result"][0]["DisplayData"]["resultData"]
                     ["tplData"]["result"]["chartInfo"][0]["body"])
             if not body:

@@ -352,7 +352,7 @@ def _fetch_commodities():
                 record_call(f"news/commodity_{symbol}", success=False,
                             error="jsonp parse failed",
                             duration_ms=(time.monotonic() - start) * 1000, url=url,
-                            status_code=r.status_code, response_snippet=r.text[:200])
+                            status_code=r.status_code, response_snippet=r.text[:2000])
                 continue
             bars = json.loads(m.group(1))
             if not bars:

@@ -107,7 +107,7 @@ def _fetch_hot_rank(date):
         }
         r = em_get(url, params=params, timeout=10)
         _http = dict(url=str(r.url)[:200], status_code=r.status_code,
-                     response_size=len(r.content), response_snippet=r.text[:200])
+                     response_size=len(r.content), response_snippet=r.text[:2000])
         d = r.json()
         items = d.get("data", {}).get("diff", [])
         result = [
