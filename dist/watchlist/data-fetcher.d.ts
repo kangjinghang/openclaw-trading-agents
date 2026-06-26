@@ -116,7 +116,9 @@ export declare function fetchAllStockData(metas: Array<{
     name: string;
     sector: string;
     ranker_thesis?: string;
-}>, concurrency?: number): Promise<{
+}>, concurrency?: number, options?: {
+    date?: string;
+}): Promise<{
     dataByTicker: Map<string, StockData>;
     globalCalls: SourceCall[];
 }>;

@@ -560,9 +560,12 @@ async function fetchGlobalHotMoneyData(date) {
 }
 /** 跨股并行 fetch（concurrency=5）。失败的股跳过。
  *  返回 dataByTicker + globalCalls（全局 hot_money 源的调用记录，供 data-health 聚合）。 */
-async function fetchAllStockData(metas, concurrency = 5) {
-    // 用北京时间（UTC+8）避免北京 0-8 点日期早一天
-    const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+async function fetchAllStockData(metas, concurrency = 5, options) {
+    // 分析基准日：优先用调用方传入的 date（rebalance 的 scan_date），保证 K线/基本面/
+    // 解禁/新闻/news_layers 全 pipeline 参考日一致。未传时 fallback 到北京时间运行时刻。
+    // 历史问题：rebalance 跑在 06-26 夜里，今天=06-27，但 scan_date=06-25 → 新闻 6h/24h
+    // 分层锚在 06-27、lookback 锚在 06-27，与 K线/解禁的 06-25 不一致。
+    const today = options?.date ?? new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
     // 一次性拉取全局 hot_money 数据（northbound / sector_fund_flow / hot_stocks），
     // 之后每股调用 hot_money.py 时通过 stdin 注入，避免每股重复拉全市场数据（N→1）。
     const { globalHotMoney, calls: globalCalls } = await fetchGlobalHotMoneyData(today);

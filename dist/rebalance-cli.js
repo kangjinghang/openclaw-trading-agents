@@ -184,7 +184,7 @@ Options:
     const seen = new Set();
     const dedupMetas = metasForFetch.filter(m => seen.has(m.ticker) ? false : (seen.add(m.ticker), true));
     console.log(`  拉数据: ${dedupMetas.length} 只股 × 4 scripts（并行 5）`);
-    const { dataByTicker, globalCalls } = await (0, data_fetcher_1.fetchAllStockData)(dedupMetas, 5);
+    const { dataByTicker, globalCalls } = await (0, data_fetcher_1.fetchAllStockData)(dedupMetas, 5, { date });
     console.log(`  数据就绪: ${dataByTicker.size}/${dedupMetas.length} 只`);
     // 宏观环境（全市场信号，一次性抓取，注入 rebalancer 组合决策层）。
     // 宏观与 ticker 无关，抓 1 次即可（不是每股抓 1 次），失败 graceful degrade。

@@ -654,8 +654,9 @@ function traceHotMoney(d, idPrefix = "") {
     h += `<p class="muted">脚本: skills/trading-hot-money/scripts/hot_money.py &nbsp;|&nbsp; 3 个全局子源并行</p>`;
     const rYi = (v) => v !== 0 ? `${(v / 1e8).toFixed(2)}亿` : "0";
     h += summaryTableHtml("parseHotMoney() 处理后", [
-        ["northbound_yi", signedVal(d.hot_money.northbound_yi, 2, "亿")],
-        ["northbound_signal", northboundTag(d.hot_money.northbound_signal)],
+        // 北向资金是全市场信号（每股相同），标注避免误读为个股指标；已从 LLM prompt 移除
+        ["northbound_yi（全市场）", signedVal(d.hot_money.northbound_yi, 2, "亿")],
+        ["northbound_signal（全市场）", northboundTag(d.hot_money.northbound_signal)],
         ["dragon_tiger_recent", d.hot_money.dragon_tiger_recent ?? `<span class="field-missing">缺失</span>`],
         ["dragon_tiger_reason", d.hot_money.dragon_tiger_reason ?? `<span class="field-missing">缺失</span>`],
         ["sector_in_industry_tag", sectorTag(d.hot_money.sector_in_industry_tag ?? "")],
@@ -765,8 +766,11 @@ function traceDecisionChain(stockReport, action, positionTrace) {
             ["reason", action.reason],
         ]);
     }
+    else if (stockReport.is_held) {
+        h += `<p class="muted">持仓中，rebalancer 未发出调仓指令（HOLD）</p>`;
+    }
     else {
-        h += `<p class="muted">无对应 action</p>`;
+        h += `<p class="muted">候选股（未持仓），fitness ${stockReport.fitness_score} / risk ${stockReport.overall_risk}，未达建仓阈值</p>`;
     }
     if (positionTrace) {
         h += `<h4>仓位计算溯源</h4>`;
