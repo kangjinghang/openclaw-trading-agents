@@ -6,6 +6,7 @@ exports.renderConsensus = renderConsensus;
 exports.renderLockup = renderLockup;
 exports.renderMacd = renderMacd;
 exports.renderPercentileLabel = renderPercentileLabel;
+exports.renderPe = renderPe;
 exports.formatAnalystPrompt = formatAnalystPrompt;
 exports.parseAnalystReport = parseAnalystReport;
 exports.formatRiskPrompt = formatRiskPrompt;
@@ -255,6 +256,22 @@ function renderPercentileLabel(percentile) {
     }
     return `[近5年${percentile}%分位]`;
 }
+/** 渲染 PE 值为 prompt 友好的文本，归一化无意义的负值/零值。
+ *
+ *  亏损股 PE = 市值/负净利 < 0，数学上无意义，投资语义 = "亏损"。
+ *  裸注入 `-3033.67` 会让 LLM 误判为"天价 PE → 估值严重偏高"（实测误判）。
+ *  归一化规则：
+ *  - 负值（净利为负/亏损）→ "N/A（亏损）"，让 LLM 识别为亏损而非高估值
+ *  - 0（未拉取到/字段缺失）→ "N/A"
+ *  - 正常正值 → 保留 2 位小数
+ *  注意：fundamentals.pe 保留原始数值不变，此函数只影响 prompt 文本呈现。 */
+function renderPe(pe) {
+    if (typeof pe !== "number" || !Number.isFinite(pe) || pe === 0)
+        return "N/A";
+    if (pe < 0)
+        return "N/A（亏损）";
+    return pe.toFixed(2);
+}
 function formatAnalystPrompt(d) {
     const newsBullets = d.news.map(n => {
         const time = n.time ? `[${n.time}] ` : "";
@@ -281,8 +298,9 @@ function formatAnalystPrompt(d) {
         .replace("{news_density}", newsDensity)
         .replace("{news_bullets}", newsBullets)
         .replace("{hot_money_summary}", renderHotMoneySummary(d.hot_money))
-        .replace("{pe}", String(d.fundamentals.pe))
-        .replace("{pe_label}", renderPercentileLabel(d.fundamentals.pe_percentile))
+        .replace("{pe}", renderPe(d.fundamentals.pe))
+        // 亏损股（PE<0）无分位意义，省略标注；正常股才显示历史分位
+        .replace("{pe_label}", d.fundamentals.pe < 0 ? "" : renderPercentileLabel(d.fundamentals.pe_percentile))
         .replace("{pb}", String(d.fundamentals.pb))
         .replace("{pb_label}", renderPercentileLabel(d.fundamentals.pb_percentile))
         .replace("{rev_q1}", d.fundamentals.rev_q1 > 0 ? `${(d.fundamentals.rev_q1 / 1e8).toFixed(2)}亿` : String(d.fundamentals.rev_q1))
@@ -421,8 +439,8 @@ function formatRiskPrompt(d, analyst) {
         .replace("{pct_20d}", d.kline.pct_20d.toFixed(2))
         .replace("{volume_ratio_5_20}", d.kline.volume_ratio_5_20.toFixed(2))
         .replace("{hot_money_summary}", renderHotMoneySummary(d.hot_money))
-        .replace("{pe}", String(d.fundamentals.pe))
-        .replace("{pe_label}", renderPercentileLabel(d.fundamentals.pe_percentile))
+        .replace("{pe}", renderPe(d.fundamentals.pe))
+        .replace("{pe_label}", d.fundamentals.pe < 0 ? "" : renderPercentileLabel(d.fundamentals.pe_percentile))
         .replace("{pb}", String(d.fundamentals.pb))
         .replace("{pb_label}", renderPercentileLabel(d.fundamentals.pb_percentile))
         .replace("{rev_q1}", d.fundamentals.rev_q1 > 0 ? `${(d.fundamentals.rev_q1 / 1e8).toFixed(2)}亿` : String(d.fundamentals.rev_q1))

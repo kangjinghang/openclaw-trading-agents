@@ -632,7 +632,8 @@ function traceFundamentals(d) {
     const rYi = (v) => v > 0 ? `${(v / 1e8).toFixed(2)}亿` : String(v);
     const industry = d.fundamentals.industry;
     h += summaryTableHtml("parseFundamentals() 处理后", [
-        ["pe", String(d.fundamentals.pe)],
+        // PE<0（亏损股）标注语义，避免误读为高估值；保留原始数值供调试
+        ["pe", `${d.fundamentals.pe}${d.fundamentals.pe < 0 ? ` <span class="field-missing">(亏损，prompt 归一化为 N/A)</span>` : ""}`],
         ["pb", String(d.fundamentals.pb)],
         ["rev_q1", rYi(d.fundamentals.rev_q1)],
         ["np_q1", rYi(d.fundamentals.np_q1)],
@@ -651,7 +652,7 @@ function traceFundamentals(d) {
     h += `<h4>注入 prompt</h4>`;
     const revQ1 = d.fundamentals.rev_q1 > 0 ? `${(d.fundamentals.rev_q1 / 1e8).toFixed(2)}亿` : String(d.fundamentals.rev_q1);
     const npQ1 = d.fundamentals.np_q1 > 0 ? `${(d.fundamentals.np_q1 / 1e8).toFixed(2)}亿` : String(d.fundamentals.np_q1);
-    const pe = Number.isFinite(d.fundamentals.pe) ? d.fundamentals.pe.toFixed(2) : String(d.fundamentals.pe);
+    const pe = (0, shallow_analyzer_1.renderPe)(d.fundamentals.pe); // 与实际注入 prompt 一致（亏损股归一化为 N/A）
     const pb = Number.isFinite(d.fundamentals.pb) ? d.fundamentals.pb.toFixed(2) : String(d.fundamentals.pb);
     h += codeBlockStyled(`## 基本面（PE ${pe} / PB ${pb} / Q1 营收 ${revQ1} / Q1 净利 ${npQ1}）`, "prompt");
     return h;
