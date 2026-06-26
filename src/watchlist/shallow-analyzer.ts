@@ -129,7 +129,7 @@ export interface StockData {
   hot_money: HotMoneyData;
   fundamentals: { pe: number; pb: number; rev_q1: number; np_q1: number; industry: string; quarterly_trends?: QuarterlyTrend[]; consensus_eps?: ConsensusEps; pe_percentile?: number; pb_percentile?: number };
   ranker_thesis?: string;
-  /** kline.py 预计算的 VPA 量价分析文本（含"顶部背离信号/放量滞涨"等结论）。
+  /** kline.py 预计算的 VPA 量价分析文本（纯事实：价量变动%、交叉事件，无方向性结论）。
    *  undefined = 无 VPA 数据（非 kline 脚本或拉取失败）。 */
   vpa_text?: string;
   /** kline.py 预计算的 MACD 结构化数据（DIF/DEA/histogram/方向/金叉死叉）。
@@ -471,8 +471,9 @@ const RISK_PROMPT_TEMPLATE = `# 角色
 
 ## 量价背离识别规则（重点）
 若以下任一成立，应输出对应 risk_flag 并酌情提升 overall_risk（medium→high，low→medium）：
-- VPA 预计算数据出现"顶部背离信号"（价格上涨但成交量递减，动能衰竭）
-- VPA 预计算数据出现"放量滞涨"（巨量但价格不动，多空分歧大）
+- VPA 数据出现"价量背离"（价格上涨但成交量显著递减，>10%）
+- VPA 数据出现"缩量下跌"（价格下跌且成交量递减，可能流动性枯竭）
+- VPA 出现巨量窄幅震荡（量比 >1.8，涨跌幅 <1%，实体宽度 <0.015）
 - 5 日涨幅较大（>10%）但量比 volume_ratio_5_20 < 0.8（缩量上涨，资金不认可）
 这些是技术性见顶信号，与基本面好坏无关——业绩再好，技术见顶也是风险。
 
