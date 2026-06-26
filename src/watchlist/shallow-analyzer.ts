@@ -214,19 +214,16 @@ function signPrefix(n: number): string {
 export function renderHotMoneySummary(h: HotMoneyData): string {
   const parts: string[] = [];
 
-  // 北向资金（全市场外资情绪风向标）
-  if (h.northbound_signal) {
-    const sig = h.northbound_signal === "inflow" ? "流入" : "流出";
-    parts.push(`北向${signPrefix(h.northbound_yi)}${h.northbound_yi.toFixed(2)}亿(${sig})`);
-  }
-
-  // 龙虎榜（游资/机构席位动向）+ 上榜原因（区分游资炒作 vs 业绩驱动）
+  // 龙虎榜（游资/机构席位动向）+ 上榜原因（区分游资炒作 vs 业务驱动）
+  // 个股级信号，有价值——但多数股票不上榜，"缺失"措辞有歧义（正常 vs 故障）
   if (h.dragon_tiger_recent) {
     const reason = h.dragon_tiger_reason ? `，原因:${h.dragon_tiger_reason}` : "";
     parts.push(`龙虎榜近30天:${h.dragon_tiger_recent}${reason}`);
+  } else {
+    parts.push(`龙虎榜近30天:未上榜`);
   }
 
-  // 板块轮动（标的行业是否当日主线）+ 流入/流出 top 名单
+  // 板块轮动（标的行业是否当日主线）—— 个股级信号，有价值
   if (h.sector_in_industry_tag) {
     const tag = h.sector_in_industry_tag === "主线" ? "所在行业在当日流入主线"
       : h.sector_in_industry_tag === "弱势" ? "所在行业在当日流出弱势区"
@@ -236,10 +233,7 @@ export function renderHotMoneySummary(h: HotMoneyData): string {
     parts.push(`${tag}${inflow}${outflow}`);
   }
 
-  // 今日热门题材
-  if (h.hot_stocks_top) {
-    parts.push(`今日热门:${h.hot_stocks_top}`);
-  }
+  // 注：北向资金和热门题材已移除——它们是市场级信号，已在 rebalancer macro_section 注入一次
 
   if (parts.length === 0) {
     return "(资金数据拉取失败或全空)";
