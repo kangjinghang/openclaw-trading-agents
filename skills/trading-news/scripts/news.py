@@ -14,6 +14,24 @@ from http_helpers import em_get, http_get, output_json, normalize_ticker, record
 
 _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
+# 东方财富新闻 content 末尾常附带关联股票列表（代码+价格+涨跌+成交额），对 LLM 是噪声。
+# 策略：找最后一个 ：或 : ，如果其后包含 6 位股票代码，则截断。
+_STOCK_CODE_RE = re.compile(r"\d{6}")
+
+
+def _clean_content(text):
+    """去除新闻 content 末尾的关联股票列表噪声。"""
+    if not text:
+        return text
+    last_colon = -1
+    for m in re.finditer(r"[：:]", text):
+        if _STOCK_CODE_RE.search(text[m.end():]):
+            last_colon = m.start()
+    if last_colon >= 0:
+        cleaned = text[:last_colon].strip()
+        return cleaned if cleaned else text
+    return text
+
 
 def _fetch_news_eastmoney(code, page_size=50):
     """Fetch individual stock news from Eastmoney search API."""
@@ -59,7 +77,7 @@ def _fetch_news_eastmoney(code, page_size=50):
         for item in data.get("result", {}).get("cmsArticleWebOld", []):
             articles.append({
                 "title": item.get("title", ""),
-                "content": (item.get("content", "") or "")[:300],
+                "content": _clean_content((item.get("content", "") or "")[:300]),
                 "time": item.get("date", ""),
                 "source": item.get("mediaName", "东方财富"),
             })
