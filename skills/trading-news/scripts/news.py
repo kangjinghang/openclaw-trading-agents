@@ -93,64 +93,52 @@ def _fetch_news_eastmoney(code, page_size=50):
         return []
 
 
-def _fetch_news_pywencai(code, limit=20):
-    """Supplement stock news from pywencai (同花顺问财) when eastmoney is thin.
+def _normalize_pywencai_time(time_str):
+    """将 pywencai 的相对时间（'今天 09:22'、'昨天 22:44'）转为绝对日期格式。
 
-    Returns [] when pywencai is unavailable or returns nothing — callers treat
-    a non-None empty list the same as "no supplement", and None (pywencai not
-    installed) is guarded by the caller. pywencai columns are 中文 and vary, so
-    we try several common title/content/time aliases.
+    排序需要统一的时间格式，'今天'/'昨天' 作为字符串会排到 '2026-MM-DD' 之后。
+    转换后格式：YYYY-MM-DD HH:MM，与东财 search 对齐。
+    """
+    if not time_str:
+        return ""
+    now = datetime.now()
+    if time_str.startswith("今天"):
+        t = time_str.replace("今天", "").strip()
+        return now.strftime("%Y-%m-%d") + (" " + t if t else "")
+    if time_str.startswith("昨天"):
+        t = time_str.replace("昨天", "").strip()
+        yesterday = now - timedelta(days=1)
+        return yesterday.strftime("%Y-%m-%d") + (" " + t if t else "")
+    # 已是绝对日期（如 '2026-06-24 19:17'）或未知格式，原样返回
+    return time_str[:16]
+
+
+def _fetch_news_pywencai(code, limit=20):
+    """Fetch stock news from pywencai (同花顺问财) as primary source.
+
+    pywencai returns articles where the company is the main subject (财报、战略、
+    产品动态)，信噪比远高于东财 search API 的榜单新闻。返回 [] 表示不可用
+    或无结果，调用方据此降级到兜底源。
     """
     rows = pywencai_query(f"{code}新闻")
     if not rows:
         return []
     articles = []
     for row in rows[:limit]:
-        title = str(row.get("新闻标题") or row.get("标题") or "")
-        content = str(row.get("新闻内容") or row.get("内容") or "")[:300]
-        pub_time = str(row.get("发布时间") or row.get("日期") or "")
-        if title:
+        # pywencai 返回格式：{title: {value: "...", key: "title"}, ...}
+        def _v(col):
+            val = row.get(col)
+            if isinstance(val, dict):
+                return str(val.get("value", ""))
+            return str(val) if val else ""
+        title = _v("title")
+        content = _v("content")[:300]
+        pub_time = _normalize_pywencai_time(_v("date"))
+        source = _v("source") or "问财"
+        # 过滤非新闻条目（公司简介、行情页等）
+        if title and "股票行情" not in title and "主营业务" not in content[:20]:
             articles.append({"title": title, "content": content,
-                             "time": pub_time[:16], "source": "问财"})
-    return articles
-
-
-def _fetch_news_akshare_individual(code, limit=20):
-    """Fetch individual stock news from akshare stock_news_em (个股新闻).
-
-    akshare.stock_news_em 按个股代码拉取东财个股新闻页面，返回的新闻天然
-    与该公司相关（公告、研报、公司快讯），信噪比远高于 search API 的概念新闻。
-    失败时 graceful degrade（返回空列表），不阻塞主流程。
-    """
-    start = time.monotonic()
-    try:
-        import akshare as ak
-        df = ak.stock_news_em(symbol=code)
-    except Exception as e:
-        record_call("news/stock_akshare", success=False, error=str(e),
-                    duration_ms=(time.monotonic() - start) * 1000)
-        return []
-
-    articles = []
-    if df is None or len(df) == 0:
-        record_call("news/stock_akshare", success=False, error="empty result",
-                    duration_ms=(time.monotonic() - start) * 1000)
-        return articles
-    for _, row in df.head(limit).iterrows():
-        # akshare stock_news_em 列名：标题/内容/发布时间/来源/阅读量 等
-        title = str(row.get("标题", "") or "")
-        content = str(row.get("内容", "") or "")[:300]
-        pub_time = str(row.get("发布时间", "") or "")
-        source = str(row.get("来源", "") or "东方财富个股")
-        if title:
-            articles.append({
-                "title": title,
-                "content": content,
-                "time": pub_time[:16],
-                "source": source,
-            })
-    record_call("news/stock_akshare", success=True,
-                duration_ms=(time.monotonic() - start) * 1000)
+                             "time": pub_time[:16], "source": source})
     return articles
 
 
@@ -190,12 +178,12 @@ def _rank_news_by_relevance(articles, company_name=None, code="", top_n=20):
         # Tier 3: 概念相关（无精确匹配）
         return 3
 
-    # 分 tier 后同 tier 内按时间倒序
+    # 分 tier 后同 tier 内按时间倒序（最新优先）
     articles_with_tier = [(a, _tier(a)) for a in articles]
-    articles_with_tier.sort(key=lambda x: (x[1], x[0].get("time", "")), reverse=True)
-    # reverse=True 使 tier 升序（0 最高）且时间降序（最新优先）
-    # 但 reverse 同时影响两个 key，需拆开：先 tier 升序，同 tier 时间降序
-    articles_with_tier.sort(key=lambda x: (-x[1], x[0].get("time", "")))
+    # 两次稳定排序：先按时间降序（最新优先），再按 tier 升序（0 最高）
+    # Python sort 是稳定排序，第二次 sort 保持同 tier 内的时间顺序
+    articles_with_tier.sort(key=lambda x: x[0].get("time", ""), reverse=True)
+    articles_with_tier.sort(key=lambda x: x[1])
     result = [a for a, _ in articles_with_tier]
     # 不足 5 条时不截断（宁缺毋滥）
     if len(result) <= 5:
@@ -625,27 +613,28 @@ def fetch_news(ticker, date, lookback_days=7, skip_macro=False, company_name=Non
     data = {"ticker": code, "date": date, "lookback_days": lookback_days}
 
     try:
-        articles = _fetch_news_eastmoney(code)
-        # pywencai 补充：东财新闻偏少（<10 篇）时用问财自然语言查询补个股新闻，
-        # 避免新闻面数据稀疏导致分析师无料可议。pywencai 未装/查询失败 → 不阻塞。
+        # pywencai 主源：问财返回公司层面具体新闻（财报、战略、产品动态），
+        # 信噪比远高于东财 search 的榜单新闻。未装/失败 → 降级到东财兜底。
+        articles = []
+        try:
+            articles = _fetch_news_pywencai(code)
+        except Exception as e:
+            data["stock_news_pywencai_error"] = str(e)
+
+        # 东财 search 兜底：pywencai 不足 10 条时补充，过滤榜单噪音。
         if len(articles) < 10:
             try:
-                articles = articles + _fetch_news_pywencai(code)
+                em_articles = _fetch_news_eastmoney(code)
+                # 过滤榜单类噪音：资金流向榜、概念涨跌、特大单统计等
+                # 这些对个股决策无增量，LLM 看到可能误判为个股信号
+                _noise_re = re.compile(
+                    r"(净流入|净流出|主力资金|特大单|出逃|融资客|概念涨|概念跌|"
+                    r"概念上涨|概念下跌|资金撤离|资金流入|榜单|资金流向)")
+                em_filtered = [a for a in em_articles
+                               if not _noise_re.search(a["title"])]
+                articles = articles + em_filtered
             except Exception as e:
-                data["stock_news_pywencai_error"] = str(e)
-
-        # akshare 个股新闻：按代码拉取个股维度新闻（公告/研报/公司快讯），信噪比高。
-        # 与东财搜索结果合并后统一排序。失败 → 不阻塞，降级为仅东财 + 后过滤。
-        try:
-            ak_articles = _fetch_news_akshare_individual(code)
-            if ak_articles:
-                # 标记来源以区分
-                for a in ak_articles:
-                    a["source"] = a.get("source", "东方财富个股")
-                articles = articles + ak_articles
-                data["stock_news_akshare_count"] = len(ak_articles)
-        except Exception as e:
-            data["stock_news_akshare_error"] = str(e)
+                data["stock_news_eastmoney_error"] = str(e)
 
         # 相关性排序：公司名 > 代码 > 简称 > 概念相关
         articles = _rank_news_by_relevance(articles, company_name=company_name, code=code)
