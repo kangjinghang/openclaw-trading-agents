@@ -308,8 +308,8 @@ def compute_vpa(data: list) -> str:
         f"**OBV 趋势（10日）**: {obv_trend}",
         f"**近5日量能趋势**: {vol_summary}（5日均量/20日均量 = {vol_trend_ratio:.2f}）\n",
         "### 逐日量价数据\n",
-        "| 日期 | 类型 | 涨跌幅 | 实体大小 | 收盘位置 | 上影线 | 下影线 | 量比 | 量价关系 |",
-        "|------|------|--------|----------|----------|--------|--------|------|----------|",
+        "| 类型 | 涨跌幅 | 实体大小 | 收盘位置 | 上影线 | 量比 | 量价关系 |",
+        "|------|--------|----------|----------|--------|------|----------|",
     ]
 
     # Show last 7 days（A/B 实验结论：30 日表用 +52% token 只换来不稳定的
@@ -336,10 +336,10 @@ def compute_vpa(data: list) -> str:
             vr_label += "(缩量)"
 
         lines.append(
-            f"| {r['date']} | {r['bar_type']} | {pct:+.1f}% "
+            f"| {r['bar_type']} | {pct:+.1f}% "
             f"| {spread_label}({r['bar_spread']:.3f}) "
             f"| {cp_label}({cp:.2f}) | {r['upper_shadow']:.2f} "
-            f"| {r['lower_shadow']:.2f} | {vr_label} | {r['vp_harmony']} |"
+            f"| {vr_label} | {r['vp_harmony']} |"
         )
 
     # ── Pattern recognition ──
