@@ -39,7 +39,7 @@ function actionPriority(action) {
  *  受 singleNameCap（默认 10%）钳制。 */
 function baseWeight(fitness) {
     const clamped = Math.max(0, Math.min(10, fitness));
-    return clamped * 0.008; // 线性：fit3=2.4%, fit5=4%, fit7=5.6%, fit9=7.2%, fit10=8%
+    return clamped * 0.015; // 线性：fit3=4.5%, fit5=7.5%, fit7=10.5%, fit8=12%, fit10=15%
 }
 /** 波动率折扣：日线收益率标准差（单位 %，如 2.5 = 2.5%/日，由 computeVolatility 输出）。
  *  0（kline 失败/未知）→ ×0.6（最保守折扣，防"零风险"假象）。
