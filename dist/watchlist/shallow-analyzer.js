@@ -568,6 +568,9 @@ async function analyzeAll(metas, dataByTicker, caller, concurrency = 3) {
     const queue = [...metas];
     const results = [];
     const workers = [];
+    let done = 0;
+    const total = metas.length;
+    const t0 = Date.now();
     for (let w = 0; w < concurrency; w++) {
         workers.push((async () => {
             while (queue.length > 0) {
@@ -576,29 +579,40 @@ async function analyzeAll(metas, dataByTicker, caller, concurrency = 3) {
                 if (!data) {
                     // 持仓股无数据 → fallback（候选股跳过）
                     results.push(meta.is_held ? buildFallbackReport(meta, "未分类", "数据拉取失败（dataByTicker 无此股）") : null);
+                    done++;
+                    console.error(`  [llm] ${done}/${total} ${meta.name} 跳过（无数据，累计 ${(Date.now() - t0) / 1000 | 0}s）`);
                     continue;
                 }
+                const stockT0 = Date.now();
                 try {
                     const analystContent = await caller({ role: "analyst", data });
                     const analyst = parseAnalystReport(analystContent);
                     if (!analyst) {
                         results.push(meta.is_held ? buildFallbackReport(meta, data.sector, "analyst-role 返回非 JSON") : null);
+                        done++;
+                        console.error(`  [llm] ${done}/${total} ${meta.name} ✗ analyst 非 JSON（${(Date.now() - stockT0) / 1000 | 0}s）`);
                         continue;
                     }
                     const riskContent = await caller({ role: "risk", data, analyst });
                     const risk = parseRiskReport(riskContent);
                     if (!risk) {
                         results.push(meta.is_held ? buildFallbackReport(meta, data.sector, "risk-role 返回非 JSON") : null);
+                        done++;
+                        console.error(`  [llm] ${done}/${total} ${meta.name} ✗ risk 非 JSON（${(Date.now() - stockT0) / 1000 | 0}s）`);
                         continue;
                     }
                     // 确定性质量门控（内联守卫，非新阶段）：钳制 fitness/risk + 标注 issue（含解禁兜底）。
                     // 必须在 buildStockReport 前，让 clamp 后的值进 position-calculator 公式。
                     const gated = (0, quality_gate_1.applyQualityGate)(analyst, risk, data);
                     results.push(buildStockReport(meta, data.sector, gated.analyst, gated.risk, gated.issues));
+                    done++;
+                    console.error(`  [llm] ${done}/${total} ${meta.name} ✓ fitness ${gated.analyst.fitness_score}（${(Date.now() - stockT0) / 1000 | 0}s）`);
                 }
                 catch (e) {
                     const reason = e instanceof Error ? e.message : String(e);
                     results.push(meta.is_held ? buildFallbackReport(meta, data.sector, `LLM 调用异常：${reason}`) : null);
+                    done++;
+                    console.error(`  [llm] ${done}/${total} ${meta.name} ✗ 异常：${reason.slice(0, 40)}`);
                 }
             }
         })());

@@ -584,10 +584,14 @@ export async function fetchAllStockData(
   const result = new Map<string, StockData>();
   const queue = [...metas];
   const workers: Promise<void>[] = [];
+  let done = 0;
+  const total = metas.length;
+  const t0 = Date.now();
   for (let w = 0; w < concurrency; w++) {
     workers.push((async () => {
       while (queue.length > 0) {
         const meta = queue.shift()!;
+        const stockT0 = Date.now();
         try {
           const data = await fetchStockData(meta.ticker, meta.name, meta.sector, meta.ranker_thesis, {
             globalHotMoney: globalHotMoney,
@@ -605,6 +609,8 @@ export async function fetchAllStockData(
         } catch {
           // 跳过失败的股
         }
+        done++;
+        console.error(`  [data] ${done}/${total} ${meta.name} ${(Date.now() - stockT0) / 1000 | 0}s（累计 ${(Date.now() - t0) / 1000 | 0}s）`);
       }
     })());
   }
