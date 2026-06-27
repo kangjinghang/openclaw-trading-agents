@@ -281,6 +281,56 @@ class PositionSimulator {
             },
         };
     }
+    /** 导出全量状态供持久化（跨进程续跑）。
+     *  所有 private 字段都是 JSON 原生：positions 的 Map → Array 转换。 */
+    serialize() {
+        return {
+            cash: this.cash,
+            recentSells: { ...this.recentSells },
+            lastRebalanceDate: this.lastRebalanceDate,
+            positions: Array.from(this.positions.values()).map(p => ({
+                ticker: p.ticker, name: p.name, weight: p.weight,
+                entry_price: p.entry_price, entry_date: p.entry_date,
+                shares: p.shares, sector: p.sector,
+            })),
+            navHistory: this.navHistory.map(s => ({ ...s, actions: [...s.actions] })),
+            trades: this.trades.map(t => ({ ...t })),
+        };
+    }
+    /** 从序列化状态恢复（跨进程续跑）。
+     *  priceLookup 是注入依赖，每次新建进程时由调用方重新注入。 */
+    static fromSerialized(state, priceLookup) {
+        const sim = new PositionSimulator(priceLookup);
+        sim.cash = state.cash;
+        sim.recentSells = { ...state.recentSells };
+        sim.lastRebalanceDate = state.lastRebalanceDate;
+        sim.positions = new Map(state.positions.map(p => [p.ticker, {
+                ticker: p.ticker, name: p.name, weight: p.weight,
+                entry_price: p.entry_price, entry_date: p.entry_date,
+                shares: p.shares, sector: p.sector,
+            }]));
+        sim.navHistory = state.navHistory.map(s => ({ ...s, actions: [...s.actions] }));
+        sim.trades = state.trades.map(t => ({ ...t }));
+        return sim;
+    }
+    /** 当前持仓快照（浮动盈亏）：供增量模式每日展示当前持仓状态。
+     *  与 closeOpenPositions 不同——它不把持仓记入 trades（否则会把仍持有的记成未平仓交易）。
+     *  weight 用 normalizeWeights 漂移后的值（调用方应先调 normalizeWeights）。 */
+    async currentHoldingsSnapshot(date, priceMap) {
+        const out = [];
+        for (const [, pos] of this.positions) {
+            const price = priceMap?.get(pos.ticker) ?? await this.priceLookup(pos.ticker, date) ?? pos.entry_price;
+            out.push({
+                ticker: pos.ticker,
+                name: pos.name,
+                entryDate: pos.entry_date,
+                weight: pos.weight,
+                returnPct: (price / pos.entry_price - 1) * 100,
+            });
+        }
+        // 按权重降序
+        return out.sort((a, b) => b.weight - a.weight);
+    }
     calcHoldDays(entryDate, exitDate) {
         const ms = new Date(exitDate + "T00:00:00+08:00").getTime()
             - new Date(entryDate + "T00:00:00+08:00").getTime();

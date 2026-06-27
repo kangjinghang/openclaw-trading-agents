@@ -60,6 +60,17 @@ export interface BacktestResults {
   summary: BacktestSummary;
 }
 
+/** 序列化后的 PositionSimulator 全量状态（跨进程持久化用）。
+ *  所有字段都是 JSON 原生：positions 从 Map 转为数组，SimPosition 结构等同 Position。 */
+export interface SerializedSimState {
+  cash: number;                          // 归一化现金绝对值（非占比）
+  recentSells: Record<string, string>;   // ticker → 最后卖出日，14 天 TTL 反复 churn 锁
+  lastRebalanceDate: string | null;
+  positions: Position[];                 // 持仓数组（含 shares 等全部字段）
+  navHistory: NavSnapshot[];
+  trades: TradeRecord[];
+}
+
 // ── K 线取数 ──────────────────────────────────────────────────────────
 
 interface KlineBar { date: string; close: number; }
@@ -354,6 +365,62 @@ export class PositionSimulator {
         avgLossPct: avg(losses.map(t => t.returnPct ?? 0)),
       },
     };
+  }
+
+  /** 导出全量状态供持久化（跨进程续跑）。
+   *  所有 private 字段都是 JSON 原生：positions 的 Map → Array 转换。 */
+  serialize(): SerializedSimState {
+    return {
+      cash: this.cash,
+      recentSells: { ...this.recentSells },
+      lastRebalanceDate: this.lastRebalanceDate,
+      positions: Array.from(this.positions.values()).map(p => ({
+        ticker: p.ticker, name: p.name, weight: p.weight,
+        entry_price: p.entry_price, entry_date: p.entry_date,
+        shares: p.shares, sector: p.sector,
+      })),
+      navHistory: this.navHistory.map(s => ({ ...s, actions: [...s.actions] })),
+      trades: this.trades.map(t => ({ ...t })),
+    };
+  }
+
+  /** 从序列化状态恢复（跨进程续跑）。
+   *  priceLookup 是注入依赖，每次新建进程时由调用方重新注入。 */
+  static fromSerialized(state: SerializedSimState, priceLookup: PriceLookup): PositionSimulator {
+    const sim = new PositionSimulator(priceLookup);
+    sim.cash = state.cash;
+    sim.recentSells = { ...state.recentSells };
+    sim.lastRebalanceDate = state.lastRebalanceDate;
+    sim.positions = new Map(state.positions.map(p => [p.ticker, {
+      ticker: p.ticker, name: p.name, weight: p.weight,
+      entry_price: p.entry_price, entry_date: p.entry_date,
+      shares: p.shares, sector: p.sector,
+    }]));
+    sim.navHistory = state.navHistory.map(s => ({ ...s, actions: [...s.actions] }));
+    sim.trades = state.trades.map(t => ({ ...t }));
+    return sim;
+  }
+
+  /** 当前持仓快照（浮动盈亏）：供增量模式每日展示当前持仓状态。
+   *  与 closeOpenPositions 不同——它不把持仓记入 trades（否则会把仍持有的记成未平仓交易）。
+   *  weight 用 normalizeWeights 漂移后的值（调用方应先调 normalizeWeights）。 */
+  async currentHoldingsSnapshot(
+    date: string,
+    priceMap?: Map<string, number>,
+  ): Promise<{ ticker: string; name: string; entryDate: string; weight: number; returnPct: number }[]> {
+    const out: { ticker: string; name: string; entryDate: string; weight: number; returnPct: number }[] = [];
+    for (const [, pos] of this.positions) {
+      const price = priceMap?.get(pos.ticker) ?? await this.priceLookup(pos.ticker, date) ?? pos.entry_price;
+      out.push({
+        ticker: pos.ticker,
+        name: pos.name,
+        entryDate: pos.entry_date,
+        weight: pos.weight,
+        returnPct: (price / pos.entry_price - 1) * 100,
+      });
+    }
+    // 按权重降序
+    return out.sort((a, b) => b.weight - a.weight);
   }
 
   private calcHoldDays(entryDate: string, exitDate: string): number {

@@ -1,4 +1,4 @@
-import type { Holdings, Action } from "./rebalance-types";
+import type { Holdings, Position, Action } from "./rebalance-types";
 import type { RebalancePipelineResult } from "./rebalancer";
 /** 完整交易记录（一买一卖配对）。 */
 export interface TradeRecord {
@@ -42,6 +42,16 @@ export interface BacktestResults {
         returnPct: number;
     }[];
     summary: BacktestSummary;
+}
+/** 序列化后的 PositionSimulator 全量状态（跨进程持久化用）。
+ *  所有字段都是 JSON 原生：positions 从 Map 转为数组，SimPosition 结构等同 Position。 */
+export interface SerializedSimState {
+    cash: number;
+    recentSells: Record<string, string>;
+    lastRebalanceDate: string | null;
+    positions: Position[];
+    navHistory: NavSnapshot[];
+    trades: TradeRecord[];
 }
 /** 从外部注入的收盘价查询函数（backtest-cli 负责实际拉 K 线 + 缓存）。 */
 export type PriceLookup = (ticker: string, date: string) => Promise<number | null>;
@@ -94,6 +104,22 @@ export declare class PositionSimulator {
     closeOpenPositions(endDate: string, priceMap?: Map<string, number>): Promise<void>;
     /** 获取完整回测结果。 */
     getResults(): BacktestResults;
+    /** 导出全量状态供持久化（跨进程续跑）。
+     *  所有 private 字段都是 JSON 原生：positions 的 Map → Array 转换。 */
+    serialize(): SerializedSimState;
+    /** 从序列化状态恢复（跨进程续跑）。
+     *  priceLookup 是注入依赖，每次新建进程时由调用方重新注入。 */
+    static fromSerialized(state: SerializedSimState, priceLookup: PriceLookup): PositionSimulator;
+    /** 当前持仓快照（浮动盈亏）：供增量模式每日展示当前持仓状态。
+     *  与 closeOpenPositions 不同——它不把持仓记入 trades（否则会把仍持有的记成未平仓交易）。
+     *  weight 用 normalizeWeights 漂移后的值（调用方应先调 normalizeWeights）。 */
+    currentHoldingsSnapshot(date: string, priceMap?: Map<string, number>): Promise<{
+        ticker: string;
+        name: string;
+        entryDate: string;
+        weight: number;
+        returnPct: number;
+    }[]>;
     private calcHoldDays;
 }
 //# sourceMappingURL=backtest-simulator.d.ts.map
