@@ -149,8 +149,8 @@ describe("runRebalanceWithRevise", () => {
       if (callIdx === 1) {
         return JSON.stringify({
           evaluations: [],
-          actions: [{ action: "BUY", ticker: "A", name: "a", current_weight: 0, target_weight: 0.20, delta: 0.20, reason: "r", priority: 3 }],
-          portfolio_after: { positions: [{ ticker: "A", weight: 0.20 }], cash_pct: 0.80 },
+          actions: [{ action: "BUY", ticker: "A", name: "a", current_weight: 0, target_weight: 0.25, delta: 0.25, reason: "r", priority: 3 }],
+          portfolio_after: { positions: [{ ticker: "A", weight: 0.25 }], cash_pct: 0.75 },
           summary: "x",
         });
       }
@@ -169,8 +169,8 @@ describe("runRebalanceWithRevise", () => {
   it("revise 用尽 → status=constraint_violation + last_attempt 保留", async () => {
     const caller: RebalanceLlmCaller = async () => JSON.stringify({
       evaluations: [],
-      actions: [{ action: "BUY", ticker: "A", name: "a", current_weight: 0, target_weight: 0.20, delta: 0.20, reason: "r", priority: 3 }],
-      portfolio_after: { positions: [{ ticker: "A", weight: 0.20 }], cash_pct: 0.80 },
+      actions: [{ action: "BUY", ticker: "A", name: "a", current_weight: 0, target_weight: 0.25, delta: 0.25, reason: "r", priority: 3 }],
+      portfolio_after: { positions: [{ ticker: "A", weight: 0.25 }], cash_pct: 0.75 },
       summary: "x",
     });
     const r = await runRebalanceWithRevise(caller, "fake-prompt", ctx, DEFAULT_REBALANCE_CONFIG);
@@ -247,10 +247,10 @@ describe("rebalancePipeline (integration)", () => {
     expect(result.reports).toHaveLength(2);
     expect(result.rebalancer_output.actions).toHaveLength(2);
 
-    // 趋势模式仓位计算器：SZ300319 fitness 8 → 8×0.015=12%（不是 LLM 的 0.10）
+    // 趋势模式仓位计算器：SZ300319 fitness 8 → 8×0.022=17.6%（不是 LLM 的 0.10）
     const buyAction = result.rebalancer_output.actions.find(a => a.ticker === "SZ300319")!;
     expect(buyAction.action).toBe("BUY");
-    expect(buyAction.target_weight).toBeCloseTo(0.12, 5);
+    expect(buyAction.target_weight).toBeCloseTo(0.176, 5);
 
     // SH600519 HOLD → 保持当前 10%
     const holdAction = result.rebalancer_output.actions.find(a => a.ticker === "SH600519")!;
@@ -715,8 +715,8 @@ describe("rebalancePipeline (integration)", () => {
     expect(report!.quality_notes).toBeDefined();
     expect(report!.quality_notes!.some(n => n.includes("解禁") || n.includes("重大压力"))).toBe(true);
     // 趋势模式：risk=high 不打折仓位（靠止损退出，不靠仓位压缩）
-    // 仓位：BUY 9分 × 0.015 = 13.5% × 波动1.0 = 13.5%（risk=high 不再 ×0.3）
+    // 仓位：BUY 9分 × 0.022 = 19.8% × 波动1.0 = 19.8%（risk=high 不再 ×0.3）
     const action = result.rebalancer_output.actions.find(a => a.ticker === "SZ300319");
-    expect(action!.target_weight).toBeCloseTo(0.135, 2);
+    expect(action!.target_weight).toBeCloseTo(0.198, 2);
   });
 });

@@ -14,7 +14,7 @@ import type { MacroView } from "./data-fetcher";
 import type { ScanSummary } from "./types";
 
 const REBALANCER_PROMPT_TEMPLATE = `# 角色
-你是 A 股趋势跟随策略的组合管理者，管理一个 8-12 只持仓的分散组合（小账户，可接受大回撤）。
+你是 A 股趋势跟随策略的组合管理者，管理一个 3-5 只持仓的集中组合（小账户，可接受大回撤）。
 基于今日候选 + 当前持仓，输出最优调仓方案。核心目标：**在场抓趋势，技术位止损，不踏空**。
 
 # 任务流程（必须按此顺序思考）
@@ -56,8 +56,10 @@ const REBALANCER_PROMPT_TEMPLATE = `# 角色
 
 # 反"老好人"硬规则
 - fitness ≤2 的持仓必须 REDUCE 或 SELL（驱动逻辑极弱，不准 HOLD 蒙混）
-- actions 不能全是 HOLD，除非：所有持仓 fitness ≥5 + 无见顶信号 + 候选全 deal_breaker 或 fitness<4
+- actions 不能全是 HOLD，除非：所有持仓 fitness ≥4 + 无见顶信号 + 候选全 deal_breaker 或 fitness<4
 - fitness 最高的候选必须出现在 actions 里（BUY/ADD），除非触发 anti-churn 或约束上限
+- **集中优先**：候选中有 fitness ≥7 的强标的时，优先重仓少数高分股（3-5 只），
+  而非分散买入多只中分股。单仓可到 {single_name}，让确定性高的标的拿大仓位
 
 # reason 写作规则（严格）
 - 必须含至少 1 个具体词（产品/客户/数据/业务节点）
