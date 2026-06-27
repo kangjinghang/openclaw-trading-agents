@@ -164,27 +164,27 @@ describe("validateRebalance 规则 10: sector 非空", () => {
   });
 });
 
-describe("validateRebalance 规则 11: fitness 门槛", () => {
-  it("失败：BUY fitness=5 的股", () => {
-    const plan = makePlan([makeAction({ ticker: "A", current_weight: 0, target_weight: 0.05, delta: 0.05, action: "BUY" })]);
-    plan.portfolio_after.cash_pct = 0.95;
-    const fitness = new Map([["A", 5]]);
+describe("validateRebalance 规则 11: fitness 门槛（趋势模式：<4 禁止 BUY）", () => {
+  it("失败：BUY fitness=3 的股（驱动逻辑极弱）", () => {
+    const plan = makePlan([makeAction({ ticker: "A", current_weight: 0, target_weight: 0.024, delta: 0.024, action: "BUY" })]);
+    plan.portfolio_after.cash_pct = 0.976;
+    const fitness = new Map([["A", 3]]);
     const r = validateRebalance(plan, { sectors: new Map([["A", "x"]]), held: new Map(), tickersInPool: new Set(["A"]), fitnessByTicker: fitness }, C);
     expect(r.violations.some(v => v.rule.includes("fitness 门槛") && v.detail.includes("BUY"))).toBe(true);
   });
 
-  it("失败：ADD fitness=6 的股", () => {
+  it("失败：ADD fitness=2 的股", () => {
     const plan = makePlan([makeAction({ ticker: "A", current_weight: 0.02, target_weight: 0.05, delta: 0.03, action: "ADD" })]);
     plan.portfolio_after.cash_pct = 0.93;
-    const fitness = new Map([["A", 6]]);
+    const fitness = new Map([["A", 2]]);
     const r = validateRebalance(plan, { sectors: new Map([["A", "x"]]), held: new Map(), tickersInPool: new Set(["A"]), fitnessByTicker: fitness }, C);
     expect(r.violations.some(v => v.rule.includes("fitness 门槛") && v.detail.includes("ADD"))).toBe(true);
   });
 
-  it("通过：BUY fitness=8 的股", () => {
-    const plan = makePlan([makeAction({ ticker: "A", current_weight: 0, target_weight: 0.05, delta: 0.05, action: "BUY" })]);
-    plan.portfolio_after.cash_pct = 0.95;
-    const fitness = new Map([["A", 8]]);
+  it("通过：BUY fitness=5 的股（趋势模式允许低分小仓）", () => {
+    const plan = makePlan([makeAction({ ticker: "A", current_weight: 0, target_weight: 0.04, delta: 0.04, action: "BUY" })]);
+    plan.portfolio_after.cash_pct = 0.96;
+    const fitness = new Map([["A", 5]]);
     const r = validateRebalance(plan, { sectors: new Map([["A", "x"]]), held: new Map(), tickersInPool: new Set(["A"]), fitnessByTicker: fitness }, C);
     expect(r.violations.some(v => v.rule.includes("fitness 门槛"))).toBe(false);
   });

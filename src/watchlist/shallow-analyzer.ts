@@ -148,28 +148,31 @@ export interface StockData {
 }
 
 const ANALYST_PROMPT_TEMPLATE = `# 角色
-你是 A 股证券分析师，对单只股票做综合评估。
+你是 A 股趋势跟随分析师，评估单只异动股的驱动逻辑强度与趋势健康度。
 
 # 任务
-基于以下数据，输出 thesis + fitness + 关键信号。要求 reason 含具体词（产品/客户/数据/业务节点），
-禁止模糊词（共振/资金追捧/活跃/爆发力强）。
+基于以下数据，输出 thesis + fitness + 关键信号。核心问题：**这轮异动背后有没有真实、
+可延续的驱动逻辑？趋势是否健康（量价配合、资金认可）？** 要求 thesis 含具体词
+（产品/客户/数据/业务节点），禁止模糊词（共振/资金追捧/活跃/爆发力强）。
 
-# 评分标准（fitness_score，必须严格对齐，不要凭感觉）
+# 评分标准（fitness_score = 驱动逻辑强度，必须严格对齐，不要凭感觉）
 
 | 分数 | 含义 | 典型特征 |
 |------|------|---------|
-| 9-10 | 顶级 | 业绩已兑现（净利正增）+ 订单/产能可见 + 行业景气 + 估值合理（PE<行业均值） |
-| 8 | 好 | 驱动明确（订单/涨价/政策落地）+ 数据支撑 + 风险可控，但有一项未完全验证 |
-| 7 | 还行 | 有逻辑但部分未验证，或估值偏高/周期性强/需更多数据确认 |
-| 5-6 | 弱 | 概念早期/传闻未证实/单一客户依赖/数据缺失/业绩亏损 |
-| ≤4 | 差 | 零营收/财务造假/退市风险/纯资金炒作无实质逻辑 |
+| 9-10 | 顶级 | 驱动逻辑真实且强力（已落地订单/产能释放/政策直接受益）+ 有具体数据（订单金额/客户名/产能吨数）+ 趋势健康（量价配合、资金流入） |
+| 7-8 | 好 | 驱动逻辑清晰但部分未验证（订单在谈/产能在建/技术突破待量产），趋势仍在延续 |
+| 5-6 | 中 | 驱动逻辑弱或模糊（蹭概念/逻辑链不完整/单一未经证实消息），但非纯空气 |
+| 3-4 | 弱 | 驱动逻辑极弱（纯资金轮动/无实质催化），趋势可能已透支 |
+| ≤2 | 差 | 无实质逻辑（纯资金炒作/零信息），或 deal_breaker 灾难性风险 |
 
 评分原则：
-- 有具体数据支撑（净利数字、订单金额、产能吨数）才能给 8 分以上
-- 季度营收/净利连续正增长（quarterly_trends 可见同比）是业绩兑现的硬证据，可支撑 8 分以上；反之连续下滑应在 thesis 标注并压低 fitness
-- 机构一致预期（consensus_eps）正向 + 目标价高于现价 = 卖方认可，可作为加分项；但预期本身不算业绩兑现
-- "传闻""预计""市场传言"类未经证实的信息，最多 6 分
-- 数据缺失（PE/净利为 0）应在 data_gaps 标注，fitness 不超过 6（无法证实业绩）
+- fitness 评的是**驱动逻辑强度**，不是估值高低。A 股异动股 PE 普遍高，这是常态不是否决理由
+- 有具体数据支撑（订单金额/产能吨数/客户名）的驱动逻辑才能给 7 分以上
+- 趋势健康度是重要参考：量价齐升/MACD 金叉/OBV 上升/放量突破 → 趋势确认，可加分；
+  缩量上涨/量价背离/MACD 死叉 → 趋势存疑，应在 thesis 标注并酌情压低 fitness
+- 基本面是交叉参考（非评分主轴）：业绩连续增长 = 驱动逻辑有基本面支撑（加分）；
+  业绩恶化/连亏 = 驱动逻辑可能证伪（压低 fitness 但不否决）
+- 传闻/未经证实信息应在 data_gaps 标注，但仍可评分（趋势模式可做传闻驱动的动量）
 
 # 股票
 {ticker} {name}（行业：{sector}）
@@ -182,10 +185,12 @@ const ANALYST_PROMPT_TEMPLATE = `# 角色
 ## 资金流向
 {hot_money_summary}
 ## 基本面（PE {pe}{pe_label} / PB {pb}{pb_label} / Q1 营收 {rev_q1} / Q1 净利 {np_q1}）
-## 季度业绩趋势（近 4 季度营收/净利/ROE + 同比，判断业绩连续性）
+## 季度业绩趋势（近 4 季度营收/净利/ROE + 同比，判断业绩是否支撑驱动逻辑）
 {quarterly_trends}
 {consensus_eps}
 {capability_scores}
+{vpa_text}
+{macd_text}
 {ranker_section}
 
 # 输出格式（严格 JSON）
@@ -417,8 +422,10 @@ export function formatAnalystPrompt(d: StockData): string {
   const newsDensity = d.news_layer_stats
     ? `新闻密度：6h 内 ${d.news_layer_stats.realtime_6h_count} 条突发 / 24h 内 ${d.news_layer_stats.extended_24h_count} 条 / 7 天共 ${d.news_layer_stats.total_categorized} 条\n`
     : "";
+  // 趋势模式：ranker 的动量判断是有价值的输入（异动筛选+趋势排序的结论），
+  // 不再刻意去锚定——它是驱动逻辑判断的重要参考之一。
   const rankerSection = d.ranker_thesis
-    ? `## ranker 补充事实（来自不同数据源，供你独立参考，不是你的前置结论）\n${d.ranker_thesis}\n（注意：以上是 ranker 基于雪球异动等数据源的事实摘要，可能混有解释性措辞。请将其视为额外数据，与你的新闻/基本面/资金流分析独立交叉验证，不要被其方向性措辞锚定。）`
+    ? `## ranker 动量判断（来自异动筛选，是你的重要输入之一）\n${d.ranker_thesis}\n（以上是 ranker 基于雪球异动+趋势排序的判断，反映了市场对这只股的动量共识。请结合你的驱动逻辑分析交叉验证：若你的逻辑判断与 ranker 方向一致，可增强信心；若矛盾，需说明分歧理由。）`
     : "";
   return ANALYST_PROMPT_TEMPLATE
     .replace("{ticker}", d.ticker)
@@ -449,6 +456,10 @@ export function formatAnalystPrompt(d: StockData): string {
       const r = renderCapabilityScores(d.fundamentals.capability_scores);
       return r ? `## 同花顺能力评分（8维度，0-10分，仅作参考）\n${r}` : "";
     })())
+    // 趋势模式：VPA/MACD 注入 analyst prompt（评驱动逻辑强度需看趋势健康度）
+    // vpa_text 自带标题，缺数据 → 空串省略整块（与 formatRiskPrompt 同逻辑）
+    .replace("{vpa_text}", d.vpa_text || "")
+    .replace("{macd_text}", d.macd ? `## MACD 动量信号\n${renderMacd(d.macd)}` : "")
     .replace("{ranker_section}", rankerSection);
 }
 
@@ -490,25 +501,32 @@ function extractJson(content: string): unknown | null {
 }
 
 const RISK_PROMPT_TEMPLATE = `# 角色
-你是 A 股风险分析师，独立识别单只股票的关键风险。
+你是 A 股趋势策略风险分析师，识别单只股票的退出信号与硬风险。
 
 # 任务
-基于以下数据 + analyst 给的 thesis，输出风险清单。不要做 Buy/Sell 判断。
+基于以下数据 + analyst 给的 thesis，输出风险清单。趋势模式下你的核心职责是**识别退出信号**
+（技术位破位）和**硬风险**（造假/退市/解禁），不是评估估值高低。
 
-## 量价背离识别规则（重点）
-若以下任一成立，应输出对应 risk_flag 并酌情提升 overall_risk（medium→high，low→medium）：
-- VPA 数据出现"价量背离"（价格上涨但成交量显著递减，>10%）
-- VPA 数据出现"缩量下跌"（价格下跌且成交量递减，可能流动性枯竭）
-- VPA 出现巨量窄幅震荡（量比 >1.8，涨跌幅 <1%，实体宽度 <0.015）
-- 5 日涨幅较大（>10%）但量比 volume_ratio_5_20 < 0.8（缩量上涨，资金不认可）
-这些是技术性见顶信号，与基本面好坏无关——业绩再好，技术见顶也是风险。
+## ⚠️ 退出信号识别规则（趋势策略的核心刹车）
+趋势策略的退出靠技术位，不靠估值。若以下任一成立，必须输出对应 risk_flag 且 overall_risk=high：
+- **MACD 死叉**（crossover=death）→ 趋势可能反转，应输出"MACD死叉"flag，overall_risk=high
+- VPA 数据出现"价量背离"（价格上涨但成交量显著递减，>10%）→ 见顶信号，overall_risk=high
+- VPA 数据出现"缩量下跌"（价格下跌且成交量递减）→ 流动性枯竭，overall_risk=high
+- 5 日涨幅较大（>10%）但量比 volume_ratio_5_20 < 0.8（缩量上涨，资金不认可）→ overall_risk=high
+- **跌破支撑位**（最新收盘价 < 支撑位）→ 技术破位，overall_risk=high
 
-## 解禁与减持识别规则（重点）
+这些是趋势策略的退出依据。出现退出信号不代表公司不好，只代表趋势可能结束——该止盈/止损了。
+
+## 解禁与减持识别规则（供给端硬风险）
 若以下任一成立，应输出对应 risk_flag 并提升 overall_risk（重大解禁→high）：
 - 解禁压力评级为"重大压力"（未来 90 天 ≥3 笔解禁）
 - 未来 90 天有单笔解禁比例 ≥5%（流通市值，供给冲击大）
 - 近期有大股东减持记录（减持动力强，后续可能持续减持）
 这些是供给端压力，与公司好坏无关——业绩再好，解禁抛压也是风险。
+
+## 注意：估值高不是风险
+A 股异动股 PE 普遍处于 90%+ 分位，这是趋势行情的常态，**不要因 PE 高就提升 risk**。
+估值泡沫仅在业绩连续恶化 + 估值极端（PE 分位 99%+ 且净利下滑）同时出现时才作为辅助 risk_flag。
 
 # 股票
 {ticker} {name}（行业：{sector}）
@@ -516,11 +534,11 @@ const RISK_PROMPT_TEMPLATE = `# 角色
 # 数据
 ## K 线（5 日 +{pct_5d}% / 20 日 +{pct_20d}%，支撑 {support} / 压力 {resistance}，量比 {volume_ratio_5_20}）
 - 量比 < 0.8 = 缩量；> 1.2 = 放量；0.8-1.2 = 正常
-- 跌破支撑 / 突破压力 = 技术破位/突破信号，应输出 risk_flag
+- 跌破支撑 = 技术破位退出信号；突破压力 = 趋势延续确认
 ## 资金流向
 {hot_money_summary}
 ## 基本面（PE {pe}{pe_label} / PB {pb}{pb_label} / Q1 营收 {rev_q1} / Q1 净利 {np_q1}）
-## 季度业绩趋势（营收/净利同比连续下滑 = 业绩拐点风险，应输出 risk_flag）
+## 季度业绩趋势（营收/净利同比连续下滑 = 业绩拐点，辅助判断驱动逻辑是否证伪）
 {quarterly_trends}
 
 {vpa_text}
@@ -542,7 +560,8 @@ const RISK_PROMPT_TEMPLATE = `# 角色
   "deal_breaker": false
 }
 
-deal_breaker=true 仅限：财务造假、退市风险、重大违规、产品/客户重大断裂等灾难性情况。`;
+deal_breaker=true 仅限：财务造假、退市风险、重大违规、产品/客户重大断裂等灾难性情况。
+退出信号（MACD死叉/量价背离/跌破支撑）用 overall_risk=high 表达，不要用 deal_breaker。`;
 
 export function formatRiskPrompt(d: StockData, analyst: AnalystReport): string {
   return RISK_PROMPT_TEMPLATE

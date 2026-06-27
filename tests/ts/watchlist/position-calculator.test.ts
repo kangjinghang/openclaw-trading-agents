@@ -14,7 +14,8 @@ import type {
   RebalancePlan,
 } from "../../../src/watchlist/rebalance-types";
 
-const C: RebalanceConstraints = { single_name: 0.15, single_sector: 0.30, daily_turnover: 0.30, cash_reserve: 0.10 };
+// 趋势模式约束：单仓 10%，行业 25%，换手 40%，现金下限 5%
+const C: RebalanceConstraints = { single_name: 0.10, single_sector: 0.25, daily_turnover: 0.40, cash_reserve: 0.05 };
 
 function makeReport(over: Partial<StockReport> = {}): StockReport {
   return {
@@ -56,15 +57,16 @@ function makePlan(actions: Action[], cashPct = 0.85): RebalancePlan {
   };
 }
 
-// ── 基础仓位查表 ────────────────────────────────────────────────────────────
+// ── 基础仓位查表（趋势模式线性映射） ────────────────────────────────────────
 
-describe("baseWeight 基础仓位查表（平衡档）", () => {
-  it("9分 → 7%", () => expect(baseWeight(9)).toBeCloseTo(0.07, 5));
-  it("8分 → 5%", () => expect(baseWeight(8)).toBeCloseTo(0.05, 5));
-  it("8.5分 → 6%（线性插值）", () => expect(baseWeight(8.5)).toBeCloseTo(0.06, 5));
-  it("7分 → 3%", () => expect(baseWeight(7)).toBeCloseTo(0.03, 5));
-  it("6分 → 0%（不买）", () => expect(baseWeight(6)).toBe(0));
-  it("≤6 → 0%", () => expect(baseWeight(3)).toBe(0));
+describe("baseWeight 基础仓位（趋势模式线性映射）", () => {
+  // 趋势模式：fitness × 0.008，全程有仓位，无"≤6 不买"断崖
+  it("10分 → 8%（上限）", () => expect(baseWeight(10)).toBeCloseTo(0.08, 5));
+  it("9分 → 7.2%", () => expect(baseWeight(9)).toBeCloseTo(0.072, 5));
+  it("7分 → 5.6%", () => expect(baseWeight(7)).toBeCloseTo(0.056, 5));
+  it("5分 → 4%（中分给中仓）", () => expect(baseWeight(5)).toBeCloseTo(0.04, 5));
+  it("3分 → 2.4%（低分给小仓，不否决）", () => expect(baseWeight(3)).toBeCloseTo(0.024, 5));
+  it("0分 → 0%（fitness=0 不买）", () => expect(baseWeight(0)).toBe(0));
 });
 
 // ── 波动率折扣 ──────────────────────────────────────────────────────────────
@@ -78,52 +80,51 @@ describe("volatilityFactor 波动率折扣", () => {
   it("0（未知波动率）→ ×0.6（最保守折扣，kline 失败兜底）", () => expect(volatilityFactor(0)).toBe(0.6));
 });
 
-// ── 风险因子 ────────────────────────────────────────────────────────────────
+// ── 风险因子（趋势模式：固定 1.0，不打折仓位） ──────────────────────────────
 
-describe("riskFactor 风险因子", () => {
+describe("riskFactor 风险因子（趋势模式固定 1.0）", () => {
   it("low → ×1.0", () => expect(riskFactor("low")).toBe(1.0));
-  it("medium → ×0.6", () => expect(riskFactor("medium")).toBe(0.6));
-  it("high → ×0.3", () => expect(riskFactor("high")).toBe(0.3));
+  it("medium → ×1.0（趋势模式不打折）", () => expect(riskFactor("medium")).toBe(1.0));
+  it("high → ×1.0（靠止损退出，不靠仓位压缩）", () => expect(riskFactor("high")).toBe(1.0));
 });
 
 // ── computePosition 单股仓位计算 ────────────────────────────────────────────
 
-describe("computePosition BUY 完整公式", () => {
-  it("9分/低波动/低风险 → 7% × 1.0 × 1.0 = 7%", () => {
+describe("computePosition BUY 完整公式（趋势模式：base × vol，无 risk 打折）", () => {
+  it("9分/低波动 → 7.2% × 1.0 = 7.2%", () => {
     const r = computePosition({
       action: "BUY", report: makeReport({ fitness_score: 9, overall_risk: "low" }),
-      currentWeight: 0, volatility: 1.5, singleNameCap: 0.15,
+      currentWeight: 0, volatility: 1.5, singleNameCap: 0.10,
     });
-    expect(r.targetWeight).toBeCloseTo(0.07, 5);
-    expect(r.trace).toContain("7.0%");
+    expect(r.targetWeight).toBeCloseTo(0.072, 5);
+    expect(r.trace).toContain("7.2%");
   });
 
-  it("9分/中波动/中风险 → 7% × 0.8 × 0.6 = 3.36%", () => {
+  it("9分/中波动 → 7.2% × 0.8 = 5.76%", () => {
     const r = computePosition({
       action: "BUY", report: makeReport({ fitness_score: 9, overall_risk: "medium" }),
-      currentWeight: 0, volatility: 2.5, singleNameCap: 0.15,
+      currentWeight: 0, volatility: 2.5, singleNameCap: 0.10,
     });
-    expect(r.targetWeight).toBeCloseTo(0.07 * 0.8 * 0.6, 5);
+    expect(r.targetWeight).toBeCloseTo(0.072 * 0.8, 5);
   });
 
-  it("8分/高波动/高风险 → 5% × 0.6 × 0.3 = 0.9%（观察仓）", () => {
+  it("5分/高波动 → 4% × 0.6 = 2.4%（低分小仓，不否决）", () => {
     const r = computePosition({
-      action: "BUY", report: makeReport({ fitness_score: 8, overall_risk: "high" }),
-      currentWeight: 0, volatility: 5, singleNameCap: 0.15,
+      action: "BUY", report: makeReport({ fitness_score: 5, overall_risk: "high" }),
+      currentWeight: 0, volatility: 5, singleNameCap: 0.10,
     });
-    expect(r.targetWeight).toBeCloseTo(0.05 * 0.6 * 0.3, 5);
+    expect(r.targetWeight).toBeCloseTo(0.04 * 0.6, 5);
   });
 
-  it("fitness≤6 的 BUY → 0（防御性，应为 SKIP）", () => {
+  it("fitness=0 的 BUY → 0（防御性）", () => {
     const r = computePosition({
-      action: "BUY", report: makeReport({ fitness_score: 5 }),
-      currentWeight: 0, volatility: 1, singleNameCap: 0.15,
+      action: "BUY", report: makeReport({ fitness_score: 0 }),
+      currentWeight: 0, volatility: 1, singleNameCap: 0.10,
     });
     expect(r.targetWeight).toBe(0);
-    expect(r.trace).toContain("≤6");
   });
 
-  it("单仓上限钳制：公式值 7% 但上限 5% → 5%", () => {
+  it("单仓上限钳制：公式值 7.2% 但上限 5% → 5%", () => {
     const r = computePosition({
       action: "BUY", report: makeReport({ fitness_score: 9, overall_risk: "low" }),
       currentWeight: 0, volatility: 1, singleNameCap: 0.05,
@@ -136,7 +137,7 @@ describe("computePosition HOLD/SELL/REDUCE/ADD", () => {
   it("HOLD → 保持当前仓位", () => {
     const r = computePosition({
       action: "HOLD", report: makeReport(),
-      currentWeight: 0.10, volatility: 2, singleNameCap: 0.15,
+      currentWeight: 0.10, volatility: 2, singleNameCap: 0.10,
     });
     expect(r.targetWeight).toBeCloseTo(0.10, 5);
   });
@@ -144,7 +145,7 @@ describe("computePosition HOLD/SELL/REDUCE/ADD", () => {
   it("SELL → 0", () => {
     const r = computePosition({
       action: "SELL", report: makeReport(),
-      currentWeight: 0.10, volatility: 2, singleNameCap: 0.15,
+      currentWeight: 0.10, volatility: 2, singleNameCap: 0.10,
     });
     expect(r.targetWeight).toBe(0);
   });
@@ -152,7 +153,7 @@ describe("computePosition HOLD/SELL/REDUCE/ADD", () => {
   it("REDUCE → 当前减半（10% → 5%）", () => {
     const r = computePosition({
       action: "REDUCE", report: makeReport(),
-      currentWeight: 0.10, volatility: 2, singleNameCap: 0.15,
+      currentWeight: 0.10, volatility: 2, singleNameCap: 0.10,
     });
     expect(r.targetWeight).toBeCloseTo(0.05, 5);
   });
@@ -160,32 +161,32 @@ describe("computePosition HOLD/SELL/REDUCE/ADD", () => {
   it("REDUCE 小仓位 → 直接清仓（3% → 0%，不浪费换手槽位）", () => {
     const r = computePosition({
       action: "REDUCE", report: makeReport(),
-      currentWeight: 0.03, volatility: 2, singleNameCap: 0.15,
+      currentWeight: 0.03, volatility: 2, singleNameCap: 0.10,
     });
     expect(r.targetWeight).toBe(0);
     expect(r.trace).toContain("≤3%");
   });
 
-  it("ADD：当前 3% < 基础 7%（9分）→ 加到 7%", () => {
+  it("ADD：当前 3% < 基础 7.2%（9分）→ 加到 7.2%", () => {
     const r = computePosition({
       action: "ADD", report: makeReport({ fitness_score: 9 }),
-      currentWeight: 0.03, volatility: 2, singleNameCap: 0.15,
+      currentWeight: 0.03, volatility: 2, singleNameCap: 0.10,
     });
-    expect(r.targetWeight).toBeCloseTo(0.07, 5);
+    expect(r.targetWeight).toBeCloseTo(0.072, 5);
   });
 
-  it("ADD：当前 10% > 基础 7% → 不动（保持 10%）", () => {
+  it("ADD：当前 10% > 基础 7.2% → 不动（保持 10%）", () => {
     const r = computePosition({
       action: "ADD", report: makeReport({ fitness_score: 9 }),
-      currentWeight: 0.10, volatility: 2, singleNameCap: 0.15,
+      currentWeight: 0.10, volatility: 2, singleNameCap: 0.10,
     });
     expect(r.targetWeight).toBeCloseTo(0.10, 5);
   });
 
-  it("ADD：fitness≤6 → 维持当前（不加）", () => {
+  it("ADD：fitness=0 → 维持当前（不加）", () => {
     const r = computePosition({
-      action: "ADD", report: makeReport({ fitness_score: 5 }),
-      currentWeight: 0.08, volatility: 2, singleNameCap: 0.15,
+      action: "ADD", report: makeReport({ fitness_score: 0 }),
+      currentWeight: 0.08, volatility: 2, singleNameCap: 0.10,
     });
     expect(r.targetWeight).toBeCloseTo(0.08, 5);
   });
@@ -228,9 +229,10 @@ describe("applyPositions 批量改写 plan", () => {
       makeAction({ ticker: "A", action: "BUY", current_weight: 0, target_weight: 0.99 }), // LLM 乱给 99%
     ]);
     const { plan: newPlan, traces } = applyPositions(plan, buildApplyContext(reports, volMap, C, 0.80));
-    expect(newPlan.actions[0].target_weight).toBeCloseTo(0.07, 5);
-    expect(newPlan.actions[0].delta).toBeCloseTo(0.07, 5);
-    expect(traces.get("A")).toContain("7.0%");
+    // 趋势模式：9分 × 0.008 = 7.2% × vol 1.0 = 7.2%
+    expect(newPlan.actions[0].target_weight).toBeCloseTo(0.072, 5);
+    expect(newPlan.actions[0].delta).toBeCloseTo(0.072, 5);
+    expect(traces.get("A")).toContain("7.2%");
   });
 
   it("重算 portfolio_after：cash_pct = 1 - Σweight", () => {
@@ -250,7 +252,7 @@ describe("applyPositions 批量改写 plan", () => {
   });
 
   it("现金排队：高分的优先买，低分的现金不够降级 HOLD", () => {
-    // 初始现金 0.10，下限 0.10 → spendable=0，BUY 全买不起
+    // 初始现金 0.05，下限 0.05 → spendable=0，BUY 全买不起
     const reports = [
       makeReport({ ticker: "A", fitness_score: 9 }),
       makeReport({ ticker: "B", fitness_score: 7 }),
@@ -259,9 +261,9 @@ describe("applyPositions 批量改写 plan", () => {
     const plan = makePlan([
       makeAction({ ticker: "A", action: "BUY", current_weight: 0 }),
       makeAction({ ticker: "B", action: "BUY", current_weight: 0 }),
-    ], 0.10);
-    const { plan: newPlan, traces } = applyPositions(plan, buildApplyContext(reports, volMap, C, 0.10));
-    // 现金下限 0.10 = 初始 0.10 → spendable = 0，两个 BUY 都买不起
+    ], 0.05);
+    const { plan: newPlan, traces } = applyPositions(plan, buildApplyContext(reports, volMap, C, 0.05));
+    // 现金下限 0.05 = 初始 0.05 → spendable = 0，两个 BUY 都买不起
     expect(newPlan.actions.find(a => a.ticker === "A")!.action).toBe("HOLD");
     expect(newPlan.actions.find(a => a.ticker === "B")!.action).toBe("HOLD");
     expect(traces.get("A")).toContain("现金不足");
@@ -269,7 +271,7 @@ describe("applyPositions 批量改写 plan", () => {
 
   it("现金排队：SELL 释放资金后，高分 BUY 能买", () => {
     // 持仓 C 10%，SELL 释放 10% → 现金池 20% - 下限 10% = spendable 10%
-    // 高分 A（9分/低波动/低风险）需要 7% < 10% → 能买
+    // 高分 A（9分/低波动）需要 7.2% < 10% → 能买
     const reports = [
       makeReport({ ticker: "A", fitness_score: 9, overall_risk: "low" }),
       makeReport({ ticker: "C", fitness_score: 3, overall_risk: "medium" }),
@@ -281,7 +283,7 @@ describe("applyPositions 批量改写 plan", () => {
     ], 0.10);
     const { plan: newPlan } = applyPositions(plan, buildApplyContext(reports, volMap, C, 0.10));
     expect(newPlan.actions.find(a => a.ticker === "A")!.action).toBe("BUY");
-    expect(newPlan.actions.find(a => a.ticker === "A")!.target_weight).toBeCloseTo(0.07, 5);
+    expect(newPlan.actions.find(a => a.ticker === "A")!.target_weight).toBeCloseTo(0.072, 5);
   });
 
   it("deal_breaker 在批量层面强制改 SELL", () => {

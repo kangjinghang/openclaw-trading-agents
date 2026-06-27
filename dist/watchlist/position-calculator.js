@@ -1,12 +1,17 @@
 "use strict";
 // src/watchlist/position-calculator.ts
 //
-// 确定性仓位计算器：把 target_weight 的决定权从 LLM 手里拿走，
+// 确定性仓位计算器（趋势跟随模式）：把 target_weight 的决定权从 LLM 手里拿走，
 // 交给可解释、可复盘的公式。LLM 只决定方向（BUY/SELL/ADD/REDUCE/HOLD），
-// 具体数字由公式根据 fitness + 波动率 + 风险等级算出。
+// 具体数字由公式根据 fitness + 波动率算出。
 //
-// 公式主轴：目标仓位 = 基础仓位(fitness查表) × 波动率折扣 × 风险因子
+// 趋势模式公式主轴：目标仓位 = 基础仓位(fitness 线性映射) × 波动率折扣
 // 再经：现金排队（按分数花钱）+ 单仓上限钳制
+//
+// 与价值模式的核心差异：
+// - fitness 全程有仓位（线性，无"≤6 不买"断崖）——趋势模式要在场，小分给小仓
+// - 去掉 riskFactor 打折——risk=high 靠技术位止损退出，不靠仓位压缩
+// - deal_breaker 是唯一硬退出（强制清仓）
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.actionPriority = actionPriority;
 exports.baseWeight = baseWeight;
@@ -15,8 +20,7 @@ exports.riskFactor = riskFactor;
 exports.computePosition = computePosition;
 exports.applyPositions = applyPositions;
 exports.buildApplyContext = buildApplyContext;
-// ── 配置档位（平衡档，可调） ───────────────────────────────────────────────
-// ── 配置档位（平衡档，可调） ───────────────────────────────────────────────
+// ── 配置档位（趋势档） ───────────────────────────────────────────────────
 /** action 类型 → priority（execution-planner 排序用）。
  *  SELL=1（先释放资金）→ REDUCE=2 → BUY=3 → ADD=4 → HOLD=5（最后）。
  *  与 rebalance-types.ts Action.priority 注释一致。 */
@@ -30,16 +34,12 @@ function actionPriority(action) {
     }
 }
 /** fitness 分数 → 基础仓位（折扣前）。
- *  平衡档：9分→7% / 8分→5% / 7分→3% / ≤6→0%（不买）。
- *  线性插值：8.5分 = 6%（5% + 2% × 0.5）。 */
+ *  趋势模式线性映射：fitness 全程有仓位，无"≤6 不买"断崖。
+ *  每分 0.8%：fit3→2.4%, fit5→4%, fit7→5.6%, fit9→7.2%, fit10→8%。
+ *  受 singleNameCap（默认 10%）钳制。 */
 function baseWeight(fitness) {
-    if (fitness >= 9)
-        return 0.07;
-    if (fitness >= 8)
-        return 0.05 + (fitness - 8) * 0.02; // 8→5%, 8.5→6%, 8.99→6.98%
-    if (fitness >= 7)
-        return 0.03 + (fitness - 7) * 0.02; // 7→3%, 7.5→4%
-    return 0; // ≤6 不买
+    const clamped = Math.max(0, Math.min(10, fitness));
+    return clamped * 0.008; // 线性：fit3=2.4%, fit5=4%, fit7=5.6%, fit9=7.2%, fit10=8%
 }
 /** 波动率折扣：日线收益率标准差（单位 %，如 2.5 = 2.5%/日，由 computeVolatility 输出）。
  *  0（kline 失败/未知）→ ×0.6（最保守折扣，防"零风险"假象）。
@@ -53,14 +53,11 @@ function volatilityFactor(volatility) {
         return 0.8; // 2-4%/日 成长股
     return 0.6; // >4%/日 题材/次新
 }
-/** 风险因子：low ×1.0，medium ×0.6，high ×0.3。
- *  deal_breaker 不在这里返回，由上层强制改 action 为 SELL。 */
-function riskFactor(overallRisk) {
-    switch (overallRisk) {
-        case "low": return 1.0;
-        case "medium": return 0.6;
-        case "high": return 0.3;
-    }
+/** 趋势模式已移除 riskFactor——risk=high 靠技术位止损（risk prompt 输出退出信号
+ *  → rebalancer 触发 SELL/REDUCE），不靠仓位压缩。保留导出以避免下游 import 断裂
+ *  （返回固定 1.0，语义为"risk 不打折仓位"）。 */
+function riskFactor(_overallRisk) {
+    return 1.0;
 }
 /** 算出单只股票的目标仓位。
  *  纯函数，无副作用，可独立测试。 */
@@ -103,19 +100,18 @@ function computePosition(input) {
             trace: `ADD：max(当前 ${(currentWeight * 100).toFixed(1)}%, 基础 ${(base * 100).toFixed(1)}%) → ${(capped * 100).toFixed(1)}%`,
         };
     }
-    // BUY：基础仓位 × 波动率折扣 × 风险因子
+    // BUY：基础仓位 × 波动率折扣（趋势模式：去掉 riskFactor，fitness 全程有仓位）
     const base = baseWeight(report.fitness_score);
     if (base === 0) {
-        // fitness≤6：BUY 不应该发生（prompt 要求 AI 跳过），防御性返回 0
-        return { targetWeight: 0, trace: `fitness ${report.fitness_score} ≤6，BUY 不生效（应为 SKIP）` };
+        // fitness=0 才不买（防御性，趋势模式 fitness≥1 即可小仓试探）
+        return { targetWeight: 0, trace: `fitness ${report.fitness_score}，BUY 不生效` };
     }
     const volF = volatilityFactor(volatility);
-    const riskF = riskFactor(report.overall_risk);
-    const raw = base * volF * riskF;
+    const raw = base * volF;
     const capped = Math.min(raw, singleNameCap);
     return {
         targetWeight: capped,
-        trace: `BUY：${report.fitness_score}分基础 ${(base * 100).toFixed(1)}% × 波动率${volF}(${(volatility * 100).toFixed(1)}%) × 风险${riskF}(${report.overall_risk}) = ${(capped * 100).toFixed(2)}%`,
+        trace: `BUY：${report.fitness_score}分基础 ${(base * 100).toFixed(1)}% × 波动率${volF}(${(volatility * 100).toFixed(1)}%) = ${(capped * 100).toFixed(2)}%`,
     };
 }
 /** 改写 plan 的所有 actions：把 LLM 给的 target_weight/delta 替换为公式算出的值。

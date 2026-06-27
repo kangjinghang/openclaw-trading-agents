@@ -131,10 +131,10 @@ describe("runRebalanceWithRevise", () => {
     const caller: RebalanceLlmCaller = async () => JSON.stringify({
       evaluations: [],
       actions: [
-        { action: "HOLD", ticker: "A", name: "a", current_weight: 0.15, target_weight: 0.15, delta: 0, reason: "r", priority: 5 },
-        { action: "HOLD", ticker: "B", name: "b", current_weight: 0.15, target_weight: 0.15, delta: 0, reason: "r", priority: 5 },
+        { action: "HOLD", ticker: "A", name: "a", current_weight: 0.10, target_weight: 0.10, delta: 0, reason: "r", priority: 5 },
+        { action: "HOLD", ticker: "B", name: "b", current_weight: 0.10, target_weight: 0.10, delta: 0, reason: "r", priority: 5 },
       ],
-      portfolio_after: { positions: [{ ticker: "A", weight: 0.15 }, { ticker: "B", weight: 0.15 }], cash_pct: 0.70 },
+      portfolio_after: { positions: [{ ticker: "A", weight: 0.10 }, { ticker: "B", weight: 0.10 }], cash_pct: 0.80 },
       summary: "low activity",
     });
     const r = await runRebalanceWithRevise(caller, "fake-prompt", ctx, DEFAULT_REBALANCE_CONFIG);
@@ -149,28 +149,28 @@ describe("runRebalanceWithRevise", () => {
       if (callIdx === 1) {
         return JSON.stringify({
           evaluations: [],
-          actions: [{ action: "BUY", ticker: "A", name: "a", current_weight: 0, target_weight: 0.20, delta: 0.20, reason: "r", priority: 3 }],
-          portfolio_after: { positions: [{ ticker: "A", weight: 0.20 }], cash_pct: 0.80 },
+          actions: [{ action: "BUY", ticker: "A", name: "a", current_weight: 0, target_weight: 0.15, delta: 0.15, reason: "r", priority: 3 }],
+          portfolio_after: { positions: [{ ticker: "A", weight: 0.15 }], cash_pct: 0.85 },
           summary: "x",
         });
       }
       return JSON.stringify({
         evaluations: [],
-        actions: [{ action: "BUY", ticker: "A", name: "a", current_weight: 0, target_weight: 0.15, delta: 0.15, reason: "r", priority: 3 }],
-        portfolio_after: { positions: [{ ticker: "A", weight: 0.15 }], cash_pct: 0.85 },
+        actions: [{ action: "BUY", ticker: "A", name: "a", current_weight: 0, target_weight: 0.10, delta: 0.10, reason: "r", priority: 3 }],
+        portfolio_after: { positions: [{ ticker: "A", weight: 0.10 }], cash_pct: 0.90 },
         summary: "x",
       });
     };
     const r = await runRebalanceWithRevise(caller, "fake-prompt", ctx, DEFAULT_REBALANCE_CONFIG);
     expect(r.reviseCount).toBe(1);
-    expect(r.plan!.actions[0].target_weight).toBe(0.15);
+    expect(r.plan!.actions[0].target_weight).toBe(0.10);
   });
 
   it("revise 用尽 → status=constraint_violation + last_attempt 保留", async () => {
     const caller: RebalanceLlmCaller = async () => JSON.stringify({
       evaluations: [],
-      actions: [{ action: "BUY", ticker: "A", name: "a", current_weight: 0, target_weight: 0.20, delta: 0.20, reason: "r", priority: 3 }],
-      portfolio_after: { positions: [{ ticker: "A", weight: 0.20 }], cash_pct: 0.80 },
+      actions: [{ action: "BUY", ticker: "A", name: "a", current_weight: 0, target_weight: 0.15, delta: 0.15, reason: "r", priority: 3 }],
+      portfolio_after: { positions: [{ ticker: "A", weight: 0.15 }], cash_pct: 0.85 },
       summary: "x",
     });
     const r = await runRebalanceWithRevise(caller, "fake-prompt", ctx, DEFAULT_REBALANCE_CONFIG);
@@ -211,7 +211,7 @@ describe("rebalancePipeline (integration)", () => {
     };
     const holdings: Holdings = {
       updated_at: "x", cash_pct: 0.80,
-      positions: [{ ticker: "SH600519", name: "贵州茅台", weight: 0.15, entry_price: 1700, entry_date: "2026-05-20", shares: 100, sector: "白酒" }],
+      positions: [{ ticker: "SH600519", name: "贵州茅台", weight: 0.10, entry_price: 1700, entry_date: "2026-05-20", shares: 100, sector: "白酒" }],
     };
     const lastRebalance: LastRebalance = { date: "2026-06-14", actions: [] };
 
@@ -231,7 +231,7 @@ describe("rebalancePipeline (integration)", () => {
       ],
       actions: [
         // ⚠️ 注意：LLM 出的方向（BUY/HOLD）被采用，但 target_weight/delta 由公式覆盖
-        // fitness 8 / 低波动(1.5%) / 低风险 → 基础 5% × 1.0 × 1.0 = 5%
+        // 趋势模式：fitness 8 × 0.008 = 6.4% × vol 1.0 = 6.4%
         { action: "BUY", ticker: "SZ300319", name: "麦捷科技", reason: "TLVR 电感放量" },
         { action: "HOLD", ticker: "SH600519", name: "贵州茅台", reason: "hold" },
       ],
@@ -247,22 +247,22 @@ describe("rebalancePipeline (integration)", () => {
     expect(result.reports).toHaveLength(2);
     expect(result.rebalancer_output.actions).toHaveLength(2);
 
-    // 仓位计算器：SZ300319 fitness 8 → 5%（不是 LLM 的 0.10）
+    // 趋势模式仓位计算器：SZ300319 fitness 8 → 8×0.008=6.4%（不是 LLM 的 0.10）
     const buyAction = result.rebalancer_output.actions.find(a => a.ticker === "SZ300319")!;
     expect(buyAction.action).toBe("BUY");
-    expect(buyAction.target_weight).toBeCloseTo(0.05, 5);
+    expect(buyAction.target_weight).toBeCloseTo(0.064, 5);
 
-    // SH600519 HOLD → 保持当前 15%
+    // SH600519 HOLD → 保持当前 10%
     const holdAction = result.rebalancer_output.actions.find(a => a.ticker === "SH600519")!;
     expect(holdAction.action).toBe("HOLD");
-    expect(holdAction.target_weight).toBeCloseTo(0.15, 5);
+    expect(holdAction.target_weight).toBeCloseTo(0.10, 5);
 
     // execution plan：HOLD 过滤，只剩 BUY
     expect(result.execution_plan.execution_sequence).toHaveLength(1);
     expect(result.execution_plan.execution_sequence[0].action).toBe("BUY");
     expect(result.constraint_check.passed).toBe(true);
 
-    // portfolio_after 权重和 = 1（5% + 15% + 80% cash）
+    // portfolio_after 权重和 = 1（6.4% + 10% + 83.6% cash）
     const totalWeight = result.rebalancer_output.portfolio_after.positions.reduce((s, p) => s + p.weight, 0);
     expect(totalWeight + result.rebalancer_output.portfolio_after.cash_pct).toBeCloseTo(1.0, 5);
   });
@@ -506,7 +506,7 @@ describe("rebalancePipeline (integration)", () => {
     const holdings: Holdings = { updated_at: "x", cash_pct: 1.0, positions: [] };
 
     const dataByTicker = new Map<string, StockData>([
-      // PE/净利 非零（避免规则1误伤），但 lockup 重大压力
+      // PE/净利 非零（趋势模式虽不钳制，但保持数据完备更清晰），lockup 重大压力
       ["SZ300319", {
         ticker: "SZ300319", name: "麦捷科技", sector: "电子",
         kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01 },
@@ -532,15 +532,16 @@ describe("rebalancePipeline (integration)", () => {
       shallowCaller, rebalanceCaller, dataByTicker,
     });
 
-    // 质量门控规则7：解禁兜底生效——overall_risk 被强制 high（经 riskFactor ×0.3 落到仓位）
+    // 质量门控规则7：解禁兜底生效——overall_risk 被强制 high
     const report = result.reports.find(r => r.ticker === "SZ300319");
     expect(report).toBeDefined();
     expect(report!.overall_risk).toBe("high");
     expect(report!.fitness_score).toBe(9);  // fitness 不动（解禁影响 risk 不影响 fitness）
     expect(report!.quality_notes).toBeDefined();
     expect(report!.quality_notes!.some(n => n.includes("解禁") || n.includes("重大压力"))).toBe(true);
-    // 仓位受 high risk 重压：BUY 9分基础7% × 波动1.0 × 风险0.3 = 2.1%
+    // 趋势模式：risk=high 不打折仓位（靠止损退出，不靠仓位压缩）
+    // 仓位：BUY 9分 × 0.008 = 7.2% × 波动1.0 = 7.2%（risk=high 不再 ×0.3）
     const action = result.rebalancer_output.actions.find(a => a.ticker === "SZ300319");
-    expect(action!.target_weight).toBeCloseTo(0.021, 2);
+    expect(action!.target_weight).toBeCloseTo(0.072, 2);
   });
 });

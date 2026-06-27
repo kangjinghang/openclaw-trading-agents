@@ -9,19 +9,15 @@
 // 没有下游 LLM 再读。若只标注不钳制，幻觉数字会一路流到仓位。所以这里
 // 既标注又钳制，必须内联在 analyzeAll 循环里。
 //
-// 7 条规则分两类：
-// - 钳制型（1-4, 7）：有明确 prompt 数据依据，代码直接改值兜底
-// - 标注型（5-6）：语义模糊无法自修，只记 issue 留给 rebalancer LLM / 人看
+// 趋势模式下的规则分两类：
+// - 钳制型（通用守卫）：deal_breaker 一致性、fitness 越界、重大解禁兜底
+// - 标注型：语义模糊无法自修，只记 issue 留给 rebalancer LLM / 人看
+// 注：价值模式下的"PE=0 封顶"和"传闻封顶"已移除——趋势模式不因数据缺失
+// 或传闻否决（动量可由传闻驱动），但 analyst prompt 会让 LLM 在 data_gaps 标注。
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.applyQualityGate = applyQualityGate;
-/** fitness 在无法证实业绩 / 数据缺失 / 传闻时的封顶值。
- *  精确对齐下游 position-calculator.baseWeight：≤6 → 基础仓位 0%（BUY 路径切断），
- *  且对齐 prompt 评分原则原话（"数据缺失...不超过 6"、"传闻...最多 6 分"）。 */
-const FITNESS_UNVERIFIABLE_CAP = 6;
-/** 传闻/未证实类关键词（对齐 prompt：「传闻」「预计」「市场传言」类未经证实信息）。
- *  命中其一即视为 thesis 含未经证实信息，fitness 不应超过 cap。
- *  只匹配明示"未证实"语义的词，避免误伤"预计订单交付"这类正常前瞻表述——
- *  故排除单独的"预计"，要求它和"未证实/尚待/不确定"等修饰共存，或直接是"传闻/传言"。 */
+/** 传闻/未证实类关键词。趋势模式下仅标注（不钳制 fitness）——
+ *  动量可由传闻驱动，但需诚实标注不确定性，让 rebalancer 知道这是传闻驱动的。 */
 const RUMOR_TERMS = [
     "传闻", "传言", "市场传言", "未经证实", "尚未证实", "尚待证实", "尚待验证",
     "待证实", "据称", "疑似", "据传",
@@ -40,33 +36,14 @@ function applyQualityGate(analyst, risk, data) {
     let fitness = analyst.fitness_score;
     let overallRisk = risk.overall_risk;
     const dealBreaker = risk.deal_breaker;
-    const f = data.fundamentals;
     const thesis = analyst.thesis;
-    // ── 钳制型 ──────────────────────────────────────────────
+    // ── 钳制型（通用守卫）──────────────────────────────────
     // 规则 4（先做）：fitness 越界 → clamp 到 [0,10]
     // LLM 偶发输出 11 或负数，先归一化后续规则才有意义。
     if (fitness > 10 || fitness < 0) {
         const clamped = Math.max(0, Math.min(10, fitness));
         issues.push(`fitness ${fitness} 越界，clamp 到 ${clamped}`);
         fitness = clamped;
-    }
-    // 规则 1：数据缺失封顶。PE=0 或净利=0 说明基本面数据拉取失败/缺失，
-    // 无法证实业绩，prompt 明确要求 fitness 不超过 6。LLM 若给更高分则钳制。
-    // 这是整个门控的核心断点：幻觉净利 → 错误高分 → 错误建仓。
-    const dataMissing = f.pe === 0 || f.np_q1 === 0;
-    if (dataMissing && fitness > FITNESS_UNVERIFIABLE_CAP) {
-        const missing = [
-            f.pe === 0 ? "PE" : null,
-            f.np_q1 === 0 ? "净利" : null,
-        ].filter(Boolean).join("/");
-        issues.push(`fitness ${fitness}→${FITNESS_UNVERIFIABLE_CAP}（${missing}=0 数据缺失，无法证实业绩）`);
-        fitness = FITNESS_UNVERIFIABLE_CAP;
-    }
-    // 规则 2：传闻词封顶。thesis 明示"未经证实"类信息，prompt 要求最多 6 分。
-    const hitRumor = RUMOR_TERMS.some(t => thesis.includes(t));
-    if (hitRumor && fitness > FITNESS_UNVERIFIABLE_CAP) {
-        issues.push(`fitness ${fitness}→${FITNESS_UNVERIFIABLE_CAP}（thesis 含传闻/未证实信息）`);
-        fitness = FITNESS_UNVERIFIABLE_CAP;
     }
     // 规则 3：deal_breaker 一致性。deal_breaker=true 意味灾难性风险，
     // overall_risk 必须是 high。
@@ -101,6 +78,12 @@ function applyQualityGate(analyst, risk, data) {
     // 规则 6：thesis 过短。LLM 敷衍（如只回 "好"），下游无法据 thesis 复盘。
     if (thesis.trim().length < 20) {
         issues.push(`thesis 过短（${thesis.trim().length} 字符），可能敷衍`);
+    }
+    // 规则 8（标注型，趋势模式新增）：传闻标注。thesis 明示"未经证实"类信息，
+    // 不钳制 fitness（趋势模式可做传闻驱动的动量），但标注让 rebalancer 知道不确定性。
+    const hitRumor = RUMOR_TERMS.some(t => thesis.includes(t));
+    if (hitRumor) {
+        issues.push("thesis 含传闻/未证实信息，驱动逻辑不确定性较高");
     }
     return {
         analyst: { ...analyst, fitness_score: fitness },

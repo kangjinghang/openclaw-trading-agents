@@ -32,17 +32,17 @@ describe("formatAnalystPrompt", () => {
     expect(prompt).toContain("英伟达认证");
   });
 
-  it("包含评分锚点（5 档标准，对齐下游阈值）", () => {
+  it("包含评分锚点（趋势模式：驱动逻辑强度 5 档标准）", () => {
     const prompt = formatAnalystPrompt({
       ticker: "SZ300319", name: "麦捷科技", sector: "电子",
       kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 },
       news: [], hot_money: { northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" },
       fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "" },
     });
-    // 锚点关键词（对齐下游 ≥8 BUY / ≤5 减仓 / ≤6 不买 阈值）
-    expect(prompt).toContain("业绩已兑现");
-    expect(prompt).toContain("传闻未证实");
-    expect(prompt).toContain("零营收");
+    // 趋势模式锚点关键词（驱动逻辑强度评分，对齐下游 ≥4 BUY 阈值）
+    expect(prompt).toContain("驱动逻辑");
+    expect(prompt).toContain("趋势健康");
+    expect(prompt).toContain("纯资金炒作");
     expect(prompt).toContain("严格对齐");
   });
 
@@ -245,7 +245,7 @@ describe("buildStockReport", () => {
 // 核心价值点：LLM 编造数据给高 fitness，gate 基于真实 StockData 钳制，
 // 切断「幻觉数据 → 错误 fitness → 错误仓位」链路。
 describe("analyzeAll 确定性质量门控集成", () => {
-  it("LLM 给 fitness=8 但 StockData PE=0 → 产出 fitness=6 + quality_notes 非空", async () => {
+  it("趋势模式：LLM 给 fitness=8 且 PE=0 → fitness 不再被钳制（保留 8）", async () => {
     const metas: CandidateMeta[] = [
       { ticker: "HALL", name: "幻觉股", is_held: false, current_weight: 0, days_held: 0, locked: false },
     ];
@@ -266,11 +266,8 @@ describe("analyzeAll 确定性质量门控集成", () => {
     };
     const reports = await analyzeAll(metas, dataByTicker, mockCaller);
     expect(reports).toHaveLength(1);
-    // 幻觉链断点：fitness 被代码从 8 钳到 6（position-calculator 查表 ≤6→0%，不会建仓）
-    expect(reports[0].fitness_score).toBe(6);
-    expect(reports[0].quality_notes).toBeDefined();
-    expect(reports[0].quality_notes!.length).toBeGreaterThan(0);
-    expect(reports[0].quality_notes![0]).toContain("数据缺失");
+    // 趋势模式：数据缺失不再钳制 fitness（不因 PE=0 否决）
+    expect(reports[0].fitness_score).toBe(8);
   });
 
   it("数据完备 + fitness=8 → gate 不介入，quality_notes 不写", async () => {
@@ -607,9 +604,10 @@ describe("formatAnalystPrompt 基本面深度数据注入", () => {
     expect(prompt).not.toContain("{consensus_eps}");
   });
 
-  it("评分原则含「季度业绩连续增长」硬证据条款（让新数据影响 fitness）", () => {
+  it("评分原则含「趋势健康度」参考条款（趋势模式：量价/MACD 影响 fitness）", () => {
     const prompt = formatAnalystPrompt(baseData());
-    expect(prompt).toMatch(/季度.*连续.*增长|连续.*增长.*季度|quarterly.*trend/i);
+    // 趋势模式：趋势健康度是 fitness 评分的重要参考
+    expect(prompt).toMatch(/趋势健康|量价齐升|MACD/i);
   });
 });
 

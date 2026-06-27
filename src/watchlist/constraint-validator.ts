@@ -134,15 +134,16 @@ export function validateRebalance(
     }
   }
 
-  // 规则 11: fitness 门槛 — fitness<7 的股禁止 BUY/ADD（等效入场信号拦截）
+  // 规则 11: fitness 门槛 — 趋势模式下 fitness<4 的股禁止 BUY/ADD（驱动逻辑极弱）
+  // 注：价值模式门槛是 7，趋势模式降到 4（小分给小仓，靠止损退出不靠否决）
   if (ctx.fitnessByTicker) {
     for (const a of plan.actions) {
       if (a.action !== "BUY" && a.action !== "ADD") continue;
       const fitness = ctx.fitnessByTicker.get(a.ticker);
-      if (typeof fitness === "number" && fitness < 7) {
+      if (typeof fitness === "number" && fitness < 4) {
         violations.push({
           rule: "11. fitness 门槛",
-          detail: `${a.ticker} fitness=${fitness}<7，禁止 ${a.action}（需等待更高评分或数据改善）`,
+          detail: `${a.ticker} fitness=${fitness}<4，禁止 ${a.action}（驱动逻辑极弱）`,
         });
       }
     }

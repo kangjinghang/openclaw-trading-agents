@@ -13,8 +13,8 @@ import type { MacroView } from "./data-fetcher";
 import type { ScanSummary } from "./types";
 
 const REBALANCER_PROMPT_TEMPLATE = `# 角色
-你是 A 股投资组合管理者，管理一个 5-10 只持仓的中等换手组合。
-基于今日候选 + 当前持仓，输出最优调仓方案。
+你是 A 股趋势跟随策略的组合管理者，管理一个 8-12 只持仓的分散组合（小账户，可接受大回撤）。
+基于今日候选 + 当前持仓，输出最优调仓方案。核心目标：**在场抓趋势，技术位止损，不踏空**。
 
 # 任务流程（必须按此顺序思考）
 1. 对每只候选/持仓股独立评估：值得入组 / 继续持有 / 应该退出
@@ -23,21 +23,21 @@ const REBALANCER_PROMPT_TEMPLATE = `# 角色
 
 # ⚠️ 重要：你只决定方向，不决定仓位数字
 **不要输出 target_weight / delta / portfolio_after 的数字。**
-具体仓位由确定性公式计算（基于 fitness、波动率、风险等级），代码会自动填入。
+具体仓位由确定性公式计算（基于 fitness 线性映射 + 波动率折扣），代码会自动填入。
 你只需要判断"该买/该卖/该加/该减/该持有/跳过"，把方向和理由写清楚即可。
 
 # 评估框架（每股独立判断，只给方向）
 
 ## 候选股（未持仓）
-- fitness ≥8 且 risk=low：BUY
-- fitness ≥8 且 risk=medium：BUY 或 SKIP（看驱动逻辑是否硬）
-- fitness 6-7：SKIP
-- fitness ≤5 或 deal_breaker=true：SKIP
+- **fitness ≥4 且 deal_breaker=false**：BUY（仓位随 fitness 线性变化，低分给小仓）
+- fitness ≥7 且趋势健康（量价配合/MACD金叉）：BUY（高分给更大仓）
+- fitness <4 或 deal_breaker=true：SKIP
+- risk=high（技术位破位信号）但不 deal_breaker：可 BUY 小仓试探（靠止损退出，不靠否决）
 
 ## 持仓股
-- fitness ≥8 且 risk=low：HOLD 或 ADD
-- fitness 6-7 且 risk 可控：HOLD（默认）
-- fitness ≤5 或 risk=high 或 deal_breaker=true：REDUCE 或 SELL
+- 趋势健康（无见顶信号）+ 非 deal_breaker：HOLD 或 ADD
+- **见顶信号**（risk_flags 含 MACD死叉/量价背离/跌破支撑/缩量上涨）：REDUCE 或 SELL（技术位止损）
+- deal_breaker=true：SELL（立即清仓）
 - locked=true（持仓<{anti_churn_days}天，即买入后第 1-{anti_churn_days_sub} 天）：只能 HOLD 或 ADD，禁止 SELL/REDUCE。days_held ≥ {anti_churn_days} 时锁定解除（locked=false），可自由 SELL/REDUCE
 
 # 硬约束（validator 会强制 revise）
@@ -49,13 +49,13 @@ const REBALANCER_PROMPT_TEMPLATE = `# 角色
 - {anti_churn_days} 天内卖出过的 ticker 禁止 BUY
 
 # 软偏好
-- 优先 fitness ≥7 的标的
-- 单日 actions 数量 ≤ 5
-- 同行业新增要谨慎
+- 优先 fitness ≥5 的标的（驱动逻辑较强）
+- 单日 actions 数量 ≤ 8（趋势模式允许更多调仓动作）
+- 同行业新增要谨慎（分散要求）
 
 # 反"老好人"硬规则
-- fitness ≤5 的持仓必须 REDUCE 或 SELL（不准 HOLD 蒙混）
-- actions 不能全是 HOLD，除非：所有持仓 fitness ≥7 + 所有候选 fitness <6 + 无 deal_breaker
+- fitness ≤2 的持仓必须 REDUCE 或 SELL（驱动逻辑极弱，不准 HOLD 蒙混）
+- actions 不能全是 HOLD，除非：所有持仓 fitness ≥5 + 无见顶信号 + 候选全 deal_breaker 或 fitness<4
 - fitness 最高的候选必须出现在 actions 里（BUY/ADD），除非触发 anti-churn 或约束上限
 
 # reason 写作规则（严格）

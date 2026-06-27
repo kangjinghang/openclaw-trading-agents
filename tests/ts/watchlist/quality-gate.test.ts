@@ -51,37 +51,30 @@ describe("applyQualityGate — 基准（不误伤）", () => {
   });
 });
 
-// ── 规则 1：数据缺失封顶 ──────────────────────────────────
-describe("规则 1：数据缺失封顶", () => {
-  it("PE=0 + fitness=8 → clamp 6", () => {
+// ── 规则 1：数据缺失（趋势模式已移除钳制）──────────────────
+describe("规则 1：数据缺失（趋势模式不钳制）", () => {
+  it("PE=0 + fitness=8 → 不再 clamp（趋势模式允许数据缺失的股）", () => {
     const r = applyQualityGate(makeAnalyst({ fitness_score: 8 }), makeRisk(), makeStockData({ fund: { pe: 0 } }));
-    expect(r.analyst.fitness_score).toBe(6);
-    expect(r.issues[0]).toContain("PE");
-    expect(r.issues[0]).toContain("8→6");
-  });
-
-  it("数据缺失但 fitness≤6 → 不触发", () => {
-    const r = applyQualityGate(makeAnalyst({ fitness_score: 5 }), makeRisk(), makeStockData({ fund: { pe: 0, np_q1: 0 } }));
-    expect(r.analyst.fitness_score).toBe(5);
-    expect(r.issues).toEqual([]);
+    expect(r.analyst.fitness_score).toBe(8);  // 趋势模式：不因数据缺失否决
   });
 });
 
-// ── 规则 2：传闻词封顶 ────────────────────────────────────
-describe("规则 2：传闻/未证实词封顶", () => {
-  it("thesis 含「传闻」+ fitness=9 → clamp 6", () => {
+// ── 规则 2：传闻词（趋势模式：标注不钳制）──────────────────
+describe("规则 2：传闻/未证实词（趋势模式标注不钳制）", () => {
+  it("thesis 含「传闻」+ fitness=9 → 标注但不 clamp", () => {
     const r = applyQualityGate(
       makeAnalyst({ thesis: "英伟达 PTFE 供货为市场传闻，尚未官宣", fitness_score: 9 }),
       makeRisk(), makeStockData());
-    expect(r.analyst.fitness_score).toBe(6);
+    expect(r.analyst.fitness_score).toBe(9);  // 趋势模式：传闻可驱动动量，不否决
+    expect(r.issues.some(i => i.includes("传闻"))).toBe(true);  // 但标注不确定性
   });
 
-  it("正常前瞻表述（预计订单交付）→ 不误伤", () => {
+  it("正常前瞻表述（预计订单交付）→ 不标注", () => {
     const r = applyQualityGate(
       makeAnalyst({ thesis: "预计 Q3 订单开始批量交付，新增产能已就绪投产", fitness_score: 8 }),
       makeRisk(), makeStockData());
     expect(r.analyst.fitness_score).toBe(8);
-    expect(r.issues).toEqual([]);
+    expect(r.issues.some(i => i.includes("传闻"))).toBe(false);
   });
 });
 

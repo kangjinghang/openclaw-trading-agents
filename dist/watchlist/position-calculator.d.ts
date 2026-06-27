@@ -4,16 +4,18 @@ import type { ActionType, RebalanceConstraints, RebalancePlan, StockReport } fro
  *  与 rebalance-types.ts Action.priority 注释一致。 */
 export declare function actionPriority(action: ActionType): number;
 /** fitness 分数 → 基础仓位（折扣前）。
- *  平衡档：9分→7% / 8分→5% / 7分→3% / ≤6→0%（不买）。
- *  线性插值：8.5分 = 6%（5% + 2% × 0.5）。 */
+ *  趋势模式线性映射：fitness 全程有仓位，无"≤6 不买"断崖。
+ *  每分 0.8%：fit3→2.4%, fit5→4%, fit7→5.6%, fit9→7.2%, fit10→8%。
+ *  受 singleNameCap（默认 10%）钳制。 */
 export declare function baseWeight(fitness: number): number;
 /** 波动率折扣：日线收益率标准差（单位 %，如 2.5 = 2.5%/日，由 computeVolatility 输出）。
  *  0（kline 失败/未知）→ ×0.6（最保守折扣，防"零风险"假象）。
  *  <2%/日 → ×1.0（大盘股），2-4% → ×0.8（成长股），>4% → ×0.6（题材/次新）。 */
 export declare function volatilityFactor(volatility: number): number;
-/** 风险因子：low ×1.0，medium ×0.6，high ×0.3。
- *  deal_breaker 不在这里返回，由上层强制改 action 为 SELL。 */
-export declare function riskFactor(overallRisk: "low" | "medium" | "high"): number;
+/** 趋势模式已移除 riskFactor——risk=high 靠技术位止损（risk prompt 输出退出信号
+ *  → rebalancer 触发 SELL/REDUCE），不靠仓位压缩。保留导出以避免下游 import 断裂
+ *  （返回固定 1.0，语义为"risk 不打折仓位"）。 */
+export declare function riskFactor(_overallRisk: "low" | "medium" | "high"): number;
 export interface PositionInput {
     action: ActionType;
     report: StockReport;
