@@ -219,6 +219,80 @@ describe("computePosition deal_breaker 强制清仓", () => {
   });
 });
 
+// ── 建仓回撤止损（initial stop）─────────────────────────────────────────────
+
+describe("computePosition 建仓回撤止损", () => {
+  // 国瓷场景：entry=100，建仓 1 天后跌到 92（-8%）→ 触发止损（阈值 7%）
+  const heldReport = (over: Partial<StockReport> = {}) => makeReport({
+    ticker: "SZ300285", name: "国瓷材料", is_held: true, current_weight: 0.15,
+    fitness_score: 5, overall_risk: "medium", deal_breaker: false, ...over,
+  });
+
+  it("建仓 1 天回撤 -8%（超 7% 阈值）→ 强制清仓", () => {
+    const r = computePosition({
+      action: "HOLD", report: heldReport(),
+      currentWeight: 0.15, volatility: 1, singleNameCap: 0.15,
+      entryPrice: 100, currentPrice: 92, daysHeld: 1,
+      initialStopDrawdown: 0.07, initialStopDays: 3,
+    });
+    expect(r.targetWeight).toBe(0);
+    expect(r.trace).toContain("建仓");
+    expect(r.trace).toContain("止损");
+  });
+
+  it("建仓 2 天回撤 -7.5%（超 7%）→ 强制清仓", () => {
+    const r = computePosition({
+      action: "HOLD", report: heldReport(),
+      currentWeight: 0.15, volatility: 1, singleNameCap: 0.15,
+      entryPrice: 100, currentPrice: 92.5, daysHeld: 2,
+      initialStopDrawdown: 0.07, initialStopDays: 3,
+    });
+    expect(r.targetWeight).toBe(0);
+  });
+
+  it("建仓 2 天回撤 -5%（未达 7% 阈值）→ 保持持仓", () => {
+    const r = computePosition({
+      action: "HOLD", report: heldReport(),
+      currentWeight: 0.15, volatility: 1, singleNameCap: 0.15,
+      entryPrice: 100, currentPrice: 95, daysHeld: 2,
+      initialStopDrawdown: 0.07, initialStopDays: 3,
+    });
+    expect(r.targetWeight).toBeCloseTo(0.15, 5);  // 保持当前仓位
+  });
+
+  it("建仓 5 天回撤 -10%（超窗口 3 天）→ 不触发，靠技术信号", () => {
+    // 超过 initial_stop_days 窗口，建仓回撤止损不生效，回到正常 HOLD 逻辑
+    const r = computePosition({
+      action: "HOLD", report: heldReport(),
+      currentWeight: 0.15, volatility: 1, singleNameCap: 0.15,
+      entryPrice: 100, currentPrice: 90, daysHeld: 5,
+      initialStopDrawdown: 0.07, initialStopDays: 3,
+    });
+    expect(r.targetWeight).toBeCloseTo(0.15, 5);  // 窗口外不触发
+  });
+
+  it("建仓回撤但 currentPrice 缺失 → 不触发（防御性）", () => {
+    const r = computePosition({
+      action: "HOLD", report: heldReport(),
+      currentWeight: 0.15, volatility: 1, singleNameCap: 0.15,
+      entryPrice: 100, currentPrice: 0, daysHeld: 1,  // currentPrice=0（kline 失败）
+      initialStopDrawdown: 0.07, initialStopDays: 3,
+    });
+    expect(r.targetWeight).toBeCloseTo(0.15, 5);  // 数据缺失不误判
+  });
+
+  it("候选股（非持仓）不触发建仓回撤止损", () => {
+    const r = computePosition({
+      action: "BUY", report: makeReport({ is_held: false }),
+      currentWeight: 0, volatility: 1, singleNameCap: 0.15,
+      entryPrice: 100, currentPrice: 92, daysHeld: 1,
+      initialStopDrawdown: 0.07, initialStopDays: 3,
+    });
+    // 候选股 is_held=false，建仓回撤不生效，走正常 BUY 逻辑
+    expect(r.targetWeight).toBeGreaterThan(0);
+  });
+});
+
 // ── applyPositions 批量改写 ─────────────────────────────────────────────────
 
 describe("applyPositions 批量改写 plan", () => {

@@ -71,6 +71,25 @@ function computePosition(input) {
     if (report.deal_breaker) {
         return { targetWeight: 0, trace: `deal_breaker 强制清仓（AI 出 ${action}，致命雷覆盖）` };
     }
+    // 建仓回撤止损（initial stop）：建仓 ≤N 天内从 entry_price 回撤 ≥X% → 强制清仓。
+    // 补技术信号盲区：建仓次日大跌但未跌破支撑/量比正常时，纯技术信号不触发（国瓷案例）。
+    // 与 deal_breaker 同模式：机械规则，确定性执行，不依赖 PM 判断。
+    if (report.is_held
+        && input.entryPrice && input.entryPrice > 0
+        && input.currentPrice && input.currentPrice > 0
+        && typeof input.daysHeld === "number"
+        && typeof input.initialStopDrawdown === "number"
+        && typeof input.initialStopDays === "number"
+        && input.daysHeld <= input.initialStopDays) {
+        const drawdown = (input.currentPrice / input.entryPrice - 1); // 负值 = 亏损
+        if (drawdown <= -input.initialStopDrawdown) {
+            const pct = (drawdown * 100).toFixed(1);
+            return {
+                targetWeight: 0,
+                trace: `建仓${input.daysHeld}天回撤${pct}% ≤ -${(input.initialStopDrawdown * 100).toFixed(0)}%，强制止损`,
+            };
+        }
+    }
     // HOLD：不动，保持当前仓位（deal_breaker 已在上一步拦截）
     if (action === "HOLD") {
         return { targetWeight: currentWeight, trace: `HOLD：维持当前 ${(currentWeight * 100).toFixed(1)}%` };
@@ -146,15 +165,23 @@ function applyPositions(plan, ctx) {
             currentWeight,
             volatility,
             singleNameCap,
+            entryPrice: ctx.entryPriceByTicker?.get(a.ticker),
+            currentPrice: ctx.currentPriceByTicker?.get(a.ticker),
+            daysHeld: ctx.daysHeldByTicker?.get(a.ticker),
+            initialStopDrawdown: ctx.constraints.initial_stop_drawdown,
+            initialStopDays: ctx.constraints.initial_stop_days,
         });
         // 根据计算结果对齐 action 类型（防 validator 规则 8 误报 + 下游一致性）：
-        // - deal_breaker 强制 target=0 → 改 action 为 SELL
-        // - REDUCE 小仓位清仓（target=0）→ 改 action 为 SELL（与 deal_breaker 同语义：
+        // - deal_breaker / 建仓回撤止损 强制 target=0 → 改 action 为 SELL
+        // - REDUCE 小仓位清仓（target=0）→ 改 action 为 SELL（同语义：
         //   target=0 即退出，应记入 recent_sells 防 anti-churn 买锁漏判，execution-planner
         //   也按 SELL 优先级=1 先释放资金）
         // - 其他情况保持 AI 给的方向
         let resolvedAction = a.action;
-        if (result.targetWeight === 0 && (report.deal_breaker || a.action === "REDUCE")) {
+        if (result.targetWeight === 0 && (report.deal_breaker
+            || a.action === "REDUCE"
+            || result.trace.includes("建仓") && result.trace.includes("止损") // 建仓回撤止损
+        )) {
             resolvedAction = "SELL";
         }
         const newAction = {

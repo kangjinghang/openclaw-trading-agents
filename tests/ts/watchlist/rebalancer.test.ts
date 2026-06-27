@@ -349,6 +349,45 @@ describe("rebalancePipeline (integration)", () => {
   // （规则 6 的 "止损豁免不滥用：locked + stopLossSignal=false → 仍禁止 SELL"），
   // 端到端层面依赖 selectCandidates 的 locked 计算与 revise 行为，留待独立验证。
 
+  it("建仓回撤止损：建仓次日 -8%（未破位、risk=medium）→ 代码强制 SELL", async () => {
+    // 国瓷场景：entry=100，06-23 收盘 92（-8%），但支撑 90.78 未破、量比正常。
+    // 纯技术信号不触发（risk=medium），靠建仓回撤止损（阈值 7%、窗口 3 天）兜底。
+    const scan: ScanSummary = {
+      scan_date: "2026-06-24", total_candidates: 0,
+      groups: { LONG: { total: 0, ranked: 0, excluded: 0, fallback: false }, SHORT: { total: 0, pre_filter: 0, post_common_filter: 0, ranked: 0, excluded: 0, fallback: false } },
+      top_picks: [],
+    };
+    const holdings: Holdings = {
+      updated_at: "x", cash_pct: 0.85,
+      positions: [{ ticker: "SZ300285", name: "国瓷材料", weight: 0.15, entry_price: 100, entry_date: "2026-06-23", shares: 100, sector: "电子化学品" }],
+    };
+    const dataByTicker = new Map<string, StockData>([
+      ["SZ300285", { ticker: "SZ300285", name: "国瓷材料", sector: "电子化学品", kline: { pct_5d: -8, pct_20d: 10, support: 90.78, resistance: 105, volatility_20d: 0.035, volume_ratio_5_20: 1.06, last_close: 92 }, news: [], hot_money: { northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0 } }],
+    ]);
+
+    // shallow-analyzer：fitness 5，risk=medium（没破位、量正常，技术信号不触发）
+    const shallowCaller: ShallowLlmCaller = async ({ role }) => {
+      if (role === "analyst") return JSON.stringify({ thesis: "MLCC粉体", fitness_score: 5, data_freshness: "2026-06-24", key_signals: [], data_gaps: [] });
+      return JSON.stringify({ risk_flags: [{ flag: "估值偏高", severity: "中", detail: "PE较高" }], overall_risk: "medium", deal_breaker: false });
+    };
+    // PM 出 HOLD（未识别到风险），但代码应强制 SELL
+    const rebalanceCaller: RebalanceLlmCaller = async () => JSON.stringify({
+      evaluations: [{ ticker: "SZ300285", judgment: "HOLD", brief: "hold" }],
+      actions: [{ action: "HOLD", ticker: "SZ300285", name: "国瓷材料", reason: "hold" }],
+      summary: "hold",
+    });
+
+    const result = await rebalancePipeline({
+      scan, holdings, lastRebalance: null, currentDate: "2026-06-24",
+      shallowCaller, rebalanceCaller, dataByTicker,
+    });
+
+    expect(result.status).toBe("ok");
+    const action = result.rebalancer_output.actions.find(a => a.ticker === "SZ300285")!;
+    expect(action.action).toBe("SELL");      // 建仓回撤 -8% > 7% → 强制止损
+    expect(action.target_weight).toBe(0);
+  });
+
   it("现金不足：BUY 降级为 HOLD（保留现金下限）", async () => {
     const scan: ScanSummary = {
       scan_date: "2026-06-21", total_candidates: 1,

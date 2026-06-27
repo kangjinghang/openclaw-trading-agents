@@ -75,12 +75,14 @@ export interface KlineSummary {
   volatility_20d: number;
   /** 近5日均量 / 20日均量。<0.8 缩量，>1.2 放量。无 volume 数据 → 0 */
   volume_ratio_5_20: number;
+  /** 最新收盘价。建仓回撤止损用它算 (last_close/entry_price - 1)。 */
+  last_close: number;
 }
 
 /** 从 kline.py 输出解析 K 线摘要。容忍字段缺失。 */
 export function parseKline(raw: any): KlineSummary {
   const closes = extractCloses(raw);
-  if (closes.length < 2) return { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 };
+  if (closes.length < 2) return { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0, last_close: 0 };
   const volumes = extractVolumes(raw);
   const last = closes[closes.length - 1];
   const ago5 = closes.length > 5 ? closes[closes.length - 6] : closes[0];
@@ -93,6 +95,7 @@ export function parseKline(raw: any): KlineSummary {
     resistance: Math.max(...recent),
     volatility_20d: computeVolatility(closes, 20),
     volume_ratio_5_20: computeVolumeRatio(volumes, 5, 20),
+    last_close: last,
   };
 }
 
@@ -475,7 +478,7 @@ export async function fetchStockData(
   const klineRaw = klineR?.data ?? null;
   const vpaText = klineR?.vpa;
   const macdData = klineR?.macd;
-  const kline = klineRaw ? parseKline(klineRaw) : { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 };
+  const kline = klineRaw ? parseKline(klineRaw) : { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0, last_close: 0 };
   const news = newsR?.data ? parseNews(newsR.data) : [];
   const newsLayerStats = newsR?.data ? parseNewsLayerStats(newsR.data) ?? undefined : undefined;
   const fund = fundR?.data ? parseFundamentals(fundR.data) : { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "", quarterly_trends: undefined, consensus_eps: undefined };

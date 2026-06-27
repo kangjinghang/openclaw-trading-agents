@@ -208,6 +208,11 @@ export interface RebalanceConstraints {
   single_sector: number;
   daily_turnover: number;
   cash_reserve: number;
+  /** 建仓回撤止损阈值：建仓后 initial_stop_days 天内，从 entry_price 回撤 ≥ 此值 → 强制 SELL。
+   *  补技术信号的盲区：建仓次日大跌但未跌破支撑位/量比正常时，纯技术信号不触发。 */
+  initial_stop_drawdown: number;
+  /** 建仓回撤止损观察窗口（天）。超过后靠技术信号（MACD死叉/破位/量价背离）。 */
+  initial_stop_days: number;
 }
 
 export interface RebalanceConfig {
@@ -231,6 +236,8 @@ export const DEFAULT_REBALANCE_CONFIG: RebalanceConfig = {
     single_sector: 0.25,  // 单行业 25%（分散）
     daily_turnover: 0.40, // 日换手 40%（趋势策略需灵活调仓）
     cash_reserve: 0.05,   // 现金下限 5%（趋势模式要在场，少留现金）
+    initial_stop_drawdown: 0.07,  // 建仓回撤止损 7%（国瓷 -8.3% 能触发，香农正常波动 <5% 不误伤）
+    initial_stop_days: 3,          // 建仓后 3 天内回撤超阈值 → 强制清仓；超过靠技术信号
   },
   anti_churn_days: 7,
   max_revise_retries: 2,

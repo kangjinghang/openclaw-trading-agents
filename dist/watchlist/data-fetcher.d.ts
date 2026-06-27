@@ -14,6 +14,8 @@ export interface KlineSummary {
     volatility_20d: number;
     /** 近5日均量 / 20日均量。<0.8 缩量，>1.2 放量。无 volume 数据 → 0 */
     volume_ratio_5_20: number;
+    /** 最新收盘价。建仓回撤止损用它算 (last_close/entry_price - 1)。 */
+    last_close: number;
 }
 /** 从 kline.py 输出解析 K 线摘要。容忍字段缺失。 */
 export declare function parseKline(raw: any): KlineSummary;

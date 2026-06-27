@@ -23,11 +23,11 @@ describe("parseKline", () => {
   });
 
   it("空 data → 全 0", () => {
-    expect(parseKline({ data: [] })).toEqual({ pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 });
+    expect(parseKline({ data: [] })).toEqual({ pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0, last_close: 0 });
   });
 
   it("无 data/closes 字段 → 全 0（防御性）", () => {
-    expect(parseKline({})).toEqual({ pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 });
+    expect(parseKline({})).toEqual({ pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0, last_close: 0 });
   });
 
   it("波动率：高波动 > 低波动", () => {

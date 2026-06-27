@@ -427,18 +427,36 @@ export async function rebalancePipeline(input: RebalancePipelineInput): Promise<
   for (const r of reports) reportsByTicker.set(r.ticker, r);
 
   // held map：locked + stopLossSignal（止损豁免 anti-churn 锁）
-  // 止损信号定义：overall_risk=high，或有任一 severity=高 的 risk_flag。
-  // 趋势策略：破位（MACD死叉/量价背离/跌破支撑）必须能及时卖，不能被 <7天 锁堵死。
+  // 止损信号定义（任一即触发，强制退出不是 churn）：
+  //   ① overall_risk=high 或有 severity=高 的 risk_flag（技术破位/重大风险）
+  //   ② deal_breaker=true（造假/退市/重大违规，强制清仓）
+  //   ③ 建仓回撤止损：建仓 ≤initial_stop_days 天内，从 entry_price 回撤 ≥initial_stop_drawdown
+  //      （补技术信号盲区：建仓次日大跌但未跌破支撑/量比正常，如国瓷 -8.3% 未破位）
+  //   ④ 数据失败的持仓（fallback report）恒真——数据失败即风险，不该被锁住不能动
+  //   ①③ 必须在此预判，因为 validator 检查 anti-churn 锁时（revise 内）position-calculator
+  //      还没跑，建仓回撤是否触发未知。这里预判 → stopLossSignal=true → 锁放行 → 让
+  //      computePosition 真正触发 SELL。
+  const entryPriceByPos = new Map<string, number>();
+  for (const p of input.holdings.positions) entryPriceByPos.set(p.ticker, p.entry_price);
   const held = new Map<string, { days_held: number; locked: boolean; stopLossSignal?: boolean }>();
   for (const m of metas) {
     if (!m.is_held) continue;
     const report = reportsByTicker.get(m.ticker);
-    // fallback report（持仓股数据失败时）overall_risk=high，stopLossSignal 恒真——
-    // 数据失败的持仓本身就是风险，不该被锁住不能动
-    const stopLossSignal = report
-      ? report.overall_risk === "high"
+    let stopLossSignal: boolean;
+    if (!report) {
+      stopLossSignal = true;  // ④ 数据失败
+    } else {
+      const entry = entryPriceByPos.get(m.ticker);
+      const cur = dataByTicker.get(m.ticker)?.kline.last_close;
+      // ③ 建仓回撤预判：建仓 ≤N 天 + 回撤 ≥X%
+      const initialStop = Boolean(entry && entry > 0 && cur && cur > 0
+        && m.days_held <= config.constraints.initial_stop_days
+        && (cur / entry - 1) <= -config.constraints.initial_stop_drawdown);
+      stopLossSignal = report.overall_risk === "high"            // ① 技术破位
         || report.risk_flags.some(f => f.severity === "高")
-      : true;
+        || report.deal_breaker                                     // ② 致命雷
+        || initialStop;                                            // ③ 建仓回撤
+    }
     held.set(m.ticker, { days_held: m.days_held, locked: m.locked, stopLossSignal });
   }
   // anti-churn 买锁：最近 N 天内卖出过的 ticker 禁止 BUY
@@ -474,16 +492,26 @@ export async function rebalancePipeline(input: RebalancePipelineInput): Promise<
   // 4. rebalancer + revise（接入确定性仓位计算器）
   const prompt = formatRebalancerPrompt(reports, input.holdings, input.lastRebalance, config.constraints, config.anti_churn_days, input.macroView);
 
-  // 4a. 构造仓位计算器上下文：波动率（来自 data-fetcher）+ reports + 约束
+  // 4a. 构造仓位计算器上下文：波动率 + 当前价（来自 data-fetcher）+ reports + 约束 + 建仓数据
   const volatilityByTicker = new Map<string, number>();
+  const currentPriceByTicker = new Map<string, number>();
   for (const [ticker, data] of dataByTicker) {
     volatilityByTicker.set(ticker, data.kline.volatility_20d);
+    currentPriceByTicker.set(ticker, data.kline.last_close);
   }
+  // 建仓回撤止损所需：entry_price（持仓股）+ days_held（selectCandidates 已算）
+  const entryPriceByTicker = new Map<string, number>();
+  for (const p of input.holdings.positions) entryPriceByTicker.set(p.ticker, p.entry_price);
+  const daysHeldByTicker = new Map<string, number>();
+  for (const [ticker, h] of held) daysHeldByTicker.set(ticker, h.days_held);
   const positionCtx: ApplyPositionsContext = {
     reportsByTicker,
     volatilityByTicker,
     constraints: config.constraints,
     initialCash: input.holdings.cash_pct,
+    entryPriceByTicker,
+    currentPriceByTicker,
+    daysHeldByTicker,
   };
 
   // 4b. 构造 currentWeight 映射（持仓股才有，候选股=0）

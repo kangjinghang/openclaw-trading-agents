@@ -177,6 +177,11 @@ export interface RebalanceConstraints {
     single_sector: number;
     daily_turnover: number;
     cash_reserve: number;
+    /** 建仓回撤止损阈值：建仓后 initial_stop_days 天内，从 entry_price 回撤 ≥ 此值 → 强制 SELL。
+     *  补技术信号的盲区：建仓次日大跌但未跌破支撑位/量比正常时，纯技术信号不触发。 */
+    initial_stop_drawdown: number;
+    /** 建仓回撤止损观察窗口（天）。超过后靠技术信号（MACD死叉/破位/量价背离）。 */
+    initial_stop_days: number;
 }
 export interface RebalanceConfig {
     top_n: number;

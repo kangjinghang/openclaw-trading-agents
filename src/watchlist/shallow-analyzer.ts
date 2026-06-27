@@ -122,7 +122,7 @@ export interface StockData {
   ticker: string;
   name: string;
   sector: string;
-  kline: { pct_5d: number; pct_20d: number; support: number; resistance: number; volatility_20d: number; volume_ratio_5_20: number };
+  kline: { pct_5d: number; pct_20d: number; support: number; resistance: number; volatility_20d: number; volume_ratio_5_20: number; last_close: number };
   /** 个股新闻（最多 5 条，含标题/正文摘要/时间）。
    *  旧实现是 string[]（只有标题），现升级为 NewsItem[] 让 LLM 判断时效性 + 标题党。 */
   news: NewsItem[];

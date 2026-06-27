@@ -118,7 +118,7 @@ function computeVolumeRatio(volumes, recentDays = 5, windowDays = 20) {
 function parseKline(raw) {
     const closes = extractCloses(raw);
     if (closes.length < 2)
-        return { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 };
+        return { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0, last_close: 0 };
     const volumes = extractVolumes(raw);
     const last = closes[closes.length - 1];
     const ago5 = closes.length > 5 ? closes[closes.length - 6] : closes[0];
@@ -131,6 +131,7 @@ function parseKline(raw) {
         resistance: Math.max(...recent),
         volatility_20d: computeVolatility(closes, 20),
         volume_ratio_5_20: computeVolumeRatio(volumes, 5, 20),
+        last_close: last,
     };
 }
 /** news.py 单条 article 的 content 原始截断 300 字（skills/trading-news/scripts/news.py:57），
@@ -482,7 +483,7 @@ async function fetchStockData(ticker, name, sector, rankerThesis, options) {
     const klineRaw = klineR?.data ?? null;
     const vpaText = klineR?.vpa;
     const macdData = klineR?.macd;
-    const kline = klineRaw ? parseKline(klineRaw) : { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0 };
+    const kline = klineRaw ? parseKline(klineRaw) : { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0, volume_ratio_5_20: 0, last_close: 0 };
     const news = newsR?.data ? parseNews(newsR.data) : [];
     const newsLayerStats = newsR?.data ? parseNewsLayerStats(newsR.data) ?? undefined : undefined;
     const fund = fundR?.data ? parseFundamentals(fundR.data) : { pe: 0, pb: 0, rev_q1: 0, np_q1: 0, industry: "", quarterly_trends: undefined, consensus_eps: undefined };

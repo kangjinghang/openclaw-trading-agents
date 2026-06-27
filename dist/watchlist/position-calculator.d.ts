@@ -22,6 +22,16 @@ export interface PositionInput {
     currentWeight: number;
     volatility: number;
     singleNameCap: number;
+    /** 建仓价（持仓股的 Position.entry_price）。候选股无此字段。 */
+    entryPrice?: number;
+    /** 当前收盘价（StockData.kline.last_close）。 */
+    currentPrice?: number;
+    /** 持仓天数（selectCandidates 算好的 days_held）。 */
+    daysHeld?: number;
+    /** 建仓回撤止损阈值（constraints.initial_stop_drawdown，如 0.07 = -7%）。 */
+    initialStopDrawdown?: number;
+    /** 建仓回撤止损窗口（constraints.initial_stop_days，如 3 天）。 */
+    initialStopDays?: number;
 }
 export interface PositionResult {
     /** 最终目标仓位（0-1） */
@@ -41,6 +51,12 @@ export interface ApplyPositionsContext {
     constraints: RebalanceConstraints;
     /** 初始现金（holdings.cash_pct），用于现金排队 */
     initialCash: number;
+    /** ticker → entry_price（持仓股的建仓价，候选股无此键） */
+    entryPriceByTicker?: Map<string, number>;
+    /** ticker → 当前收盘价（StockData.kline.last_close） */
+    currentPriceByTicker?: Map<string, number>;
+    /** ticker → 持仓天数（selectCandidates 算好的 days_held） */
+    daysHeldByTicker?: Map<string, number>;
 }
 /** 改写 plan 的所有 actions：把 LLM 给的 target_weight/delta 替换为公式算出的值。
  *  同时重算 portfolio_after 和 cash_pct，保证 validator 规则 1（权重和=1）通过。
