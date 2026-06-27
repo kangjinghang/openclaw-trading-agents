@@ -125,9 +125,15 @@ export function mapIndustryToL1(industry: string | undefined | null): string {
   if (!industry) return "";
   // 一级名直接命中（含"电子"这种东财偶尔返回的一级名）
   if (SW_L1_INDUSTRIES.has(industry)) return industry;
-  // 二级→一级映射
+  // 二级→一级映射（精确匹配，如"军工电子Ⅱ"）
   const l1 = SW_L2_TO_L1[industry];
   if (l1) return l1;
+  // Ⅱ后缀容错：东财 datacenter 的 BOARD_NAME 实测会省略申万二级名的罗马数字Ⅱ后缀
+  // （如返回"电子化学品"而非"电子化学品Ⅱ"）。先试加Ⅱ，再试去Ⅱ，覆盖双向不一致。
+  const withSuffix = SW_L2_TO_L1[industry + "Ⅱ"];
+  if (withSuffix) return withSuffix;
+  const withoutSuffix = SW_L2_TO_L1[industry.replace(/Ⅱ$/, "")];
+  if (withoutSuffix) return withoutSuffix;
   // 兜底：未知标签原样返回（如"未分类"、东贷新增的非标板块名）
   return industry;
 }

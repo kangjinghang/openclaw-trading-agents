@@ -54,6 +54,16 @@ describe("mapIndustryToL1: 兜底", () => {
     expect(mapIndustryToL1("东财自定义名")).toBe("东财自定义名");
   });
 
+  it("东财 BOARD_NAME 省略Ⅱ后缀也能命中（回测真实发现）", () => {
+    // 东财 datacenter 的 BOARD_NAME 实测会省略申万二级名的罗马数字Ⅱ
+    // 如国瓷材料返回"电子化学品"而非"电子化学品Ⅱ" → 必须仍能映射到电子
+    expect(mapIndustryToL1("电子化学品")).toBe("电子");
+    expect(mapIndustryToL1("其他电子")).toBe("电子");
+    expect(mapIndustryToL1("白酒")).toBe("食品饮料");
+    expect(mapIndustryToL1("中药")).toBe("医药生物");
+    expect(mapIndustryToL1("燃气")).toBe("公用事业");
+  });
+
   it("幂等：一级名再映射仍是自己", () => {
     for (const l1 of SW_L1_INDUSTRIES) {
       expect(mapIndustryToL1(mapIndustryToL1(l1))).toBe(l1);
