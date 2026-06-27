@@ -92,7 +92,12 @@ if socket.has_ipv6:
 
 # ── Eastmoney anti-ban ──────────────────────────────────────────────
 _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+# A 股数据源均为国内 API（东财/新浪/百度/腾讯），无需走代理。但 Windows 系统
+# 代理（如 Clash 127.0.0.1:7890）若配置但未运行，requests 会读注册表/环境变量
+# 尝试连代理 → WinError 10061 连接拒绝 → 子源全部失败。trust_env=False 让
+# Session/get 忽略系统代理配置，直连国内 API。
 _EM_SESSION = requests.Session()
+_EM_SESSION.trust_env = False  # 忽略系统代理（Clash 等未运行时不连）
 _EM_SESSION.headers.update({"User-Agent": _UA})
 _EM_MIN_INTERVAL = float(os.environ.get("EM_MIN_INTERVAL", "1.0"))
 _em_last_call = [0.0]
@@ -154,8 +159,11 @@ def http_get(url, **kwargs):
 
     Drop-in replacement for requests.get (same Response return type) used for
     non-eastmoney sources (sina / 10jqka / cls / baidu). All kwargs forward to
-    requests.get.
+    requests.get. 显式禁用代理（proxies={}）——A 股数据源均为国内 API，直连即可，
+    避免 Windows 系统代理（如 Clash 127.0.0.1:7890）未运行时连接失败。
     """
+    if "proxies" not in kwargs:
+        kwargs["proxies"] = {"http": None, "https": None}
     return _with_retry(lambda: requests.get(url, **kwargs))
 
 
@@ -238,7 +246,10 @@ def tencent_quote(codes):
     url = "https://qt.gtimg.cn/q=" + ",".join(prefixed)
     req = urllib.request.Request(url)
     req.add_header("User-Agent", "Mozilla/5.0")
-    resp = urllib.request.urlopen(req, timeout=10)
+    # 显式禁用代理（国内 API 直连，避免系统代理未运行时失败）
+    no_proxy_handler = urllib.request.ProxyHandler({})
+    opener = urllib.request.build_opener(no_proxy_handler)
+    resp = opener.open(req, timeout=10)
     raw_bytes = resp.read()
     raw = raw_bytes.decode("gbk")
     status_code = resp.status

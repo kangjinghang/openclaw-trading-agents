@@ -21,8 +21,17 @@ exports.LLM_TOTAL_DEADLINE_MS = 8 * 60 * 1000;
 exports.LLM_DEFAULT_MAX_TOKENS = 32000;
 /** Base delay before LLM retry (ms), actual = base + random(0, base) */
 exports.LLM_RETRY_DELAY_MS = 1000;
-/** Timeout for Python data scripts (30 seconds) */
-exports.PYTHON_SCRIPT_TIMEOUT_MS = 30000;
+/** Timeout for Python data scripts (90 seconds).
+ *
+ * 历史：原 30s 够 kline/news/hot_money，但 fundamentals.py 串行拉 10 个子源
+ * （tencent + mootdx + em_datacenter + em_quarterly + em_consensus + sina×3 +
+ * baidu_valuation + market_sentiment + pywencai_capability），实测 60-66s。
+ * pywencai 单项就 24s（同花顺问财内部浏览器渲染，已知慢）。30s 必然超时，
+ * retry 仍 30s 超时 → fundamentals 恒失败 → fitness 数据缺失。
+ * 趋势模式下数据完整性更重要（驱动逻辑判断依赖基本面交叉验证），故放宽。
+ * 代价：12 股串行最坏 18 分钟，但并行 5 只约 3-4 分钟可接受。
+ * 根治方向：fundamentals.py 子源并行化（ThreadPoolExecutor），可降到 max(24s)。 */
+exports.PYTHON_SCRIPT_TIMEOUT_MS = 90000;
 /** Stagger jitter between data script starts (0~1500ms, for Eastmoney rate limit) */
 exports.DATA_FETCH_STAGGER_MS = 1500;
 /** Stagger jitter between LLM calls (0~2000ms, for API rate limit avoidance) */
