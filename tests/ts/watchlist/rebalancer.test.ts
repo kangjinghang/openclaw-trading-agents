@@ -306,6 +306,49 @@ describe("rebalancePipeline (integration)", () => {
     expect(result.rebalancer_output.portfolio_after.cash_pct).toBeCloseTo(1.0, 5); // 全现金
   });
 
+  it("止损豁免 anti-churn 锁：建仓 2 天 locked + risk=high（技术破位）→ SELL 放行", async () => {
+    // 场景：生益科技 06-22 建仓，06-24 跌破支撑 risk=high，但 locked（2天<7天）。
+    // 旧逻辑：anti-churn 锁禁止 SELL → 扛着亏。新逻辑：止损信号豁免锁 → 放行 SELL。
+    const scan: ScanSummary = {
+      scan_date: "2026-06-24", total_candidates: 0,
+      groups: { LONG: { total: 0, ranked: 0, excluded: 0, fallback: false }, SHORT: { total: 0, pre_filter: 0, post_common_filter: 0, ranked: 0, excluded: 0, fallback: false } },
+      top_picks: [],
+    };
+    const holdings: Holdings = {
+      updated_at: "x", cash_pct: 0.85,
+      // entry_date 06-22 → 06-24 仅 2 天 < anti_churn_days(7) → locked=true
+      positions: [{ ticker: "SH600183", name: "生益科技", weight: 0.15, entry_price: 184.5, entry_date: "2026-06-22", shares: 100, sector: "元件" }],
+    };
+    const dataByTicker = new Map<string, StockData>([
+      ["SH600183", { ticker: "SH600183", name: "生益科技", sector: "元件", kline: { pct_5d: -9, pct_20d: -5, support: 185, resistance: 200, volatility_20d: 0.03 }, news: [], hot_money: { northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0 } }],
+    ]);
+
+    // shallow-analyzer：fitness 仍高（基本面没坏），但 risk=high（技术破位，缩量下跌）
+    const shallowCaller: ShallowLlmCaller = async ({ role }) => {
+      if (role === "analyst") return JSON.stringify({ thesis: "覆铜板涨价逻辑", fitness_score: 7, data_freshness: "2026-06-24", key_signals: ["缩量下跌"], data_gaps: [] });
+      return JSON.stringify({ risk_flags: [{ flag: "缩量下跌", severity: "高", detail: "近2日放量跌破支撑" }], overall_risk: "high", deal_breaker: false });
+    };
+    // PM 正确识别破位，出 SELL
+    const rebalanceCaller: RebalanceLlmCaller = async () => JSON.stringify({
+      evaluations: [{ ticker: "SH600183", judgment: "SELL", brief: "缩量跌破支撑，技术破位止损" }],
+      actions: [{ action: "SELL", ticker: "SH600183", name: "生益科技", reason: "破位止损" }],
+      summary: "止损",
+    });
+
+    const result = await rebalancePipeline({
+      scan, holdings, lastRebalance: null, currentDate: "2026-06-24",
+      shallowCaller, rebalanceCaller, dataByTicker,
+    });
+
+    expect(result.status).toBe("ok");
+    const action = result.rebalancer_output.actions.find(a => a.ticker === "SH600183")!;
+    expect(action.action).toBe("SELL");           // 止损豁免放行，未被 anti-churn 锁拦截
+    expect(action.target_weight).toBe(0);
+  });
+  // 注："无止损信号时仍锁定"的对比场景由 constraint-validator 单元测试覆盖
+  // （规则 6 的 "止损豁免不滥用：locked + stopLossSignal=false → 仍禁止 SELL"），
+  // 端到端层面依赖 selectCandidates 的 locked 计算与 revise 行为，留待独立验证。
+
   it("现金不足：BUY 降级为 HOLD（保留现金下限）", async () => {
     const scan: ScanSummary = {
       scan_date: "2026-06-21", total_candidates: 1,

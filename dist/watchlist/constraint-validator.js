@@ -56,10 +56,13 @@ function validateRebalance(plan, ctx, c) {
         });
     }
     // 规则 6: anti-churn 卖锁 — locked 持仓禁止 SELL/REDUCE
+    //   止损豁免：overall_risk=high 或有 severity=高 的 risk_flag（stopLossSignal=true）时
+    //   允许突破锁及时止损。anti-churn 防"无谓 churn"，止损是退出不是 churn。
+    //   趋势策略的下行保护依赖破位即卖，不能被锁堵死（否则等于没有止损）。
     for (const a of plan.actions) {
         if (a.action === "SELL" || a.action === "REDUCE") {
             const h = ctx.held.get(a.ticker);
-            if (h?.locked) {
+            if (h?.locked && !h.stopLossSignal) {
                 violations.push({
                     rule: "6. anti-churn 卖锁",
                     detail: `${a.ticker} 持仓 ${h.days_held} 天 < anti_churn_days，locked，禁止 ${a.action}`,

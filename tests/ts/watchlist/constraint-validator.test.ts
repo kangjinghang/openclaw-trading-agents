@@ -118,6 +118,38 @@ describe("validateRebalance 规则 6: anti-churn 卖锁", () => {
     const r = validateRebalance(plan, { sectors: new Map([["A", "x"]]), held, tickersInPool: new Set(["A"]) }, C);
     expect(r.passed).toBe(true);
   });
+
+  it("止损豁免：locked + stopLossSignal → SELL 放行（趋势策略下行保护）", () => {
+    // 生益科技场景：建仓 2 天 locked，但 risk=high（缩量下跌）→ 必须能止损
+    const plan = makePlan([
+      makeAction({ ticker: "A", current_weight: 0.10, target_weight: 0, delta: -0.10, action: "SELL" }),
+    ]);
+    plan.portfolio_after.cash_pct = 0.90;
+    const held = new Map([["A", { days_held: 2, locked: true, stopLossSignal: true }]]);
+    const r = validateRebalance(plan, { sectors: new Map([["A", "x"]]), held, tickersInPool: new Set(["A"]) }, C);
+    expect(r.violations.some(v => v.rule.includes("anti-churn 卖锁"))).toBe(false);
+  });
+
+  it("止损豁免：locked + stopLossSignal → REDUCE 放行", () => {
+    const plan = makePlan([
+      makeAction({ ticker: "A", current_weight: 0.10, target_weight: 0.05, delta: -0.05, action: "REDUCE" }),
+    ]);
+    plan.portfolio_after.cash_pct = 0.85;
+    const held = new Map([["A", { days_held: 1, locked: true, stopLossSignal: true }]]);
+    const r = validateRebalance(plan, { sectors: new Map([["A", "x"]]), held, tickersInPool: new Set(["A"]) }, C);
+    expect(r.violations.some(v => v.rule.includes("anti-churn 卖锁"))).toBe(false);
+  });
+
+  it("止损豁免不滥用：locked + stopLossSignal=false → 仍禁止 SELL", () => {
+    // 无止损信号时，locked 仍生效（防无谓 churn）
+    const plan = makePlan([
+      makeAction({ ticker: "A", current_weight: 0.10, target_weight: 0, delta: -0.10, action: "SELL" }),
+    ]);
+    plan.portfolio_after.cash_pct = 0.90;
+    const held = new Map([["A", { days_held: 3, locked: true, stopLossSignal: false }]]);
+    const r = validateRebalance(plan, { sectors: new Map([["A", "x"]]), held, tickersInPool: new Set(["A"]) }, C);
+    expect(r.violations.some(v => v.rule.includes("anti-churn 卖锁"))).toBe(true);
+  });
 });
 
 describe("validateRebalance 规则 7: anti-churn 买锁", () => {

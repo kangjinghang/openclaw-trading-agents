@@ -38,14 +38,14 @@ const REBALANCER_PROMPT_TEMPLATE = `# 角色
 - 趋势健康（无见顶信号）+ 非 deal_breaker：HOLD 或 ADD
 - **见顶信号**（risk_flags 含 MACD死叉/量价背离/跌破支撑/缩量上涨）：REDUCE 或 SELL（技术位止损）
 - deal_breaker=true：SELL（立即清仓）
-- locked=true（持仓<{anti_churn_days}天，即买入后第 1-{anti_churn_days_sub} 天）：只能 HOLD 或 ADD，禁止 SELL/REDUCE。days_held ≥ {anti_churn_days} 时锁定解除（locked=false），可自由 SELL/REDUCE
+- locked=true（持仓<{anti_churn_days}天）：仅当 overall_risk=high 或有"高"级 risk_flag 时可止损（SELL/REDUCE），否则只能 HOLD/ADD
 
 # 硬约束（validator 会强制 revise）
 - 单仓 ≤ {single_name}
 - 单行业 ≤ {single_sector}（按 sector 字段聚合）
 - 日换手 = sum(|delta|) ≤ {daily_turnover}
 - 现金保留 = 1 - sum(target_weight) ≥ {cash_reserve}
-- {anti_churn_days} 天内买入的 locked 股禁止 SELL/REDUCE
+- locked 持仓禁止 SELL/REDUCE，**除非** overall_risk=high 或有"高"级 risk_flag（止损豁免）
 - {anti_churn_days} 天内卖出过的 ticker 禁止 BUY
 
 # 软偏好
@@ -422,9 +422,24 @@ export async function rebalancePipeline(input: RebalancePipelineInput): Promise<
   const sector_warnings: string[] = sectorMissingTickers.length > 0
     ? [`${sectorMissingTickers.length} 只股 industry 拉取失败（${sectorMissingTickers.join(", ")}），规则 3 对它们按"未分类"累计`]
     : [];
-  const held = new Map<string, { days_held: number; locked: boolean }>();
+  // reportsByTicker 提前构造：held map 需要查 risk 算止损信号
+  const reportsByTicker = new Map<string, StockReport>();
+  for (const r of reports) reportsByTicker.set(r.ticker, r);
+
+  // held map：locked + stopLossSignal（止损豁免 anti-churn 锁）
+  // 止损信号定义：overall_risk=high，或有任一 severity=高 的 risk_flag。
+  // 趋势策略：破位（MACD死叉/量价背离/跌破支撑）必须能及时卖，不能被 <7天 锁堵死。
+  const held = new Map<string, { days_held: number; locked: boolean; stopLossSignal?: boolean }>();
   for (const m of metas) {
-    if (m.is_held) held.set(m.ticker, { days_held: m.days_held, locked: m.locked });
+    if (!m.is_held) continue;
+    const report = reportsByTicker.get(m.ticker);
+    // fallback report（持仓股数据失败时）overall_risk=high，stopLossSignal 恒真——
+    // 数据失败的持仓本身就是风险，不该被锁住不能动
+    const stopLossSignal = report
+      ? report.overall_risk === "high"
+        || report.risk_flags.some(f => f.severity === "高")
+      : true;
+    held.set(m.ticker, { days_held: m.days_held, locked: m.locked, stopLossSignal });
   }
   // anti-churn 买锁：最近 N 天内卖出过的 ticker 禁止 BUY
   // 优先用 recent_sells（跨次累积，覆盖多次 rebalance），fallback 到 lastRebalance.actions
@@ -464,8 +479,6 @@ export async function rebalancePipeline(input: RebalancePipelineInput): Promise<
   for (const [ticker, data] of dataByTicker) {
     volatilityByTicker.set(ticker, data.kline.volatility_20d);
   }
-  const reportsByTicker = new Map<string, StockReport>();
-  for (const r of reports) reportsByTicker.set(r.ticker, r);
   const positionCtx: ApplyPositionsContext = {
     reportsByTicker,
     volatilityByTicker,
