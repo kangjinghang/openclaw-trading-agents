@@ -10,6 +10,7 @@ const candidate_selector_1 = require("./candidate-selector");
 const shallow_analyzer_1 = require("./shallow-analyzer");
 const execution_planner_1 = require("./execution-planner");
 const position_calculator_1 = require("./position-calculator");
+const industry_map_1 = require("./industry-map");
 const REBALANCER_PROMPT_TEMPLATE = `# 角色
 你是 A 股趋势跟随策略的组合管理者，管理一个 8-12 只持仓的分散组合（小账户，可接受大回撤）。
 基于今日候选 + 当前持仓，输出最优调仓方案。核心目标：**在场抓趋势，技术位止损，不踏空**。
@@ -352,6 +353,10 @@ async function rebalancePipeline(input) {
     //    sectors 来源优先级：fundamentals.industry（全市场口径统一）> report.sector（shallow-analyzer
     //    拿到的，候选股多为"未分类"）> holdings.sector（用户手填，纯持仓股兜底）。
     //    fundamentals.industry 为空（拉取失败）的股标"未分类" + 记 warning（规则 3 对它们失效）。
+    //
+    //    映射到申万一级：上游 industry 是申万二级（如"半导体"/"PCB"/"军工电子Ⅱ"），若直接按
+    //    二级聚合，电子下属 6 个标签会被当成 6 个独立行业 → "假分散"。这里统一映射到一级，
+    //    让规则 3 按 31 个一级限制（LLM prompt 里仍展示原始二级细分，不丢失信息）。
     const sectors = new Map();
     const sectorMissingTickers = [];
     const allTickers = new Set([
@@ -361,7 +366,7 @@ async function rebalancePipeline(input) {
     for (const ticker of allTickers) {
         const industry = dataByTicker.get(ticker)?.fundamentals.industry ?? "";
         if (industry) {
-            sectors.set(ticker, industry);
+            sectors.set(ticker, (0, industry_map_1.mapIndustryToL1)(industry));
         }
         else {
             // industry 拉取失败：回退 report.sector / holdings.sector，仍为空则标"未分类"
@@ -369,7 +374,8 @@ async function rebalancePipeline(input) {
             const fallback = report?.sector
                 ?? input.holdings.positions.find(p => p.ticker === ticker)?.sector
                 ?? "未分类";
-            sectors.set(ticker, fallback === "未分类" ? "未分类" : fallback);
+            const mapped = fallback === "未分类" ? "未分类" : (0, industry_map_1.mapIndustryToL1)(fallback);
+            sectors.set(ticker, mapped);
             if (fallback === "未分类")
                 sectorMissingTickers.push(ticker);
         }

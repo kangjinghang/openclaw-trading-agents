@@ -9,6 +9,7 @@ import { selectCandidates } from "./candidate-selector";
 import { analyzeAll, type ShallowLlmCaller, type StockData } from "./shallow-analyzer";
 import { buildExecutionPlan } from "./execution-planner";
 import { applyPositions, type ApplyPositionsContext } from "./position-calculator";
+import { mapIndustryToL1 } from "./industry-map";
 import type { MacroView } from "./data-fetcher";
 import type { ScanSummary } from "./types";
 
@@ -399,6 +400,10 @@ export async function rebalancePipeline(input: RebalancePipelineInput): Promise<
   //    sectors 来源优先级：fundamentals.industry（全市场口径统一）> report.sector（shallow-analyzer
   //    拿到的，候选股多为"未分类"）> holdings.sector（用户手填，纯持仓股兜底）。
   //    fundamentals.industry 为空（拉取失败）的股标"未分类" + 记 warning（规则 3 对它们失效）。
+  //
+  //    映射到申万一级：上游 industry 是申万二级（如"半导体"/"PCB"/"军工电子Ⅱ"），若直接按
+  //    二级聚合，电子下属 6 个标签会被当成 6 个独立行业 → "假分散"。这里统一映射到一级，
+  //    让规则 3 按 31 个一级限制（LLM prompt 里仍展示原始二级细分，不丢失信息）。
   const sectors = new Map<string, string>();
   const sectorMissingTickers: string[] = [];
   const allTickers = new Set<string>([
@@ -408,14 +413,15 @@ export async function rebalancePipeline(input: RebalancePipelineInput): Promise<
   for (const ticker of allTickers) {
     const industry = dataByTicker.get(ticker)?.fundamentals.industry ?? "";
     if (industry) {
-      sectors.set(ticker, industry);
+      sectors.set(ticker, mapIndustryToL1(industry));
     } else {
       // industry 拉取失败：回退 report.sector / holdings.sector，仍为空则标"未分类"
       const report = reports.find(r => r.ticker === ticker);
       const fallback = report?.sector
         ?? input.holdings.positions.find(p => p.ticker === ticker)?.sector
         ?? "未分类";
-      sectors.set(ticker, fallback === "未分类" ? "未分类" : fallback);
+      const mapped = fallback === "未分类" ? "未分类" : mapIndustryToL1(fallback);
+      sectors.set(ticker, mapped);
       if (fallback === "未分类") sectorMissingTickers.push(ticker);
     }
   }

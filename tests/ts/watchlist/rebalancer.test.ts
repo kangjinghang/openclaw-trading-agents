@@ -542,6 +542,60 @@ describe("rebalancePipeline (integration)", () => {
     expect(result.constraint_check.passed).toBe(true);
   });
 
+  it("电子下属二级标签（半导体/PCB/元件）映射到一级后聚合触发规则 3（单行业 ≤30%）", async () => {
+    // 核心回归：修复"假分散"。三只电子产业链股票 industry 分别是申万二级"半导体"/"PCB"/"元件"，
+    // 映射前规则3把它们当 3 个独立行业（各 14% < 30% 不触发）；映射后都归"电子"，sum=42% > 30% 触发 revise。
+    const scan: ScanSummary = {
+      scan_date: "2026-06-21", total_candidates: 3,
+      groups: { LONG: { total: 3, ranked: 3, excluded: 0, fallback: false }, SHORT: { total: 0, pre_filter: 0, post_common_filter: 0, ranked: 0, excluded: 0, fallback: false } },
+      top_picks: [
+        { ticker: "SH600206", name: "有研新材", score: 9.5, group: "LONG", percent: 80, days: 40, range_kind: "new", reason: "r" },
+        { ticker: "SH600183", name: "生益科技", score: 9.0, group: "LONG", percent: 50, days: 30, range_kind: "new", reason: "r" },
+        { ticker: "SH600563", name: "法拉电子", score: 8.5, group: "LONG", percent: 40, days: 25, range_kind: "new", reason: "r" },
+      ],
+    };
+    const holdings: Holdings = { updated_at: "x", cash_pct: 0.50, positions: [] };
+
+    // 三只 industry 都是电子下属二级（半导体/PCB/元件），fitness 给 9 → 各 ~14% 仓位
+    const dataByTicker = new Map<string, StockData>([
+      ["SH600206", { ticker: "SH600206", name: "有研新材", sector: "未分类", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01, volume_ratio_5_20: 1.0 }, news: [], hot_money: { northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 25, pb: 3, rev_q1: 1e9, np_q1: 1e8, industry: "半导体" } }],
+      ["SH600183", { ticker: "SH600183", name: "生益科技", sector: "未分类", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01, volume_ratio_5_20: 1.0 }, news: [], hot_money: { northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 25, pb: 3, rev_q1: 1e9, np_q1: 1e8, industry: "PCB" } }],
+      ["SH600563", { ticker: "SH600563", name: "法拉电子", sector: "未分类", kline: { pct_5d: 0, pct_20d: 0, support: 0, resistance: 0, volatility_20d: 0.01, volume_ratio_5_20: 1.0 }, news: [], hot_money: { northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 25, pb: 3, rev_q1: 1e9, np_q1: 1e8, industry: "元件" } }],
+    ]);
+
+    const shallowCaller: ShallowLlmCaller = async ({ role }) => {
+      if (role === "analyst") return JSON.stringify({ thesis: "x", fitness_score: 9, data_freshness: "2026-06-21", key_signals: [], data_gaps: [] });
+      return JSON.stringify({ risk_flags: [], overall_risk: "low", deal_breaker: false });
+    };
+    // LLM 想全买（不知道仓位会被约束）
+    const rebalanceCaller: RebalanceLlmCaller = async () => JSON.stringify({
+      evaluations: [
+        { ticker: "SH600206", judgment: "BUY", brief: "buy" },
+        { ticker: "SH600183", judgment: "BUY", brief: "buy" },
+        { ticker: "SH600563", judgment: "BUY", brief: "buy" },
+      ],
+      actions: [
+        { action: "BUY", ticker: "SH600206", name: "有研新材", reason: "buy" },
+        { action: "BUY", ticker: "SH600183", name: "生益科技", reason: "buy" },
+        { action: "BUY", ticker: "SH600563", name: "法拉电子", reason: "buy" },
+      ],
+      summary: "buy all electronics",
+    });
+
+    const result = await rebalancePipeline({
+      scan, holdings, lastRebalance: null, currentDate: "2026-06-21",
+      shallowCaller, rebalanceCaller, dataByTicker,
+    });
+
+    // 三只 fitness 9 → 各 ~13.5%，映射后都归"电子"，sum ≈ 40.5% > 30% → 规则 3 触发 revise。
+    // 测试的 LLM caller 固定返回 BUY 三只，revise 用尽后 status=constraint_violation（≠ ok 即证明约束拦住了）。
+    // violations 是 string[]（格式"[规则] 详情"），检查含"单行业"和"电子"。
+    expect(result.status).toBe("constraint_violation");
+    const sectorViolations = result.constraint_check.violations.filter(v => v.includes("单行业"));
+    expect(sectorViolations.length).toBeGreaterThan(0);
+    expect(sectorViolations.some(v => v.includes("电子"))).toBe(true);
+  });
+
   it("industry 拉取失败 → 回退'未分类' + sector_warnings 提示", async () => {
     const scan: ScanSummary = {
       scan_date: "2026-06-21", total_candidates: 1,
