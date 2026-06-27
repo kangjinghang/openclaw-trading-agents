@@ -37,6 +37,24 @@ function sellAction(ticker: string, name: string, currentWeight: number): Action
   };
 }
 
+/** 构造 ADD action（加仓到 target）。 */
+function addAction(ticker: string, name: string, currentWeight: number, targetWeight: number): Action {
+  return {
+    action: "ADD", ticker, name,
+    current_weight: currentWeight, target_weight: targetWeight, delta: targetWeight - currentWeight,
+    reason: "test add", priority: 4,
+  };
+}
+
+/** 构造 REDUCE action（减仓到 target）。 */
+function reduceAction(ticker: string, name: string, currentWeight: number, targetWeight: number): Action {
+  return {
+    action: "REDUCE", ticker, name,
+    current_weight: currentWeight, target_weight: targetWeight, delta: targetWeight - currentWeight,
+    reason: "test reduce", priority: 2,
+  };
+}
+
 /** 构造最小 RebalancePipelineResult（applyPlan 只读 actions + status）。 */
 function makeResult(actions: Action[]): RebalancePipelineResult {
   return {
@@ -243,5 +261,167 @@ describe("增量回测：Day1 存 state → 新实例 Day2 续跑", () => {
     expect(trade.exitDate).toBe(D3);        // 平仓日正确
     expect(trade.returnPct).toBeCloseTo(5, 0);  // 100→105, +5%
     expect(trade.exitReason).toBe("test stop loss");
+  });
+});
+
+// ── 手数取整（lotSize）──────────────────────────────────────────────
+//
+// realCapital + lotSize 让回测真实反映 A 股最小 1 手=100 股的约束：
+// 20 万账户买 245 元的香农芯创，8% 仓位 = 1.6 万 → 65 股 < 1 手 → 实际买不了。
+// 之前回测假装买进 65 股导致 NAV 失真，现在应跳过。
+
+const CAPITAL = 200000;  // 20 万本金
+const LOT = 100;         // A 股最小 1 手
+
+describe("PositionSimulator 手数取整（BUY）", () => {
+  it("高价股买不起 1 手 → 跳过，持仓 0，cash 不变", async () => {
+    // 香农芯创 245 元，8% 仓位 = 1.6 万 → 65 股 < 100 → 跳过
+    const lookup = makePriceLookup({ "SH688629": { [D1]: 245 } });
+    const sim = new PositionSimulator(lookup, { realCapital: CAPITAL, lotSize: LOT });
+    await sim.normalizeWeights(D1);
+    const res = await sim.applyPlan(
+      makeResult([buyAction("SH688629", "香农芯创", 0.08)]),
+      D1,
+      new Map(),
+    );
+    expect(res.skippedBuys).toHaveLength(1);
+    expect(res.skippedBuys[0].ticker).toBe("SH688629");
+    expect(sim.serialize().positions).toHaveLength(0);
+    expect(sim.serialize().cash).toBe(1.0);  // 没花钱
+  });
+
+  it("正常股能买整手 → 成交", async () => {
+    // 100 元，10% 仓位 = 2 万 → 200 股 = 2 手 → 成交
+    const lookup = makePriceLookup({ "SH600000": { [D1]: 100 } });
+    const sim = new PositionSimulator(lookup, { realCapital: CAPITAL, lotSize: LOT });
+    await sim.normalizeWeights(D1);
+    await sim.applyPlan(
+      makeResult([buyAction("SH600000", "浦发银行", 0.10)]),
+      D1,
+      new Map([["SH600000", { fitness_score: 7, name: "浦发银行", sector: "银行" }]]),
+    );
+    const pos = sim.serialize().positions[0];
+    expect(pos.shares).toBeCloseTo(200 / CAPITAL, 6);  // 归一化：200股/20万 = 0.001
+    expect(pos.entry_price).toBe(100);
+  });
+
+  it("边界：恰好 100 股成交 1 手；99 股跳过", async () => {
+    // 100 元，target 算出 100 股 → 仓位 = 100×100/200000 = 0.05
+    const lookup = makePriceLookup({ "SH600001": { [D1]: 100 }, "SH600002": { [D1]: 100 } });
+    const sim = new PositionSimulator(lookup, { realCapital: CAPITAL, lotSize: LOT });
+    await sim.normalizeWeights(D1);
+    const res = await sim.applyPlan(
+      makeResult([
+        buyAction("SH600001", "A股", 0.05),  // 100×100/20万=0.05 → 恰 100 股
+        buyAction("SH600002", "B股", 0.0495), // 0.0495×20万/100=99 股 < 100 → 跳过
+      ]),
+      D1,
+      new Map(),
+    );
+    const s = sim.serialize();
+    const aPos = s.positions.find(p => p.ticker === "SH600001");
+    expect(aPos).toBeDefined();               // 0.05 成交
+    expect(aPos!.shares).toBeCloseTo(100 / CAPITAL, 6);
+    expect(s.positions.find(p => p.ticker === "SH600002")).toBeUndefined();  // 0.0495 跳过
+    expect(res.skippedBuys.map(b => b.ticker)).toEqual(["SH600002"]);
+  });
+});
+
+describe("PositionSimulator 手数取整（ADD / REDUCE）", () => {
+  it("ADD：加仓增量取整到整手，不足 1 手跳过加仓", async () => {
+    // 先用旧 options 建一个非整数份额的仓（100 元 × 100 股），再 ADD 小额
+    const lookup = makePriceLookup({ "SH600010": { [D1]: 100, [D2]: 100 } });
+    // 进程 A：无 options 建仓 100 股（shares = 0.05 归一化 = 100 股）
+    const sim = new PositionSimulator(lookup);  // 旧行为
+    await sim.normalizeWeights(D1);
+    await sim.applyPlan(
+      makeResult([buyAction("SH600010", "测试", 0.05)]),  // 5% = 1万 = 100 股
+      D1,
+      new Map([["SH600010", { fitness_score: 7, name: "测试", sector: "X" }]]),
+    );
+
+    // 注入 realCapital 后 ADD：目标增量 50 股 < 100 → 取整为 0 → 不加仓
+    // 注意：构造函数 options 只在构造时设定。这里用 fromSerialized 重建带 options 的实例
+    const sim2 = PositionSimulator.fromSerialized(sim.serialize(), lookup, { realCapital: CAPITAL, lotSize: LOT });
+    await sim2.normalizeWeights(D2);
+    const before = sim2.serialize().positions[0].shares;
+    // ADD 从 100 股加到 150 股 → 增量 50 股 < 100 → 跳过
+    await sim2.applyPlan(
+      makeResult([addAction("SH600010", "测试", 0.05, 0.075)]),  // 5%→7.5%, 增量 50 股
+      D2,
+      new Map([["SH600010", { fitness_score: 7, name: "测试", sector: "X" }]]),
+    );
+    expect(sim2.serialize().positions[0].shares).toBeCloseTo(before, 6);  // 没加
+  });
+
+  it("REDUCE：减仓股数取整，不足 1 手不动", async () => {
+    const lookup = makePriceLookup({ "SH600020": { [D1]: 100, [D2]: 100 } });
+    const sim = new PositionSimulator(lookup);  // 旧行为建仓
+    await sim.normalizeWeights(D1);
+    await sim.applyPlan(
+      makeResult([buyAction("SH600020", "测试", 0.10)]),  // 10% = 2万 = 200 股
+      D1,
+      new Map([["SH600020", { fitness_score: 7, name: "测试", sector: "X" }]]),
+    );
+
+    // REDUCE 减半：200 股 → 目标 100 股，卖出 100 股 = 1 手 → 成交
+    const sim2 = PositionSimulator.fromSerialized(sim.serialize(), lookup, { realCapital: CAPITAL, lotSize: LOT });
+    await sim2.normalizeWeights(D2);
+    await sim2.applyPlan(
+      makeResult([reduceAction("SH600020", "测试", 0.10, 0.05)]),  // 10%→5%
+      D2,
+      new Map([["SH600020", { fitness_score: 7, name: "测试", sector: "X" }]]),
+    );
+    expect(sim2.serialize().positions[0].shares).toBeCloseTo(100 / CAPITAL, 6);  // 剩 100 股
+  });
+});
+
+describe("PositionSimulator 手数取整（配置与兼容性）", () => {
+  it("lotSize=200（科创板口径）生效", async () => {
+    // 科创板最小 1 手=200 股。100 元，target 0.05 → 100 股 < 200 → 跳过
+    const lookup = makePriceLookup({ "SH688099": { [D1]: 100 } });
+    const sim = new PositionSimulator(lookup, { realCapital: CAPITAL, lotSize: 200 });
+    await sim.normalizeWeights(D1);
+    const res = await sim.applyPlan(
+      makeResult([buyAction("SH688099", "科创A", 0.05)]),  // 0.05×20万/100=100 股 < 200
+      D1,
+      new Map(),
+    );
+    expect(res.skippedBuys).toHaveLength(1);
+    expect(sim.serialize().positions).toHaveLength(0);
+  });
+
+  it("不传 options（旧行为）：shares 为浮点，skipped 永远空", async () => {
+    // 旧逻辑：shares = targetValue/price，不取整
+    const lookup = makePriceLookup({ "SH688629": { [D1]: 245 } });
+    const sim = new PositionSimulator(lookup);  // 无 options
+    await sim.normalizeWeights(D1);
+    const res = await sim.applyPlan(
+      makeResult([buyAction("SH688629", "香农", 0.08)]),
+      D1,
+      new Map([["SH688629", { fitness_score: 7, name: "香农", sector: "X" }]]),
+    );
+    expect(res.skippedBuys).toHaveLength(0);
+    const pos = sim.serialize().positions[0];
+    expect(pos).toBeDefined();
+    expect(pos.shares).toBeCloseTo(0.08 / 245, 8);  // 归一化浮点，不取整
+  });
+
+  it("序列化往返保留 realCapital / lotSize", async () => {
+    const lookup = makePriceLookup({ "SH600099": { [D1]: 100 } });
+    const sim = new PositionSimulator(lookup, { realCapital: CAPITAL, lotSize: LOT });
+    await sim.normalizeWeights(D1);
+    await sim.applyPlan(
+      makeResult([buyAction("SH600099", "测试", 0.10)]),
+      D1,
+      new Map([["SH600099", { fitness_score: 7, name: "测试", sector: "X" }]]),
+    );
+    const s = sim.serialize();
+    expect(s.realCapital).toBe(CAPITAL);
+    expect(s.lotSize).toBe(LOT);
+    // fromSerialized 恢复后仍按取整逻辑工作
+    const restored = PositionSimulator.fromSerialized(s, lookup);
+    expect(restored.serialize().realCapital).toBe(CAPITAL);
+    expect(restored.serialize().lotSize).toBe(LOT);
   });
 });

@@ -40,7 +40,11 @@ import {
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const DEFAULT_WATCHLIST_DIR = path.join(os.homedir(), ".openclaw", "watchlist");
-const STATE_VERSION = 1;
+// v2: SerializedSimState 新增 realCapital/lotSize，BacktestStateFile.config 加 capital/lotSize。
+//     v1 state 拒载（份额语义变了，旧归一化浮点份额 vs 新取整份额不可混用）。
+const STATE_VERSION = 2;
+const DEFAULT_CAPITAL = 200000;   // 20 万小账户
+const DEFAULT_LOT_SIZE = 100;     // A 股主板最小 1 手
 
 function argValue(args: string[], key: string): string | undefined {
   const idx = args.indexOf(key);
@@ -148,17 +152,23 @@ function renderResults(results: BacktestResults): string {
 /** 增量回测的磁盘状态：跨进程续跑的衔接文件。 */
 interface BacktestStateFile {
   version: number;
-  config: { topN: number; model: string };
+  config: { topN: number; model: string; capital: number; lotSize: number };
   lastProcessedDate: string | null;   // 最后成功处理的日期（用于找「下一天」）
   processedDates: string[];           // 所有已处理日期（防重复）
-  simulator: SerializedSimState;       // PositionSimulator 全量状态
+  simulator: SerializedSimState;       // PositionSimulator 全量状态（含 realCapital/lotSize）
 }
 
 function loadState(statePath: string): BacktestStateFile | null {
   if (!fs.existsSync(statePath)) return null;
   try {
     const raw = JSON.parse(fs.readFileSync(statePath, "utf-8"));
-    if (raw?.version !== STATE_VERSION || !raw?.simulator) return null;
+    if (raw?.version !== STATE_VERSION || !raw?.simulator) {
+      // v1（或未知版本）state：份额语义已变（取整 vs 浮点），不可续跑。
+      if (raw?.version && raw.version !== STATE_VERSION) {
+        console.error(`  [state] 版本不兼容（文件 v${raw.version}，当前 v${STATE_VERSION}），请用 --reset 重开`);
+      }
+      return null;
+    }
     return raw as BacktestStateFile;
   } catch {
     return null;
@@ -248,8 +258,14 @@ async function runSingleDay(
     for (const r of result.reports as StockReport[]) {
       reportsByTicker.set(r.ticker, { fitness_score: r.fitness_score, name: r.name, sector: r.sector });
     }
-    await simulator.applyPlan(result, date, reportsByTicker, priceMap);
+    const { skippedBuys } = await simulator.applyPlan(result, date, reportsByTicker, priceMap);
     actions = result.rebalancer_output.actions as Action[];
+    // 手数取整跳过的高价股：真实反映"买不起 1 手"，提示用户
+    if (skippedBuys.length > 0) {
+      for (const s of skippedBuys) {
+        console.log(`  ⚠️ 跳过 ${s.name}（${s.ticker}）：${s.reason}`);
+      }
+    }
   }
 
   // 6. 记录 NAV（prevNav 取 navHistory 最后一条的真实净值，而非重算）
@@ -407,6 +423,9 @@ async function main() {
   --date <D>        跑指定单日（必须未处理过；重跑历史用 --reset）
   --dates <D1,D2>   慢路径：一次跑多日（批量补数据用）
   --top-n <N>       候选数（默认 10）
+  --capital <RMB>   真实本金（默认 200000）。启用后 BUY/ADD/REDUCE 按手数取整，
+                    不足 1 手的高价股自动跳过（回测真实反映"买不起"）
+  --lot-size <N>    最小手数（默认 100；科创板 200）
   --show            只读 state，显示 NAV 曲线 + 持仓 + 累计，不跑
   --report          读 state，生成 run-<ts>/ 完整报告（含未平仓交易）
   --reset           删 state.json，从 100% 现金重开（重跑历史的第一步）
@@ -437,6 +456,12 @@ async function main() {
   const baseUrl = argValue(args, "--base-url") ?? process.env.OPENAI_BASE_URL ?? "https://open.bigmodel.cn/api/coding/paas/v4";
   const model = argValue(args, "--model") ?? "glm-5-turbo";
   const topN = Math.max(1, parseInt(argValue(args, "--top-n") ?? "10", 10) || 10);
+  // 真实本金 + 手数：手数取整让回测真实反映"买不起 1 手"的高价股。
+  // 默认 20 万小账户 / A 股主板 1 手=100 股；续跑时优先用 state 里记录的值，CLI 显式传参可覆盖。
+  const capitalArg = argValue(args, "--capital");
+  const lotSizeArg = argValue(args, "--lot-size");
+  const capitalCli = capitalArg ? Math.max(1000, parseFloat(capitalArg) || DEFAULT_CAPITAL) : undefined;
+  const lotSizeCli = lotSizeArg ? Math.max(1, parseInt(lotSizeArg, 10) || DEFAULT_LOT_SIZE) : undefined;
   const scanDates = listScanDates(watchlistDir);
 
   if (scanDates.length === 0) {
@@ -447,6 +472,12 @@ async function main() {
 
   const state = loadState(statePath);
 
+  // 最终 capital/lotSize：CLI 显式传参 > state 记录 > 默认值。
+  // 续跑必须用同一本金口径，否则取整语义不一致。
+  const capital = capitalCli ?? state?.config.capital ?? DEFAULT_CAPITAL;
+  const lotSize = lotSizeCli ?? state?.config.lotSize ?? DEFAULT_LOT_SIZE;
+  const simOptions = { realCapital: capital, lotSize };
+
   // ── --show：只读展示 ──
   if (hasFlag(args, "--show")) {
     if (!state) {
@@ -454,8 +485,8 @@ async function main() {
       process.exit(0);
     }
     console.log(`回测进度：${state.processedDates.length} 天（${state.processedDates[0]} → ${state.lastProcessedDate}）`);
-    console.log(`配置：top-${state.config.topN} | 模型 ${state.config.model}`);
-    const sim = PositionSimulator.fromSerialized(state.simulator, lookupPrice);
+    console.log(`配置：top-${state.config.topN} | 模型 ${state.config.model} | 本金 ${capital.toLocaleString()} | 手数取整 ${lotSize}股`);
+    const sim = PositionSimulator.fromSerialized(state.simulator, lookupPrice, simOptions);
     // 展示当前持仓浮动盈亏（用最后处理日的价格）
     const lastDate = state.lastProcessedDate!;
     const priceMap = await sim.normalizeWeights(lastDate);
@@ -481,7 +512,7 @@ async function main() {
       console.error("error: 尚无回测状态，无法生成报告。请先跑若干天");
       process.exit(1);
     }
-    const sim = PositionSimulator.fromSerialized(state.simulator, lookupPrice);
+    const sim = PositionSimulator.fromSerialized(state.simulator, lookupPrice, simOptions);
     await generateReport(sim, state.processedDates, state.config.model, state.config.topN, watchlistDir);
     process.exit(0);
   }
@@ -513,8 +544,8 @@ async function main() {
       process.exit(2);
     }
     datesToRun = datesArg.split(",").map(d => d.trim()).filter(Boolean).sort();
-    console.log(`回测（慢路径全量）: ${datesToRun.join(" → ")}（top-${topN}，模型 ${model}）`);
-    simulator = new PositionSimulator(lookupPrice);  // 全量从现金起步
+    console.log(`回测（慢路径全量）: ${datesToRun.join(" → ")}（top-${topN}，模型 ${model}，本金 ${capital.toLocaleString()}）`);
+    simulator = new PositionSimulator(lookupPrice, simOptions);  // 全量从现金起步
   } else if (dateArg) {
     // ── 单日：--date D ──
     const date = dateArg.trim();
@@ -529,10 +560,10 @@ async function main() {
     }
     // 单日模式用当前 state 续跑这一天
     simulator = state
-      ? PositionSimulator.fromSerialized(state.simulator, lookupPrice)
-      : new PositionSimulator(lookupPrice);
+      ? PositionSimulator.fromSerialized(state.simulator, lookupPrice, simOptions)
+      : new PositionSimulator(lookupPrice, simOptions);
     datesToRun = [date];
-    console.log(`回测（单日）: ${date}（top-${topN}，模型 ${model}）`);
+    console.log(`回测（单日）: ${date}（top-${topN}，模型 ${model}，本金 ${capital.toLocaleString()}）`);
   } else {
     // ── 默认增量：跑下一天 ──
     const lastProcessed = state?.lastProcessedDate ?? null;
@@ -543,10 +574,10 @@ async function main() {
       process.exit(0);
     }
     simulator = state
-      ? PositionSimulator.fromSerialized(state.simulator, lookupPrice)
-      : new PositionSimulator(lookupPrice);
+      ? PositionSimulator.fromSerialized(state.simulator, lookupPrice, simOptions)
+      : new PositionSimulator(lookupPrice, simOptions);
     datesToRun = [nextDate];
-    console.log(`回测（增量）: ${nextDate}（top-${topN}，模型 ${model}）`);
+    console.log(`回测（增量）: ${nextDate}（top-${topN}，模型 ${model}，本金 ${capital.toLocaleString()}）`);
     if (state) {
       console.log(`  续跑：上次处理 ${state.lastProcessedDate}，已累计 ${state.processedDates.length} 天`);
     } else {
@@ -577,7 +608,7 @@ async function main() {
 
   saveState(statePath, {
     version: STATE_VERSION,
-    config: { topN, model },
+    config: { topN, model, capital, lotSize },
     lastProcessedDate,
     processedDates,
     simulator: simulator.serialize(),

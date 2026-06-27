@@ -61,7 +61,10 @@ export interface BacktestResults {
 }
 
 /** 序列化后的 PositionSimulator 全量状态（跨进程持久化用）。
- *  所有字段都是 JSON 原生：positions 从 Map 转为数组，SimPosition 结构等同 Position。 */
+ *  所有字段都是 JSON 原生：positions 从 Map 转为数组，SimPosition 结构等同 Position。
+ *
+ *  realCapital / lotSize 为可选：缺失 = 未启用手数取整（旧 state v1 兼容；
+ *  v2 起由 backtest-cli 写入，增量续跑保持同一本金口径）。 */
 export interface SerializedSimState {
   cash: number;                          // 归一化现金绝对值（非占比）
   recentSells: Record<string, string>;   // ticker → 最后卖出日，14 天 TTL 反复 churn 锁
@@ -69,6 +72,15 @@ export interface SerializedSimState {
   positions: Position[];                 // 持仓数组（含 shares 等全部字段）
   navHistory: NavSnapshot[];
   trades: TradeRecord[];
+  realCapital?: number;                  // 真实本金（如 200000）；>0 启用手数取整
+  lotSize?: number;                      // 最小手数（A 股主板 100，科创板 200）
+}
+
+/** applyPlan 取整跳过记录：回测真实反映"买不起 1 手"的标的。 */
+export interface SkippedBuy {
+  ticker: string;
+  name: string;
+  reason: string;                        // 如"0.08 仓位 × 20万 / 245元 = 65 股 < 1 手(100)"
 }
 
 // ── K 线取数 ──────────────────────────────────────────────────────────
@@ -88,9 +100,30 @@ export class PositionSimulator {
   private navHistory: NavSnapshot[] = [];
   private trades: TradeRecord[] = [];
   private priceLookup: PriceLookup;
+  // 手数取整配置：realCapital>0 且 lotSize>0 启用。缺失走旧逻辑（浮点份额，向后兼容）。
+  private readonly realCapital?: number;
+  private readonly lotSize?: number;
 
-  constructor(priceLookup: PriceLookup) {
+  constructor(priceLookup: PriceLookup, options?: { realCapital?: number; lotSize?: number }) {
     this.priceLookup = priceLookup;
+    if (options && (options.realCapital ?? 0) > 0 && (options.lotSize ?? 0) > 0) {
+      this.realCapital = options.realCapital;
+      this.lotSize = options.lotSize;
+    }
+  }
+
+  /** 是否启用手数取整。 */
+  private get lotRoundingEnabled(): boolean {
+    return this.realCapital !== undefined && this.lotSize !== undefined;
+  }
+
+  /** 把归一化目标市值转成取整后的真实手数。
+   *  返回 lotShares（lotSize 的倍数，0 = 不足 1 手）。仅在 lotRoundingEnabled 时有意义。 */
+  private roundToLot(normValue: number, price: number): number {
+    const cap = this.realCapital!;
+    const lot = this.lotSize!;
+    const rawShares = (normValue * cap) / price;  // 真实股数
+    return Math.floor(rawShares / lot) * lot;
   }
 
   /** 用 D 日收盘价重算所有持仓的权重 + totalNav。
@@ -174,16 +207,21 @@ export class PositionSimulator {
   /** 按 rebalance 结果更新持仓。
    *  从 portfolio_after 翻译回 Position[]，处理 BUY/SELL/ADD/REDUCE。
    *  entry_date：新建仓 = date（当日收盘价建仓，与 entryPrice 一致），ADD 保持原 entry_date。
-   *  priceMap 复用 normalizeWeights 缓存（SELL/REDUCE 的 exitPrice 从中取，BUY 新股需补查）。 */
+   *  priceMap 复用 normalizeWeights 缓存（SELL/REDUCE 的 exitPrice 从中取，BUY 新股需补查）。
+   *
+   *  手数取整（lotRoundingEnabled 时）：BUY/ADD/REDUCE 的成交股数取整到 lotSize 的倍数，
+   *  不足 1 手的 BUY 记入 skippedBuys（回测真实反映"买不起 1 手"的高价股）。
+   *  返回 { skippedBuys }；未启用取整时恒为空数组。 */
   async applyPlan(
     result: RebalancePipelineResult,
     date: string,
     reportsByTicker: Map<string, { fitness_score: number; name: string; sector: string }>,
     priceMap?: Map<string, number>,
-  ): Promise<void> {
+  ): Promise<{ skippedBuys: SkippedBuy[] }> {
     const actions = result.rebalancer_output.actions;
     const totalNav = await this.getNav(date, priceMap);
     const entryDate = date;  // 当日收盘价建仓
+    const skippedBuys: SkippedBuy[] = [];
     // 价格查询：优先用缓存，缓存没有再查（BUY 新股不在持仓里，缓存可能没有）
     const getPrice = async (ticker: string): Promise<number | null> => {
       const cached = priceMap?.get(ticker);
@@ -224,9 +262,18 @@ export class PositionSimulator {
       const reduceRatio = a.current_weight > 0
         ? Math.max(0, (a.current_weight - a.target_weight) / a.current_weight)
         : 0.5;
-      const sharesToSell = pos.shares * reduceRatio;
-      this.cash += sharesToSell * exitPrice;
-      pos.shares -= sharesToSell;
+      let sharesToSellNorm = pos.shares * reduceRatio;  // 归一化份额
+
+      // 手数取整：把归一化份额换算成真实股数 → 取整到 lotSize → 不足 1 手不卖
+      if (this.lotRoundingEnabled) {
+        const rawShares = sharesToSellNorm * this.realCapital!;  // 真实股数
+        const lotShares = Math.floor(rawShares / this.lotSize!) * this.lotSize!;
+        if (lotShares <= 0) continue;  // 减仓不足 1 手，跳过
+        sharesToSellNorm = lotShares / this.realCapital!;  // 取整后回归一化
+      }
+
+      this.cash += sharesToSellNorm * exitPrice;
+      pos.shares -= sharesToSellNorm;
       // REDUCE 不记 recent_sells（还有剩余仓位）
       // REDUCE 不平仓所以不记完整交易（或记部分？简化：不记）
       if (pos.shares <= 0.0001) {
@@ -243,14 +290,28 @@ export class PositionSimulator {
         // 取不到价无法建仓——跳过（罕见，K线拉取失败）
         continue;
       }
-      const targetValue = a.target_weight * totalNav;  // 目标市值
+      const targetValue = a.target_weight * totalNav;  // 目标市值（归一化）
       const report = reportsByTicker.get(a.ticker);
       const existing = this.positions.get(a.ticker);
 
       if (existing) {
         // ADD：加仓到 target_weight
         const currentSharesValue = existing.shares * entryPrice;
-        const sharesToAdd = Math.max(0, (targetValue - currentSharesValue) / entryPrice);
+        const addValueNorm = Math.max(0, targetValue - currentSharesValue);  // 归一化增量市值
+        let sharesToAdd = addValueNorm / entryPrice;  // 归一化份额
+
+        // 手数取整：加仓增量不足 1 手 → 不加（保持原仓）
+        if (this.lotRoundingEnabled) {
+          const lotShares = this.roundToLot(addValueNorm, entryPrice);
+          if (lotShares <= 0) continue;  // 增量不足 1 手
+          sharesToAdd = lotShares / this.realCapital!;  // 取整后回归一化
+          // ADD 的成交市值用实际取整后的份额算（而非 targetValue），保证 cash 精确
+          this.cash = Math.max(0, this.cash - sharesToAdd * entryPrice);
+          existing.shares += sharesToAdd;
+          existing.weight = a.target_weight;
+          continue;
+        }
+
         existing.shares += sharesToAdd;
         existing.weight = a.target_weight;
         // ADD 保持 entry_date（anti-churn 锁连续）
@@ -258,7 +319,25 @@ export class PositionSimulator {
         this.cash = Math.max(0, this.cash - sharesToAdd * entryPrice);
       } else {
         // BUY：新建仓
-        const shares = targetValue / entryPrice;
+        let shares = targetValue / entryPrice;
+        let filledValue = targetValue;  // 实际消耗的归一化现金
+
+        // 手数取整：买不起 1 手 → 跳过并记录
+        if (this.lotRoundingEnabled) {
+          const lotShares = this.roundToLot(targetValue, entryPrice);
+          if (lotShares <= 0) {
+            const rawShares = (targetValue * this.realCapital!) / entryPrice;
+            skippedBuys.push({
+              ticker: a.ticker,
+              name: a.name,
+              reason: `${(a.target_weight * 100).toFixed(1)}% 仓位 × ${this.realCapital} / ${entryPrice.toFixed(2)}元 = ${rawShares.toFixed(0)} 股 < 1 手(${this.lotSize})`,
+            });
+            continue;
+          }
+          shares = lotShares / this.realCapital!;  // 取整后回归一化
+          filledValue = shares * entryPrice;       // 实际成交市值（≤ targetValue）
+        }
+
         this.positions.set(a.ticker, {
           ticker: a.ticker,
           name: a.name,
@@ -268,7 +347,7 @@ export class PositionSimulator {
           shares,
           sector: report?.sector ?? "未分类",
         });
-        this.cash = Math.max(0, this.cash - targetValue);
+        this.cash = Math.max(0, this.cash - filledValue);
       }
     }
 
@@ -283,6 +362,7 @@ export class PositionSimulator {
     }
 
     this.lastRebalanceDate = date;
+    return { skippedBuys };
   }
 
   /** 获取上一个交易日的 NAV（navHistory 最后一条；无历史则返回起点 1.0）。
@@ -381,13 +461,23 @@ export class PositionSimulator {
       })),
       navHistory: this.navHistory.map(s => ({ ...s, actions: [...s.actions] })),
       trades: this.trades.map(t => ({ ...t })),
+      ...(this.realCapital !== undefined ? { realCapital: this.realCapital } : {}),
+      ...(this.lotSize !== undefined ? { lotSize: this.lotSize } : {}),
     };
   }
 
   /** 从序列化状态恢复（跨进程续跑）。
-   *  priceLookup 是注入依赖，每次新建进程时由调用方重新注入。 */
-  static fromSerialized(state: SerializedSimState, priceLookup: PriceLookup): PositionSimulator {
-    const sim = new PositionSimulator(priceLookup);
+   *  priceLookup 是注入依赖，每次新建进程时由调用方重新注入。
+   *  options 可显式覆盖 state 里的 realCapital/lotSize（CLI 传 --capital 时优先）。 */
+  static fromSerialized(
+    state: SerializedSimState,
+    priceLookup: PriceLookup,
+    options?: { realCapital?: number; lotSize?: number },
+  ): PositionSimulator {
+    const opts = options ?? (state.realCapital !== undefined && state.lotSize !== undefined
+      ? { realCapital: state.realCapital, lotSize: state.lotSize }
+      : undefined);
+    const sim = new PositionSimulator(priceLookup, opts);
     sim.cash = state.cash;
     sim.recentSells = { ...state.recentSells };
     sim.lastRebalanceDate = state.lastRebalanceDate;

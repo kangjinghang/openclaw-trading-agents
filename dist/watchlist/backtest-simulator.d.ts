@@ -44,7 +44,10 @@ export interface BacktestResults {
     summary: BacktestSummary;
 }
 /** 序列化后的 PositionSimulator 全量状态（跨进程持久化用）。
- *  所有字段都是 JSON 原生：positions 从 Map 转为数组，SimPosition 结构等同 Position。 */
+ *  所有字段都是 JSON 原生：positions 从 Map 转为数组，SimPosition 结构等同 Position。
+ *
+ *  realCapital / lotSize 为可选：缺失 = 未启用手数取整（旧 state v1 兼容；
+ *  v2 起由 backtest-cli 写入，增量续跑保持同一本金口径）。 */
 export interface SerializedSimState {
     cash: number;
     recentSells: Record<string, string>;
@@ -52,6 +55,14 @@ export interface SerializedSimState {
     positions: Position[];
     navHistory: NavSnapshot[];
     trades: TradeRecord[];
+    realCapital?: number;
+    lotSize?: number;
+}
+/** applyPlan 取整跳过记录：回测真实反映"买不起 1 手"的标的。 */
+export interface SkippedBuy {
+    ticker: string;
+    name: string;
+    reason: string;
 }
 /** 从外部注入的收盘价查询函数（backtest-cli 负责实际拉 K 线 + 缓存）。 */
 export type PriceLookup = (ticker: string, date: string) => Promise<number | null>;
@@ -63,7 +74,17 @@ export declare class PositionSimulator {
     private navHistory;
     private trades;
     private priceLookup;
-    constructor(priceLookup: PriceLookup);
+    private readonly realCapital?;
+    private readonly lotSize?;
+    constructor(priceLookup: PriceLookup, options?: {
+        realCapital?: number;
+        lotSize?: number;
+    });
+    /** 是否启用手数取整。 */
+    private get lotRoundingEnabled();
+    /** 把归一化目标市值转成取整后的真实手数。
+     *  返回 lotShares（lotSize 的倍数，0 = 不足 1 手）。仅在 lotRoundingEnabled 时有意义。 */
+    private roundToLot;
     /** 用 D 日收盘价重算所有持仓的权重 + totalNav。
      *  这是跨日权重漂移的核心：涨了的股权重变大，现金占比相应缩小。
      *  返回当日价格缓存，供后续 getNav/toHoldings/applyPlan 复用（避免重复 priceLookup）。 */
@@ -87,12 +108,18 @@ export declare class PositionSimulator {
     /** 按 rebalance 结果更新持仓。
      *  从 portfolio_after 翻译回 Position[]，处理 BUY/SELL/ADD/REDUCE。
      *  entry_date：新建仓 = date（当日收盘价建仓，与 entryPrice 一致），ADD 保持原 entry_date。
-     *  priceMap 复用 normalizeWeights 缓存（SELL/REDUCE 的 exitPrice 从中取，BUY 新股需补查）。 */
+     *  priceMap 复用 normalizeWeights 缓存（SELL/REDUCE 的 exitPrice 从中取，BUY 新股需补查）。
+     *
+     *  手数取整（lotRoundingEnabled 时）：BUY/ADD/REDUCE 的成交股数取整到 lotSize 的倍数，
+     *  不足 1 手的 BUY 记入 skippedBuys（回测真实反映"买不起 1 手"的高价股）。
+     *  返回 { skippedBuys }；未启用取整时恒为空数组。 */
     applyPlan(result: RebalancePipelineResult, date: string, reportsByTicker: Map<string, {
         fitness_score: number;
         name: string;
         sector: string;
-    }>, priceMap?: Map<string, number>): Promise<void>;
+    }>, priceMap?: Map<string, number>): Promise<{
+        skippedBuys: SkippedBuy[];
+    }>;
     /** 获取上一个交易日的 NAV（navHistory 最后一条；无历史则返回起点 1.0）。
      *  用于算 dailyReturn——必须用当时真实记录的 NAV，而非用当前持仓重算旧价格。 */
     getPrevNav(): number;
@@ -108,8 +135,12 @@ export declare class PositionSimulator {
      *  所有 private 字段都是 JSON 原生：positions 的 Map → Array 转换。 */
     serialize(): SerializedSimState;
     /** 从序列化状态恢复（跨进程续跑）。
-     *  priceLookup 是注入依赖，每次新建进程时由调用方重新注入。 */
-    static fromSerialized(state: SerializedSimState, priceLookup: PriceLookup): PositionSimulator;
+     *  priceLookup 是注入依赖，每次新建进程时由调用方重新注入。
+     *  options 可显式覆盖 state 里的 realCapital/lotSize（CLI 传 --capital 时优先）。 */
+    static fromSerialized(state: SerializedSimState, priceLookup: PriceLookup, options?: {
+        realCapital?: number;
+        lotSize?: number;
+    }): PositionSimulator;
     /** 当前持仓快照（浮动盈亏）：供增量模式每日展示当前持仓状态。
      *  与 closeOpenPositions 不同——它不把持仓记入 trades（否则会把仍持有的记成未平仓交易）。
      *  weight 用 normalizeWeights 漂移后的值（调用方应先调 normalizeWeights）。 */
