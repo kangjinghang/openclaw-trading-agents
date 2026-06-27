@@ -30,6 +30,7 @@
     "candidates": "node dist/candidates-cli.js",
     "rank": "node dist/rank-cli.js",
     "rebalance": "node dist/rebalance-cli.js",
+    "backtest": "node dist/backtest-cli.js",
     "bench": "node dist/llm-bench-cli.js",
     "fitness-history": "node dist/fitness-history-cli.js",
     "scan-all": "node dist/scan-all-cli.js",
