@@ -14,6 +14,7 @@
 // - deal_breaker 是唯一硬退出（强制清仓）
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.actionPriority = actionPriority;
+exports.hasTechnicalBreakdown = hasTechnicalBreakdown;
 exports.baseWeight = baseWeight;
 exports.volatilityFactor = volatilityFactor;
 exports.riskFactor = riskFactor;
@@ -37,6 +38,23 @@ function actionPriority(action) {
  *  趋势模式线性映射：fitness 全程有仓位，无"≤6 不买"断崖。
  *  每分 0.8%：fit3→2.4%, fit5→4%, fit7→5.6%, fit9→7.2%, fit10→8%。
  *  受 singleNameCap（默认 10%）钳制。 */
+// ── 技术破位识别（趋势策略退出信号）──────────────────────────────────────
+// risk=high 分两类：
+//   ① 技术破位（MACD死叉/量价背离/缩量下跌/跌破支撑/缩量上涨）→ 趋势可能结束，代码强制 REDUCE
+//   ② 非技术类（减持/解禁/估值/业绩/造假）→ 留给 PM 判断，不强制
+// 与 shallow-analyzer.ts 退出信号识别规则对齐。
+const TECHNICAL_BREAKDOWN_KEYWORDS = [
+    "MACD", "死叉", "量价背离", "价量背离", "缩量下跌", "缩量上涨",
+    "跌破支撑", "破位", "趋势反转", "见顶", "抛压",
+];
+/** 判断 report 是否含技术破位类高危 risk_flag（severity=高 + flag 命中关键词）。
+ *  命中 → 趋势策略代码层强制 REDUCE，不留给 PM 犹豫（PM 保守倾向下倾向 HOLD）。 */
+function hasTechnicalBreakdown(report) {
+    if (!report.risk_flags || report.risk_flags.length === 0)
+        return false;
+    return report.risk_flags.some(f => f.severity === "高"
+        && TECHNICAL_BREAKDOWN_KEYWORDS.some(kw => f.flag.includes(kw) || f.detail.includes(kw)));
+}
 function baseWeight(fitness) {
     const clamped = Math.max(0, Math.min(10, fitness));
     return clamped * 0.015; // 线性：fit3=4.5%, fit5=7.5%, fit7=10.5%, fit8=12%, fit10=15%
@@ -89,6 +107,18 @@ function computePosition(input) {
                 trace: `建仓${input.daysHeld}天回撤${pct}% ≤ -${(input.initialStopDrawdown * 100).toFixed(0)}%，强制止损`,
             };
         }
+    }
+    // 技术破位强制 REDUCE：持仓股 risk=high 且有技术破位类高危 flag（MACD死叉/量价背离/
+    // 缩量下跌/跌破支撑等）→ 代码强制减半，不留给 PM 犹豫（PM 保守倾向下倾向 HOLD）。
+    // 区别于 deal_breaker（清仓）：技术破位是趋势可能结束，减仓而非清仓，留观察余地。
+    // 非技术类高危 flag（减持/解禁/估值）不强制，留给 PM 判断。
+    if (report.is_held && currentWeight > 0 && hasTechnicalBreakdown(report)) {
+        const techFlag = report.risk_flags.find(f => f.severity === "高" && TECHNICAL_BREAKDOWN_KEYWORDS.some(kw => f.flag.includes(kw) || f.detail.includes(kw)));
+        const target = currentWeight / 2;
+        return {
+            targetWeight: target,
+            trace: `技术破位（${techFlag?.flag ?? "?"}）强制 REDUCE：${(currentWeight * 100).toFixed(1)}% → ${(target * 100).toFixed(1)}%`,
+        };
     }
     // HOLD：不动，保持当前仓位（deal_breaker 已在上一步拦截）
     if (action === "HOLD") {
@@ -173,6 +203,7 @@ function applyPositions(plan, ctx) {
         });
         // 根据计算结果对齐 action 类型（防 validator 规则 8 误报 + 下游一致性）：
         // - deal_breaker / 建仓回撤止损 强制 target=0 → 改 action 为 SELL
+        // - 技术破位强制 REDUCE（trace 含"技术破位"）→ 改 action 为 REDUCE（PM 可能出 HOLD）
         // - REDUCE 小仓位清仓（target=0）→ 改 action 为 SELL（同语义：
         //   target=0 即退出，应记入 recent_sells 防 anti-churn 买锁漏判，execution-planner
         //   也按 SELL 优先级=1 先释放资金）
@@ -183,6 +214,9 @@ function applyPositions(plan, ctx) {
             || result.trace.includes("建仓") && result.trace.includes("止损") // 建仓回撤止损
         )) {
             resolvedAction = "SELL";
+        }
+        else if (result.trace.includes("技术破位") && result.targetWeight < currentWeight) {
+            resolvedAction = "REDUCE";
         }
         const newAction = {
             ...a,

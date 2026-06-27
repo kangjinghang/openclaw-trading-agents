@@ -3,10 +3,9 @@ import type { ActionType, RebalanceConstraints, RebalancePlan, StockReport } fro
  *  SELL=1（先释放资金）→ REDUCE=2 → BUY=3 → ADD=4 → HOLD=5（最后）。
  *  与 rebalance-types.ts Action.priority 注释一致。 */
 export declare function actionPriority(action: ActionType): number;
-/** fitness 分数 → 基础仓位（折扣前）。
- *  趋势模式线性映射：fitness 全程有仓位，无"≤6 不买"断崖。
- *  每分 0.8%：fit3→2.4%, fit5→4%, fit7→5.6%, fit9→7.2%, fit10→8%。
- *  受 singleNameCap（默认 10%）钳制。 */
+/** 判断 report 是否含技术破位类高危 risk_flag（severity=高 + flag 命中关键词）。
+ *  命中 → 趋势策略代码层强制 REDUCE，不留给 PM 犹豫（PM 保守倾向下倾向 HOLD）。 */
+export declare function hasTechnicalBreakdown(report: StockReport): boolean;
 export declare function baseWeight(fitness: number): number;
 /** 波动率折扣：日线收益率标准差（单位 %，如 2.5 = 2.5%/日，由 computeVolatility 输出）。
  *  0（kline 失败/未知）→ ×0.6（最保守折扣，防"零风险"假象）。

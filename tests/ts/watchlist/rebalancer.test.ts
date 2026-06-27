@@ -388,6 +388,45 @@ describe("rebalancePipeline (integration)", () => {
     expect(action.target_weight).toBe(0);
   });
 
+  it("技术破位强制 REDUCE：持仓股 risk=high + 缩量下跌(高)，PM 出 HOLD → 代码减半", async () => {
+    // 生益场景：持仓6天，risk=high + 缩量下跌(高) + 量价背离(高)，PM 出 HOLD 不卖。
+    // 代码层强制 REDUCE（减半），不留给 PM 犹豫。
+    const scan: ScanSummary = {
+      scan_date: "2026-06-23", total_candidates: 0,
+      groups: { LONG: { total: 0, ranked: 0, excluded: 0, fallback: false }, SHORT: { total: 0, pre_filter: 0, post_common_filter: 0, ranked: 0, excluded: 0, fallback: false } },
+      top_picks: [],
+    };
+    const holdings: Holdings = {
+      updated_at: "x", cash_pct: 0.90,
+      positions: [{ ticker: "SH600183", name: "生益科技", weight: 0.06, entry_price: 180, entry_date: "2026-06-17", shares: 100, sector: "元件" }],
+    };
+    const dataByTicker = new Map<string, StockData>([
+      ["SH600183", { ticker: "SH600183", name: "生益科技", sector: "元件", kline: { pct_5d: -3, pct_20d: 30, support: 167, resistance: 187, volatility_20d: 0.028, volume_ratio_5_20: 0.93, last_close: 172 }, news: [], hot_money: { northbound_yi: 0, northbound_signal: "", sector_in_industry_tag: "" }, fundamentals: { pe: 0, pb: 0, rev_q1: 0, np_q1: 0 } }],
+    ]);
+
+    // shallow-analyzer：fitness 7，risk=high + 缩量下跌(高) + 量价背离(高)
+    const shallowCaller: ShallowLlmCaller = async ({ role }) => {
+      if (role === "analyst") return JSON.stringify({ thesis: "覆铜板涨价", fitness_score: 7, data_freshness: "2026-06-23", key_signals: [], data_gaps: [] });
+      return JSON.stringify({ risk_flags: [{ flag: "缩量下跌", severity: "高", detail: "近2日放量跌破" }, { flag: "量价背离", severity: "高", detail: "涨但缩量" }], overall_risk: "high", deal_breaker: false });
+    };
+    // PM 出 HOLD（保守，想再看看）
+    const rebalanceCaller: RebalanceLlmCaller = async () => JSON.stringify({
+      evaluations: [{ ticker: "SH600183", judgment: "HOLD", brief: "hold" }],
+      actions: [{ action: "HOLD", ticker: "SH600183", name: "生益科技", reason: "hold" }],
+      summary: "hold",
+    });
+
+    const result = await rebalancePipeline({
+      scan, holdings, lastRebalance: null, currentDate: "2026-06-23",
+      shallowCaller, rebalanceCaller, dataByTicker,
+    });
+
+    expect(result.status).toBe("ok");
+    const action = result.rebalancer_output.actions.find(a => a.ticker === "SH600183")!;
+    expect(action.action).toBe("REDUCE");              // PM 出 HOLD，代码强制改 REDUCE
+    expect(action.target_weight).toBeCloseTo(0.03, 5); // 6% → 3%（减半）
+  });
+
   it("现金不足：BUY 降级为 HOLD（保留现金下限）", async () => {
     const scan: ScanSummary = {
       scan_date: "2026-06-21", total_candidates: 1,

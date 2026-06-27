@@ -6,6 +6,7 @@ import {
   computePosition,
   applyPositions,
   buildApplyContext,
+  hasTechnicalBreakdown,
 } from "../../../src/watchlist/position-calculator";
 import type {
   StockReport,
@@ -290,6 +291,104 @@ describe("computePosition 建仓回撤止损", () => {
     });
     // 候选股 is_held=false，建仓回撤不生效，走正常 BUY 逻辑
     expect(r.targetWeight).toBeGreaterThan(0);
+  });
+});
+
+// ── 技术破位强制 REDUCE ─────────────────────────────────────────────────────
+
+describe("hasTechnicalBreakdown 技术破位识别", () => {
+  it("MACD死叉(高) → 命中", () => {
+    const r = makeReport({ risk_flags: [{ flag: "MACD死叉", severity: "高", detail: "x" }] });
+    expect(hasTechnicalBreakdown(r)).toBe(true);
+  });
+  it("缩量下跌(高) → 命中", () => {
+    const r = makeReport({ risk_flags: [{ flag: "缩量下跌", severity: "高", detail: "x" }] });
+    expect(hasTechnicalBreakdown(r)).toBe(true);
+  });
+  it("量价背离(高) → 命中", () => {
+    const r = makeReport({ risk_flags: [{ flag: "价量背离", severity: "高", detail: "量价背离明显" }] });
+    expect(hasTechnicalBreakdown(r)).toBe(true);
+  });
+  it("跌破支撑(高) → 命中（detail 含关键词）", () => {
+    const r = makeReport({ risk_flags: [{ flag: "技术风险", severity: "高", detail: "已跌破支撑位" }] });
+    expect(hasTechnicalBreakdown(r)).toBe(true);
+  });
+  it("大股东减持(高) → 不命中（非技术类）", () => {
+    const r = makeReport({ risk_flags: [{ flag: "大股东减持", severity: "高", detail: "近期减持6亿" }] });
+    expect(hasTechnicalBreakdown(r)).toBe(false);
+  });
+  it("解禁压力(高) → 不命中（非技术类）", () => {
+    const r = makeReport({ risk_flags: [{ flag: "解禁压力", severity: "高", detail: "未来90天解禁" }] });
+    expect(hasTechnicalBreakdown(r)).toBe(false);
+  });
+  it("缩量下跌(中) → 不命中（severity 非高）", () => {
+    const r = makeReport({ risk_flags: [{ flag: "缩量下跌", severity: "中", detail: "x" }] });
+    expect(hasTechnicalBreakdown(r)).toBe(false);
+  });
+});
+
+describe("computePosition 技术破位强制 REDUCE", () => {
+  // 生益场景：持仓股，risk=high + 缩量下跌(高) + 量价背离(高)，PM 出 HOLD → 代码强制减半
+  const techBreakReport = () => makeReport({
+    ticker: "SH600183", name: "生益科技", is_held: true, current_weight: 0.06,
+    fitness_score: 7, overall_risk: "high", deal_breaker: false,
+    risk_flags: [
+      { flag: "缩量下跌", severity: "高", detail: "近2日放量跌破支撑" },
+      { flag: "量价背离", severity: "高", detail: "涨但缩量" },
+    ],
+  });
+
+  it("持仓股 + 技术破位 + PM 出 HOLD → 强制 REDUCE（减半）", () => {
+    const r = computePosition({
+      action: "HOLD", report: techBreakReport(),
+      currentWeight: 0.06, volatility: 1, singleNameCap: 0.15,
+    });
+    expect(r.targetWeight).toBeCloseTo(0.03, 5);  // 6% → 3%
+    expect(r.trace).toContain("技术破位");
+    expect(r.trace).toContain("REDUCE");
+  });
+
+  it("持仓股 + 技术破位 + PM 出 ADD → 强制 REDUCE（覆盖 PM 加仓意图）", () => {
+    const r = computePosition({
+      action: "ADD", report: techBreakReport(),
+      currentWeight: 0.06, volatility: 1, singleNameCap: 0.15,
+    });
+    expect(r.targetWeight).toBeCloseTo(0.03, 5);  // 不加仓，反而减半
+  });
+
+  it("持仓股 + 非技术类高危（减持）→ 不强制，走 PM 判断", () => {
+    const r = computePosition({
+      action: "HOLD",
+      report: makeReport({
+        is_held: true, current_weight: 0.06, overall_risk: "high",
+        risk_flags: [{ flag: "大股东减持", severity: "高", detail: "减持6亿" }],
+      }),
+      currentWeight: 0.06, volatility: 1, singleNameCap: 0.15,
+    });
+    // 非技术类高危不强制 REDUCE，HOLD 保持当前
+    expect(r.targetWeight).toBeCloseTo(0.06, 5);
+  });
+
+  it("候选股（非持仓）有技术破位 → 不强制（建仓由 PM 决定）", () => {
+    const r = computePosition({
+      action: "BUY",
+      report: makeReport({
+        is_held: false, overall_risk: "high",
+        risk_flags: [{ flag: "MACD死叉", severity: "高", detail: "x" }],
+      }),
+      currentWeight: 0, volatility: 1, singleNameCap: 0.15,
+    });
+    // 候选股不强制，走正常 BUY（PM 可选买小仓试探）
+    expect(r.targetWeight).toBeGreaterThan(0);
+  });
+
+  it("技术破位 + 仓位≤3% → 减半后 ≤1.5%（未清仓，留观察）", () => {
+    // 区别于建仓回撤/deal_breaker 的清仓：技术破位只减半，不清零
+    const r = computePosition({
+      action: "HOLD", report: techBreakReport(),
+      currentWeight: 0.03, volatility: 1, singleNameCap: 0.15,
+    });
+    expect(r.targetWeight).toBeCloseTo(0.015, 5);  // 3% → 1.5%，未清仓
   });
 });
 
