@@ -264,6 +264,81 @@ describe("增量回测：Day1 存 state → 新实例 Day2 续跑", () => {
   });
 });
 
+// ── entry_fitness 记录（评分校准）──────────────────────────────────────
+//
+// Position.entry_fitness + TradeRecord.entryFitness：建仓时记录 LLM 评分，
+// 平仓后与实际收益对比，验证 fitness × 0.022 仓位公式的隐含假设
+// "高分股涨得好" 是否成立。
+
+describe("PositionSimulator entry_fitness 记录", () => {
+  it("BUY 建仓时从 reportsByTicker 读 fitness 存入持仓", async () => {
+    const lookup = makePriceLookup({ "SH600000": { [D1]: 10 } });
+    const sim = new PositionSimulator(lookup);
+    await sim.normalizeWeights(D1);
+    await sim.applyPlan(
+      makeResult([buyAction("SH600000", "测试", 0.10)]),
+      D1,
+      new Map([["SH600000", { fitness_score: 8, name: "测试", sector: "银行" }]]),
+    );
+    const pos = sim.serialize().positions[0];
+    expect(pos.entry_fitness).toBe(8);
+  });
+
+  it("SELL 平仓后 trade.entryFitness 记录正确", async () => {
+    const lookup = makePriceLookup({ "SH600000": { [D1]: 10, [D2]: 12 } });  // 涨 20%
+    const sim = new PositionSimulator(lookup);
+    await sim.normalizeWeights(D1);
+    // Day1 建仓，fitness=7
+    await sim.applyPlan(
+      makeResult([buyAction("SH600000", "测试", 0.10)]),
+      D1,
+      new Map([["SH600000", { fitness_score: 7, name: "测试", sector: "银行" }]]),
+    );
+    // Day2 平仓
+    await sim.normalizeWeights(D2);
+    await sim.applyPlan(
+      makeResult([sellAction("SH600000", "测试", 0.10)]),
+      D2,
+      new Map(),
+    );
+    const trades = sim.serialize().trades;
+    expect(trades).toHaveLength(1);
+    expect(trades[0].entryFitness).toBe(7);
+    expect(trades[0].returnPct).toBeCloseTo(20, 0);  // 10→12, +20%
+  });
+
+  it("序列化往返保留 entry_fitness（跨进程续跑）", async () => {
+    const lookup = makePriceLookup({ "SH600000": { [D1]: 10, [D2]: 10 } });
+    const sim = new PositionSimulator(lookup);
+    await sim.normalizeWeights(D1);
+    await sim.applyPlan(
+      makeResult([buyAction("SH600000", "测试", 0.10)]),
+      D1,
+      new Map([["SH600000", { fitness_score: 9, name: "测试", sector: "银行" }]]),
+    );
+    const restored = PositionSimulator.fromSerialized(sim.serialize(), lookup);
+    expect(restored.serialize().positions[0].entry_fitness).toBe(9);
+  });
+
+  it("旧持仓无 fitness（reportsByTicker 缺失）→ entry_fitness undefined，trade 记 null", async () => {
+    const lookup = makePriceLookup({ "SH600000": { [D1]: 10, [D2]: 10 } });
+    const sim = new PositionSimulator(lookup);
+    await sim.normalizeWeights(D1);
+    // reportsByTicker 不含该 ticker（模拟旧持仓/数据缺失）
+    await sim.applyPlan(
+      makeResult([buyAction("SH600000", "测试", 0.10)]),
+      D1,
+      new Map(),
+    );
+    const pos = sim.serialize().positions[0];
+    expect(pos.entry_fitness).toBeUndefined();  // 旧持仓无评分
+    // 平仓后 trade.entryFitness 应为 null（不报错）
+    await sim.normalizeWeights(D2);
+    await sim.applyPlan(makeResult([sellAction("SH600000", "测试", 0.10)]), D2, new Map());
+    expect(sim.serialize().trades[0].entryFitness).toBeNull();
+  });
+});
+
 // ── 手数取整（lotSize）──────────────────────────────────────────────
 //
 // realCapital + lotSize 让回测真实反映 A 股最小 1 手=100 股的约束：

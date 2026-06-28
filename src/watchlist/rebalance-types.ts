@@ -10,6 +10,8 @@ export interface Position {
   entry_date: string;              // "YYYY-MM-DD"
   shares: number;
   sector: string;
+  /** 建仓时 LLM 评的 fitness（0-10），用于平仓后校准评分预测力。可选：旧持仓/hand-edit 可能缺失。 */
+  entry_fitness?: number;
 }
 
 export interface Holdings {

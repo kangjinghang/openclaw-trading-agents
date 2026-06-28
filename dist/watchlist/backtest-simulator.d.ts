@@ -11,6 +11,8 @@ export interface TradeRecord {
     holdDays: number | null;
     returnPct: number | null;
     exitReason: string | null;
+    /** 建仓时 LLM 评的 fitness（0-10），null = 旧持仓/缺数据。用于校准评分预测力。 */
+    entryFitness: number | null;
 }
 /** 每日 NAV 快照。 */
 export interface NavSnapshot {

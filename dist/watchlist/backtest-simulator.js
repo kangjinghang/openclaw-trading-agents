@@ -144,12 +144,13 @@ class PositionSimulator {
                 const entryPrice = pos.entry_price;
                 const returnPct = (exitPrice / entryPrice - 1) * 100;
                 const holdDays = this.calcHoldDays(pos.entry_date, date);
-                // 记交易（平仓）
+                // 记交易（平仓）+ 记录建仓时 fitness（校准评分预测力用）
                 this.trades.push({
                     ticker: a.ticker, name: pos.name,
                     entryDate: pos.entry_date, entryPrice,
                     exitDate: date, exitPrice, holdDays, returnPct,
                     exitReason: a.reason,
+                    entryFitness: pos.entry_fitness ?? null,
                 });
                 // 释放现金：卖出的份额按当日价格变现
                 this.cash += pos.shares * exitPrice;
@@ -249,6 +250,8 @@ class PositionSimulator {
                     entry_date: entryDate,
                     shares,
                     sector: report?.sector ?? "未分类",
+                    // 记录建仓时 LLM 评分，供平仓后校准"评分 vs 实际收益"预测力
+                    entry_fitness: report?.fitness_score,
                 });
                 this.cash = Math.max(0, this.cash - filledValue);
             }
@@ -300,6 +303,7 @@ class PositionSimulator {
                 holdDays: this.calcHoldDays(pos.entry_date, endDate),
                 returnPct: (exitPrice / pos.entry_price - 1) * 100,
                 exitReason: null,
+                entryFitness: pos.entry_fitness ?? null,
             });
         }
     }
@@ -351,6 +355,7 @@ class PositionSimulator {
                 ticker: p.ticker, name: p.name, weight: p.weight,
                 entry_price: p.entry_price, entry_date: p.entry_date,
                 shares: p.shares, sector: p.sector,
+                ...(p.entry_fitness !== undefined ? { entry_fitness: p.entry_fitness } : {}),
             })),
             navHistory: this.navHistory.map(s => ({ ...s, actions: [...s.actions] })),
             trades: this.trades.map(t => ({ ...t })),
@@ -373,6 +378,7 @@ class PositionSimulator {
                 ticker: p.ticker, name: p.name, weight: p.weight,
                 entry_price: p.entry_price, entry_date: p.entry_date,
                 shares: p.shares, sector: p.sector,
+                ...(p.entry_fitness !== undefined ? { entry_fitness: p.entry_fitness } : {}),
             }]));
         sim.navHistory = state.navHistory.map(s => ({ ...s, actions: [...s.actions] }));
         sim.trades = state.trades.map(t => ({ ...t }));

@@ -63,9 +63,9 @@ const data_fetcher_1 = require("./watchlist/data-fetcher");
 const backtest_simulator_1 = require("./watchlist/backtest-simulator");
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const DEFAULT_WATCHLIST_DIR = path.join(os.homedir(), ".openclaw", "watchlist");
-// v2: SerializedSimState 新增 realCapital/lotSize，BacktestStateFile.config 加 capital/lotSize。
-//     v1 state 拒载（份额语义变了，旧归一化浮点份额 vs 新取整份额不可混用）。
-const STATE_VERSION = 2;
+// v3: Position/TradeRecord 加 entry_fitness（评分校准）。字段可选，旧 v2 state 仍可加载
+//     （缺失 fitness 的 trade 显示 null，不报错）。
+const STATE_VERSION = 3;
 const DEFAULT_CAPITAL = 200000; // 20 万小账户
 const DEFAULT_LOT_SIZE = 100; // A 股主板最小 1 手
 function argValue(args, key) {
@@ -116,6 +116,10 @@ function fmt(n, suffix = "%") {
         return "N/A";
     return `${n >= 0 ? "+" : ""}${n.toFixed(1)}${suffix}`;
 }
+/** 数组均值，空数组返回 0。 */
+function avg(arr) {
+    return arr.length === 0 ? 0 : arr.reduce((s, x) => s + x, 0) / arr.length;
+}
 function renderResults(results) {
     const lines = [];
     // NAV 曲线
@@ -133,7 +137,8 @@ function renderResults(results) {
         lines.push("已平仓：");
         for (const t of closedTrades) {
             const win = (t.returnPct ?? 0) > 0 ? "✓" : "✗";
-            lines.push(`  ${win} ${t.ticker} ${t.name}: ${t.entryDate}→${t.exitDate} `
+            const fit = t.entryFitness != null ? `[fit${t.entryFitness}]` : "[fit?]";
+            lines.push(`  ${win} ${fit} ${t.ticker} ${t.name}: ${t.entryDate}→${t.exitDate} `
                 + `(持${t.holdDays}天) ${fmt(t.returnPct)} @${t.entryPrice.toFixed(2)}→${t.exitPrice?.toFixed(2)}`);
         }
     }
@@ -141,8 +146,56 @@ function renderResults(results) {
         lines.push("未平仓（回测期末仍持有）：");
         for (const t of openTrades) {
             const win = (t.returnPct ?? 0) > 0 ? "✓" : "✗";
-            lines.push(`  ${win} ${t.ticker} ${t.name}: ${t.entryDate}→期末 `
+            const fit = t.entryFitness != null ? `[fit${t.entryFitness}]` : "[fit?]";
+            lines.push(`  ${win} ${fit} ${t.ticker} ${t.name}: ${t.entryDate}→期末 `
                 + `(持${t.holdDays}天) ${fmt(t.returnPct)} @${t.entryPrice.toFixed(2)}`);
+        }
+    }
+    // 评分校准：验证"建仓时 fitness"与"实际收益"是否正相关
+    // 核心问题：fitness × 0.022 的仓位公式隐含假设"高分股涨得好"，这一段用数据验证它
+    const fitTrades = results.trades.filter(t => t.entryFitness != null && t.returnPct != null);
+    if (fitTrades.length >= 3) {
+        lines.push("\n═══ 评分校准（fitness → 实际收益）═══");
+        lines.push("验证 LLM 评分是否有预测力：高分股是否真涨得多？");
+        // 分档：高分 ≥7 / 中分 5-6 / 低分 <5
+        const buckets = { high: [], mid: [], low: [] };
+        for (const t of fitTrades) {
+            if (t.entryFitness >= 7)
+                buckets.high.push(t);
+            else if (t.entryFitness >= 5)
+                buckets.mid.push(t);
+            else
+                buckets.low.push(t);
+        }
+        lines.push("分档      样本  平均fitness  平均收益  盈利率");
+        const render = (label, arr) => {
+            if (arr.length === 0) {
+                lines.push(`${label.padEnd(8)}  ${0}只`);
+                return;
+            }
+            const avgFit = avg(arr.map(t => t.entryFitness));
+            const avgRet = avg(arr.map(t => t.returnPct));
+            const winRate = arr.filter(t => (t.returnPct ?? 0) > 0).length / arr.length;
+            lines.push(`${label.padEnd(8)}  ${String(arr.length).padStart(2)}只   fit${avgFit.toFixed(1)}      `
+                + `${fmt(avgRet).padStart(7)}   ${(winRate * 100).toFixed(0)}%`);
+        };
+        render("高分(≥7)", buckets.high);
+        render("中分(5-6)", buckets.mid);
+        render("低分(<5)", buckets.low);
+        lines.push("");
+        const highAvg = buckets.high.length > 0 ? avg(buckets.high.map(t => t.returnPct)) : null;
+        const lowAvg = buckets.low.length > 0 ? avg(buckets.low.map(t => t.returnPct)) : null;
+        if (highAvg !== null && lowAvg !== null) {
+            const spread = highAvg - lowAvg;
+            if (spread > 2)
+                lines.push(`✓ 校准良好：高分档收益(${fmt(highAvg)}) > 低分档(${fmt(lowAvg)})，评分有预测力（差 ${fmt(spread)}）`);
+            else if (spread < -2)
+                lines.push(`⚠ 校准失准：高分档收益(${fmt(highAvg)}) < 低分档(${fmt(lowAvg)})，评分无预测力，需调 prompt`);
+            else
+                lines.push(`△ 校准模糊：高分(${fmt(highAvg)}) vs 低分(${fmt(lowAvg)}) 差异小，样本不足或评分区分度低`);
+        }
+        else {
+            lines.push(`（样本 ${fitTrades.length} 只偏少，需 30+ 笔交易才能可靠校准）`);
         }
     }
     // 汇总
@@ -159,11 +212,11 @@ function loadState(statePath) {
         return null;
     try {
         const raw = JSON.parse(fs.readFileSync(statePath, "utf-8"));
-        if (raw?.version !== STATE_VERSION || !raw?.simulator) {
-            // v1（或未知版本）state：份额语义已变（取整 vs 浮点），不可续跑。
-            if (raw?.version && raw.version !== STATE_VERSION) {
-                console.error(`  [state] 版本不兼容（文件 v${raw.version}，当前 v${STATE_VERSION}），请用 --reset 重开`);
-            }
+        // v1 state 拒载（份额语义变了：浮点 vs 手数取整）。
+        // v2（含 realCapital/lotSize）向后兼容 v3（entry_fitness 字段可选，缺失=旧持仓无评分）。
+        const MIN_COMPAT_VERSION = 2;
+        if (!raw?.simulator || typeof raw?.version !== "number" || raw.version < MIN_COMPAT_VERSION) {
+            console.error(`  [state] 版本不兼容（文件 v${raw?.version ?? "?"}，需 ≥v${MIN_COMPAT_VERSION}），请用 --reset 重开`);
             return null;
         }
         return raw;
