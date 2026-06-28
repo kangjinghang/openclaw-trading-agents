@@ -497,3 +497,4 @@ node dist/backtest-cli.js --report
 | `7b382a1` | 7 | 东财 BOARD_NAME Ⅱ后缀容错 |
 | `4284527` | 8 | 方向B集中化（参数+评分双调） |
 | `6470df9` | 9 | 评分校准（记录 entry_fitness） |
+| `4c5a6df` | 10 | 调仓决策归档（days/<date>/rebalance.json + --day 查看器） |
