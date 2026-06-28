@@ -44,9 +44,10 @@ const REBALANCER_PROMPT_TEMPLATE = `# 角色
 # 硬约束（validator 会强制 revise）
 - 单仓 ≤ {single_name}
 - 单行业 ≤ {single_sector}（按 sector 字段聚合）
-- 日换手 = sum(|delta|) ≤ {daily_turnover}
+- 持仓数 ≤ {max_positions} 只（target_weight>0 的标的数，超了必须 SELL 砍掉，不能只调小仓位）
+- 日换手 = max(总买入, 总卖出) ≤ {daily_turnover}（单向算法：只算买卖较大的一边，换仓不被双向累加卡死）
 - 现金保留 = 1 - sum(target_weight) ≥ {cash_reserve}
-- locked 持仓禁止 SELL/REDUCE，**除非** overall_risk=high 或有"高"级 risk_flag（止损豁免）
+- locked 持仓禁止 SELL/REDUCE，**除非** overall_risk=high 或有"高"级 risk_flag（止损豁免），或浮盈≥{take_profit_threshold_pct}（止盈豁免，落袋为安不是 churn）
 - {anti_churn_days} 天内卖出过的 ticker 禁止 BUY
 
 # 软偏好
@@ -118,10 +119,12 @@ export function formatRebalancerPrompt(
   return REBALANCER_PROMPT_TEMPLATE
     .replace(/\{single_name\}/g, String(c.single_name))
     .replace(/\{single_sector\}/g, String(c.single_sector))
+    .replace(/\{max_positions\}/g, String(c.max_positions))
     .replace(/\{daily_turnover\}/g, String(c.daily_turnover))
     .replace(/\{cash_reserve\}/g, String(c.cash_reserve))
     .replace(/\{anti_churn_days\}/g, String(antiChurnDays))
     .replace(/\{anti_churn_days_sub\}/g, String(Math.max(antiChurnDays - 1, 0)))
+    .replace(/\{take_profit_threshold_pct\}/g, String(Math.round(c.take_profit_threshold * 100)) + "%")
     .replace("{holdings_json}", holdingsStr)
     .replace("{last_rebalance_json}", lastStr)
     .replace("{per_stock_reports}", reportsStr)
@@ -446,11 +449,12 @@ export async function rebalancePipeline(input: RebalancePipelineInput): Promise<
   //      computePosition 真正触发 SELL。
   const entryPriceByPos = new Map<string, number>();
   for (const p of input.holdings.positions) entryPriceByPos.set(p.ticker, p.entry_price);
-  const held = new Map<string, { days_held: number; locked: boolean; stopLossSignal?: boolean }>();
+  const held = new Map<string, { days_held: number; locked: boolean; stopLossSignal?: boolean; takeProfitSignal?: boolean }>();
   for (const m of metas) {
     if (!m.is_held) continue;
     const report = reportsByTicker.get(m.ticker);
     let stopLossSignal: boolean;
+    let takeProfitSignal = false;
     if (!report) {
       stopLossSignal = true;  // ④ 数据失败
     } else {
@@ -464,8 +468,14 @@ export async function rebalancePipeline(input: RebalancePipelineInput): Promise<
         || report.risk_flags.some(f => f.severity === "高")
         || report.deal_breaker                                     // ② 致命雷
         || initialStop;                                            // ③ 建仓回撤
+      // 止盈豁免：locked 期内浮盈 ≥ 阈值 → 允许突破锁卖出。
+      // 与止损镜像：止损防下行（建仓回撤/破位），止盈锁上行（落袋为安）。
+      // 阈值默认 15%（take_profit_threshold），低于此视为"还没到止盈点，可能是 churn"。
+      takeProfitSignal = Boolean(entry && entry > 0 && cur && cur > 0
+        && m.locked
+        && (cur / entry - 1) >= config.constraints.take_profit_threshold);
     }
-    held.set(m.ticker, { days_held: m.days_held, locked: m.locked, stopLossSignal });
+    held.set(m.ticker, { days_held: m.days_held, locked: m.locked, stopLossSignal, takeProfitSignal });
   }
   // anti-churn 买锁：最近 N 天内卖出过的 ticker 禁止 BUY
   // 优先用 recent_sells（跨次累积，覆盖多次 rebalance），fallback 到 lastRebalance.actions

@@ -3,7 +3,7 @@ import { formatRebalancerPrompt, parseRebalancePlan, rebalancePipeline } from ".
 import type { StockReport, Holdings, LastRebalance, RebalanceConstraints } from "../../../src/watchlist/rebalance-types";
 import type { MacroView } from "../../../src/watchlist/data-fetcher";
 
-const C: RebalanceConstraints = { single_name: 0.15, single_sector: 0.30, daily_turnover: 0.30, cash_reserve: 0.10 };
+const C: RebalanceConstraints = { single_name: 0.15, single_sector: 0.30, daily_turnover: 0.30, cash_reserve: 0.10, initial_stop_drawdown: 0.07, initial_stop_days: 3, max_positions: 5, take_profit_threshold: 0.15 };
 
 function makeReport(over: Partial<StockReport> = {}): StockReport {
   return {

@@ -41,11 +41,18 @@ function validateRebalance(plan, ctx, c) {
         }
     }
     // 规则 4: 日换手 ≤ daily_turnover
-    const turnover = plan.actions.reduce((s, a) => s + Math.abs(a.delta), 0);
+    //   算法：单向 max(总买入, 总卖出)，不是双向 sum(|delta|)。
+    //   原因：满仓后一次"换仓"（卖旧买新）天然双向累加——卖 30%+买 20%=50%，任何 2 只以上的
+    //   换仓都必超 40% 上限，数学上不可满足，导致满仓后策略卡死（死亡螺旋）。
+    //   单向只算较大的一边：同样换仓 max(30%,20%)=30%，合理反映"真实换了多少仓位"。
+    //   （净加仓=只买不卖、净降仓=只卖不买时，单向=双向，不受影响。）
+    const buyTotal = plan.actions.reduce((s, a) => s + Math.max(0, a.delta), 0);
+    const sellTotal = plan.actions.reduce((s, a) => s + Math.max(0, -a.delta), 0);
+    const turnover = Math.max(buyTotal, sellTotal);
     if (turnover > c.daily_turnover + 0.001) {
         violations.push({
             rule: "4. 日换手上限",
-            detail: `sum(|delta|) ${turnover.toFixed(3)} 超 ${c.daily_turnover} 上限`,
+            detail: `max(买${buyTotal.toFixed(3)}, 卖${sellTotal.toFixed(3)}) = ${turnover.toFixed(3)} 超 ${c.daily_turnover} 上限`,
         });
     }
     // 规则 5: 现金 ≥ cash_reserve
@@ -59,10 +66,13 @@ function validateRebalance(plan, ctx, c) {
     //   止损豁免：overall_risk=high 或有 severity=高 的 risk_flag（stopLossSignal=true）时
     //   允许突破锁及时止损。anti-churn 防"无谓 churn"，止损是退出不是 churn。
     //   趋势策略的下行保护依赖破位即卖，不能被锁堵死（否则等于没有止损）。
+    //   止盈豁免：浮盈≥take_profit_threshold（takeProfitSignal=true）时允许突破锁卖出。
+    //   止盈是合理操作（落袋为安/换更强标的），不该被 churn 锁挡死。与止损镜像：锁防噪音，
+    //   不锁真正的退出动机（止损下行 + 止盈上行）。
     for (const a of plan.actions) {
         if (a.action === "SELL" || a.action === "REDUCE") {
             const h = ctx.held.get(a.ticker);
-            if (h?.locked && !h.stopLossSignal) {
+            if (h?.locked && !h.stopLossSignal && !h.takeProfitSignal) {
                 violations.push({
                     rule: "6. anti-churn 卖锁",
                     detail: `${a.ticker} 持仓 ${h.days_held} 天 < anti_churn_days，locked，禁止 ${a.action}`,
@@ -137,17 +147,48 @@ function validateRebalance(plan, ctx, c) {
             }
         }
     }
+    // 规则 12: 持仓数 ≤ max_positions
+    //   落实"3-5 只集中"定位——之前只是 prompt 软引导，LLM 无视它买到 7-8 只，仓位打满后
+    //   触发换手率死亡螺旋。现在硬约束 target>0 的 action 数。是上限不是必须达到（手数取整
+    //   买不足一手被跳过时，实际持仓少于上限不算违规）。
+    if (typeof c.max_positions === "number") {
+        const heldCount = plan.actions.filter(a => a.target_weight > 0.001).length;
+        if (heldCount > c.max_positions) {
+            violations.push({
+                rule: "12. 持仓数上限",
+                detail: `持仓 ${heldCount} 只 超 ${c.max_positions} 上限（需砍掉 ${heldCount - c.max_positions} 只：优先 SELL fitness 最低/趋势已破位的）`,
+            });
+        }
+    }
     return { passed: violations.length === 0, violations };
 }
-/** 把 violations 拼成 LLM revise 用的 feedback 字符串。空 violations 返回空。 */
+/** 把 violations 拼成 LLM revise 用的 feedback 字符串。空 violations 返回空。
+ *  关键：不只是报错，还要给可执行的修正指引——否则 LLM 不知道该砍哪个动作，盲目重试
+ *  往往收敛不了（这正是之前满仓卡死时 revise 2 次仍失败的原因之一）。 */
 function composeReviseFeedback(violations) {
     if (violations.length === 0)
         return "";
     const lines = violations.map((v, i) => `${i + 1}. [${v.rule}] ${v.detail}`);
+    // 针对高频违规补可执行指引
+    const tips = [];
+    if (violations.some(v => v.rule.includes("持仓数上限"))) {
+        tips.push("- 持仓超限：砍掉 fitness 最低或趋势已破位的持仓（改 SELL），不要只把目标仓位调小——数量没减还是违规");
+    }
+    if (violations.some(v => v.rule.includes("日换手上限"))) {
+        tips.push("- 换手超限：减少【同时进行的买卖对数】。优先只做最该做的 1-2 笔，其余改 HOLD 下次再调");
+    }
+    if (violations.some(v => v.rule.includes("单行业上限"))) {
+        tips.push("- 行业超限：同行业不要再 BUY/ADD，优先 HOLD 或 REDUCE 该行业持仓");
+    }
+    if (violations.some(v => v.rule.includes("anti-churn 卖锁"))) {
+        tips.push("- 撞卖锁：被锁的持仓禁止 SELL/REDUCE（除非止损/止盈信号）。变通方式：①把那只改 HOLD，等解锁后再卖 "
+            + "②改卖其他没锁的持仓 ③只做买入不做卖出。不要死磕同一只被锁的标的");
+    }
     return [
         "你的上一次方案违反了以下约束，请修正：",
         "",
         ...lines,
+        ...(tips.length > 0 ? ["", "修正建议：", ...tips] : []),
         "",
         "请重新输出 REBALANCE_PLAN，确保满足所有硬约束。",
     ].join("\n");

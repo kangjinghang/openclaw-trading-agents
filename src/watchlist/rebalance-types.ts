@@ -215,6 +215,16 @@ export interface RebalanceConstraints {
   initial_stop_drawdown: number;
   /** 建仓回撤止损观察窗口（天）。超过后靠技术信号（MACD死叉/破位/量价背离）。 */
   initial_stop_days: number;
+  /** 持仓数上限（target_weight>0 的 action 数 ≤ 此值）。
+   *  落实"3-5 只集中"定位——之前这只是一句 prompt 软引导，LLM 无视它一路买到 7-8 只，
+   *  仓位打满后触发换手率死亡螺旋（满仓想换仓，双向换手率数学上必超上限，永远调不动仓）。
+   *  这是上限不是必须达到：手数取整买不足一手被跳过时，实际持仓可少于上限，不违规。 */
+  max_positions: number;
+  /** 止盈豁免阈值：locked 期内浮盈（cur/entry-1）≥ 此值时，允许突破 anti-churn 锁卖出。
+   *  anti-churn 防"无谓 churn"（噪音驱动的冲动卖出），但止盈是合理操作——落袋为安不是 churn。
+   *  没 这个豁免时，豫光金铅 +7.6% 浮盈想止盈也被 7 天锁挡死，LLM 撞锁死磕整天调不动仓。
+   *  与 stopLossSignal（止损豁免）镜像：止损防下行、止盈锁上行利润。 */
+  take_profit_threshold: number;
 }
 
 export interface RebalanceConfig {
@@ -238,19 +248,25 @@ export interface RebalanceConfig {
 //   cash_reserve 0.03          ✅ 回测验证（趋势要在场）
 //   initial_stop_drawdown 0.07 ✅ 国瓷 -8.3% 能触发，香农正常波动 <5% 不误伤
 //   initial_stop_days 3        ❓ 生益第6天破位未触发，可能偏短，待 A/B 对比 3/5/7 天
+//   max_positions 5            ✅ 落实"3-5 只"定位（之前是 prompt 软引导，LLM 无视买到 7-8 只）
+//   take_profit_threshold 0.15 ✅ 止盈豁免（浮盈≥15% 可突破锁，豫光 +7.6% 想止盈被挡的 case）
+//   daily_turnover 0.50        ✅ 单向算法（max(买,卖)）+ 放宽 0.40→0.50，修满仓换仓死亡螺旋
+//   max_revise_retries 3       ✅ 2→3，多一次收敛机会（换手/持仓数违规时需要 LLM 砍动作）
 //   anti_churn_days 7          ⚠️ 经验值（防 churn vs 灵活调仓的平衡点，未压力测试）
 export const DEFAULT_REBALANCE_CONFIG: RebalanceConfig = {
   top_n: 10,
   constraints: {
     single_name: 0.22,    // 单仓上限 22%（集中定位，对应 fit10 baseWeight 22% 不被截断）
     single_sector: 0.25,  // 单行业 25%（分散，一级聚合）
-    daily_turnover: 0.40, // 日换手 40%（趋势策略需灵活调仓）
+    daily_turnover: 0.50, // 日换手上限 50%（单向 max(买入,卖出)；满仓换 3 只≈30%，留余量）
     cash_reserve: 0.03,   // 现金下限 3%（趋势模式要在场，少留现金）
     initial_stop_drawdown: 0.07,  // 建仓回撤止损 7%（国瓷 -8.3% 能触发，香农正常波动 <5% 不误伤）
     initial_stop_days: 3,          // 建仓后 3 天内回撤超阈值 → 强制清仓；超过靠技术信号
+    max_positions: 5,    // 持仓数上限 5（落实"3-5 只"集中定位，上限非必须达到）
+    take_profit_threshold: 0.15,   // 止盈豁免 15%（浮盈≥15% 可突破 anti-churn 锁卖出，落袋为安不是 churn）
   },
   anti_churn_days: 7,
-  max_revise_retries: 2,
+  max_revise_retries: 3,
   run_optional_scripts: false,
   shallow_concurrency: 2,
 };

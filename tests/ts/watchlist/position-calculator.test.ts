@@ -15,8 +15,8 @@ import type {
   RebalancePlan,
 } from "../../../src/watchlist/rebalance-types";
 
-// 趋势模式约束：单仓 22%，行业 25%，换手 40%，现金下限 3%（对齐 DEFAULT_REBALANCE_CONFIG）
-const C: RebalanceConstraints = { single_name: 0.22, single_sector: 0.25, daily_turnover: 0.40, cash_reserve: 0.03, initial_stop_drawdown: 0.07, initial_stop_days: 3 };
+// 趋势模式约束：单仓 22%，行业 25%，换手 50%（单向），现金下限 3%，持仓≤5（对齐 DEFAULT_REBALANCE_CONFIG）
+const C: RebalanceConstraints = { single_name: 0.22, single_sector: 0.25, daily_turnover: 0.50, cash_reserve: 0.03, initial_stop_drawdown: 0.07, initial_stop_days: 3, max_positions: 5, take_profit_threshold: 0.15 };
 
 function makeReport(over: Partial<StockReport> = {}): StockReport {
   return {

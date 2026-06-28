@@ -184,6 +184,16 @@ export interface RebalanceConstraints {
     initial_stop_drawdown: number;
     /** 建仓回撤止损观察窗口（天）。超过后靠技术信号（MACD死叉/破位/量价背离）。 */
     initial_stop_days: number;
+    /** 持仓数上限（target_weight>0 的 action 数 ≤ 此值）。
+     *  落实"3-5 只集中"定位——之前这只是一句 prompt 软引导，LLM 无视它一路买到 7-8 只，
+     *  仓位打满后触发换手率死亡螺旋（满仓想换仓，双向换手率数学上必超上限，永远调不动仓）。
+     *  这是上限不是必须达到：手数取整买不足一手被跳过时，实际持仓可少于上限，不违规。 */
+    max_positions: number;
+    /** 止盈豁免阈值：locked 期内浮盈（cur/entry-1）≥ 此值时，允许突破 anti-churn 锁卖出。
+     *  anti-churn 防"无谓 churn"（噪音驱动的冲动卖出），但止盈是合理操作——落袋为安不是 churn。
+     *  没 这个豁免时，豫光金铅 +7.6% 浮盈想止盈也被 7 天锁挡死，LLM 撞锁死磕整天调不动仓。
+     *  与 stopLossSignal（止损豁免）镜像：止损防下行、止盈锁上行利润。 */
+    take_profit_threshold: number;
 }
 export interface RebalanceConfig {
     top_n: number;
