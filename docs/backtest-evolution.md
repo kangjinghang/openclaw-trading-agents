@@ -52,9 +52,13 @@ backtest-simulator（连续持仓模拟）
    │   ├─ normalizeWeights：价格漂移重算权重
    │   ├─ applyPlan：BUY/SELL/ADD/REDUCE + 手数取整
    │   └─ recordNav：每日 NAV 快照
-   ▼  backtest/state.json            ← 增量续跑状态
+   ▼  backtest/state.json            ← 增量续跑状态（只管持仓，不含决策原因）
+   ▼  backtest/days/<date>/rebalance.json  ← 每日完整调仓决策归档
+       （evaluations + actions[reason] + summary + reports[fitness] + 约束博弈）
 backtest-cli --report
    ▼  backtest/run-<ts>/report.md    ← 含评分校准段
+backtest-cli --day <date>
+   ▼  终端渲染归档决策（人类可读视图）
 ```
 
 ### 四层仓位计算
@@ -203,6 +207,18 @@ LLM 出方向（BUY/SELL/HOLD/...）
 
 ---
 
+### 阶段 10：调仓决策归档（06-28，可审计性修复）
+
+**问题**：回测只能看到"结果"（NAV 曲线 + actions 简表），看不到"过程"——某天为什么买/卖某只股、跳过哪些候选、约束博弈了几轮，全部丢失。原因：`runSingleDay` 拿到了完整的 `rebalancer_output`（含 evaluations / 每个 action 的 reason / summary / reports），却只取 actions 的方向和名字，把 reason / summary / evaluations 全扔了。详细决策只残留在 `os.tmpdir()` 的 LLM trace 里，Windows 重启即清空。
+
+**决策**：见决策推理链 E。每天把完整 `rebalancer_output` + `portfolio_before` + 每股 fitness/risk/thesis 报告 + 约束 revise 过程，原样归档到 `backtest/days/<date>/rebalance.json`。加 `--day <DATE>` 命令渲染成人类可读视图。
+
+**职责分离**：`state.json` 只管持仓模拟（精简，已是增量续跑的状态机）；调仓"为什么"归 `days/<date>/`（按日独立文件，可审计、可 diff、可随时翻看）。两者不耦合——某天的决策归档坏了不影响持仓模拟续跑。
+
+**当前状态**：已落地。历史 7 天需 `--reset` 重跑才能补归档（归档只在跑当天生成，无法事后回填，因为 LLM 输出是即时的）。
+
+---
+
 ## 四、关键决策的推理链
 
 ### 决策 A：手数取整为什么在成交层，不在候选池过滤？
@@ -289,6 +305,32 @@ baseWeight 给小仓（fit8 才 12%）
 - ✓ 校准良好：高分档收益 > 低分档，单调递减 → 评分可信，仓位公式有底气
 - ⚠ 校准失准：高分档 < 低分档（倒挂）→ 评分无预测力，需调 shallow-analyzer prompt
 - △ 校准模糊：差异小 → 区分度不足，或样本不够
+
+---
+
+### 决策 E：调仓决策归档为什么按日独立文件，不塞进 state.json？
+
+**用户原问**："我看你找了很久，是不是现在的代码设计不合理？"
+
+**诊断（用户一针见血）**：调仓的 reason / evaluations / summary 只在跑回测那一刻由 LLM 生成，然后**用完即弃**。`runSingleDay` 拿到完整 `rebalancer_output` 却只取 actions 的方向和名字，其余全丢。要回溯某天为什么这么调，得去 `os.tmpdir()` 的 LLM trace 里"考古"——那是系统临时目录，重启即清空。回测因此变成黑盒：只告诉你赚了多少，不告诉你每天怎么决定的。
+
+**为什么不塞进 state.json**：
+- state.json 是持仓模拟的状态机（cash + positions + navHistory + trades），职责单一
+- 调仓决策体量大（每股含 thesis/key_signals/risk_flags + evaluations + 约束 violations），塞进去会让 state 膨胀到难以人工检查
+- state 每天整体覆盖写（增量续跑），决策若是其中一部分，版本/回滚会混乱
+- 按日独立文件可单独打开、单独 diff 两天差异、坏了不影响持仓续跑
+
+**为什么用 `days/<date>/` 而非 `run-<ts>/`**：
+- `run-<ts>/` 是 `--report` 的产物（一次性报告，每次生成新目录）
+- `days/<date>/` 与回测日一一对应，稳定路径，"想看 06-23 怎么调的"直接打开固定文件
+- 目录形式（非单文件）便于后续扩展（如加每日 K 线快照、shallow-analyzer 原始报告）
+
+**为什么无法事后回填**：LLM 输出是即时的（每次跑带随机性 + 最新数据），历史日的决策无法重现。所以归档**必须在跑当天生成**，历史日要补只能 `--reset` 重跑。这本身也是个信号：可审计性要从第一天就做，不能事后补。
+
+**最终方案**：
+- `archiveDayRebalance()`：`runSingleDay` 里 rebalance 跑完立即归档，非 ok 日也存（失败日更要看）
+- `--day <DATE>`：渲染归档成人类可读视图（评估表 + 动作理由 + 组合总结 + 约束博弈）
+- 测试锁定渲染契约（backtest-archive.test.ts，5 个用例）
 
 ---
 
@@ -422,6 +464,9 @@ node dist/backtest-cli.js --api-key <KEY> --dates 2026-06-17,2026-06-18,...
 
 # 查看进度
 node dist/backtest-cli.js --show
+
+# 查看某天的调仓决策（评估表 + 动作理由 + 组合总结 + 约束博弈）
+node dist/backtest-cli.js --day 2026-06-23
 
 # 生成完整报告（含评分校准段）
 node dist/backtest-cli.js --report

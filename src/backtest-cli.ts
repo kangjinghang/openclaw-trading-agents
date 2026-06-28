@@ -23,6 +23,7 @@ import { writeAtomicJson } from "./watchlist/atomic-json";
 import {
   rebalancePipeline,
   type RebalanceLlmCaller,
+  type RebalancePipelineResult,
 } from "./watchlist/rebalancer";
 import {
   formatAnalystPrompt,
@@ -30,7 +31,7 @@ import {
   type ShallowLlmCaller,
 } from "./watchlist/shallow-analyzer";
 import { fetchAllStockData } from "./watchlist/data-fetcher";
-import type { Action, StockReport } from "./watchlist/rebalance-types";
+import type { Action, StockReport, Holdings } from "./watchlist/rebalance-types";
 import type { ScanSummary } from "./watchlist/types";
 import {
   PositionSimulator,
@@ -253,8 +254,72 @@ interface DayRunResult {
   actions: Action[];
 }
 
+/** 把一天的完整调仓决策落盘到 backtest/days/<date>/rebalance.json。
+ *
+ *  这是回测可审计性的关键：LLM 写的 evaluations（每股评估）、每个 action 的 reason、
+ *  组合 summary、约束 revise 过程、每股 fitness/risk/thesis（reason 的"依据"）全部归档。
+ *  state.json 只管持仓模拟（精简），调仓"为什么"归这里——两者职责分离。
+ *
+ *  status 非 ok（被约束否决 / 解析失败）也照存，反而更要看：为什么那天没调成仓。
+ *  导出供测试覆盖（CLI 入口默认不导出符号，这里显式导出纯函数）。 */
+export function archiveDayRebalance(
+  backtestDir: string,
+  date: string,
+  holdings: Holdings,
+  result: RebalancePipelineResult,
+): void {
+  const dayDir = path.join(backtestDir, "days", date);
+  fs.mkdirSync(dayDir, { recursive: true });
+
+  // 每股报告精简：只留决策相关字段（fitness/risk/deal_breaker/thesis/signals），
+  // 不存原始 fundamentals/kline（太大，且可重拉）。这是 rebalancer 做决定的"输入依据"。
+  const reportsDigest = (result.reports as StockReport[]).map(r => ({
+    ticker: r.ticker,
+    name: r.name,
+    sector: r.sector,
+    fitness_score: r.fitness_score,
+    overall_risk: r.overall_risk,
+    deal_breaker: r.deal_breaker,
+    is_held: r.is_held,
+    days_held: r.days_held,
+    locked: r.locked,
+    thesis: r.thesis,
+    key_signals: r.key_signals,
+    risk_flags: r.risk_flags,
+  }));
+
+  const archive = {
+    date,
+    written_at: new Date().toISOString(),
+    status: result.status,
+    portfolio_before: {
+      cash_pct: holdings.cash_pct,
+      positions: holdings.positions.map(p => ({
+        ticker: p.ticker, name: p.name, sector: p.sector,
+        weight: p.weight, entry_price: p.entry_price, entry_date: p.entry_date,
+      })),
+    },
+    rebalancer_output: result.rebalancer_output,
+    constraint_check: {
+      passed: result.constraint_check.passed,
+      violations: result.constraint_check.violations,
+      revise_count: result.constraint_check.revise_count,
+    },
+    position_traces: result.position_traces,
+    sector_warnings: result.sector_warnings,
+    reports: reportsDigest,
+  };
+
+  writeAtomicJson(path.join(dayDir, "rebalance.json"), archive);
+}
+
 /** 跑一天的完整流程：normalizeWeights → rebalance → applyPlan → recordNav。
- *  返回当日价格缓存（供打印持仓快照复用）+ 动作列表。 */
+ *  返回当日价格缓存（供打印持仓快照复用）+ 动作列表。
+ *
+ *  backtestDir：每日调仓决策归档根目录（watchlist/backtest）。每天的 rebalancer 输出
+ *  原样落盘到 days/<date>/rebalance.json，让回测从"只知结果"变为"可审计"——
+ *  不然调仓理由（evaluations / reason / summary）只活在 os.tmpdir 的 LLM trace 里，
+ *  重启即清空，根本回溯不了"为什么那天这么调"。 */
 async function runSingleDay(
   simulator: PositionSimulator,
   date: string,
@@ -262,6 +327,7 @@ async function runSingleDay(
   topN: number,
   shallowCaller: ShallowLlmCaller,
   rebalanceCaller: RebalanceLlmCaller,
+  backtestDir: string,
 ): Promise<DayRunResult> {
   // 1. 用当日收盘价重算权重漂移（返回价格缓存，后续复用）
   const priceMap = await simulator.normalizeWeights(date);
@@ -294,6 +360,10 @@ async function runSingleDay(
     scan, holdings, lastRebalance, currentDate: date,
     shallowCaller, rebalanceCaller, dataByTicker,
   });
+
+  // 归档当日完整调仓决策（含 reason / evaluations / summary + 每股 fitness 依据）。
+  // 非 ok 也存——失败日更要看（为什么没调成仓）。
+  archiveDayRebalance(backtestDir, date, holdings, result);
 
   let actions: Action[] = [];
   // 检查 rebalance 是否成功（失败则 HOLD 不更新持仓，但记录 NAV）
@@ -372,6 +442,104 @@ async function printDaySummary(
     `总收益 ${fmt(s.totalReturnPct)} | 最大回撤 ${fmt(s.maxDrawdownPct)}`
     + ` | 已平仓 ${s.tradeCount} 笔（胜率 ${(s.winRate * 100).toFixed(0)}%）`,
   );
+}
+
+// ── 单日调仓决策查看器（--day <DATE>：读 days/<date>/rebalance.json 渲染） ──
+
+/** 调仓动作的终端图标。SELL/REDUCE 用 ✗（退出/减码），BUY/ADD 用 ✓（进场/加码）。 */
+function actionIcon(action: string): string {
+  return action === "SELL" || action === "REDUCE" ? "✗" : "✓";
+}
+
+/** days/<date>/rebalance.json 的最小读取类型（archiveDayRebalance 的产出）。
+ *  字段大多可选：历史归档可能由更早版本写入，缺字段时优雅降级而非崩。 */
+export interface DayRebalanceArchive {
+  date: string;
+  written_at?: string;
+  status: string;
+  portfolio_before?: {
+    cash_pct: number;
+    positions: Array<{ ticker: string; name: string; sector: string; weight: number; entry_price: number; entry_date: string }>;
+  };
+  rebalancer_output?: {
+    evaluations?: Array<{ ticker: string; judgment: string; brief: string }>;
+    actions?: Action[];
+    summary?: string;
+  };
+  constraint_check?: { revise_count?: number; violations?: Array<string | { rule?: string; detail?: string }> };
+}
+
+/** 渲染一天的归档调仓决策到终端。
+ *  这是"为什么那天这么调"的人类可读视图：评估表 + 动作理由 + 组合总结 + 约束博弈。
+ *  数据源是 archiveDayRebalance 写的 days/<date>/rebalance.json。
+ *  导出供测试覆盖渲染契约（用户依赖此输出读调仓计划）。 */
+export function renderDayRebalance(archive: DayRebalanceArchive): string {
+  const lines: string[] = [];
+  const statusIcon = archive.status === "ok" ? "✅" : "⚠️";
+  lines.push(`\n═══ ${archive.date} 调仓决策 ${statusIcon} ${archive.status} ═══`);
+  if (archive.written_at) {
+    lines.push(`（生成于 ${archive.written_at.replace("T", " ").slice(0, 19)}）`);
+  }
+
+  // 调仓前持仓
+  const before = archive.portfolio_before;
+  if (before) {
+    lines.push(`\n调仓前：现金 ${(before.cash_pct * 100).toFixed(0)}% | 持仓 ${(before.positions || []).length} 只`);
+    for (const p of (before.positions || [])) {
+      lines.push(`  • ${p.name}（${p.ticker}）${p.sector}  权重 ${(p.weight * 100).toFixed(1)}%  ${p.entry_date}建仓@${p.entry_price}`);
+    }
+  }
+
+  const out = archive.rebalancer_output;
+  if (!out) {
+    lines.push("\n（无 rebalancer 输出）");
+    return lines.join("\n");
+  }
+
+  // 每股评估（evaluations）
+  const evals = out.evaluations || [];
+  if (evals.length > 0) {
+    lines.push("\n── 每股评估（候选 + 持仓）──");
+    for (const e of evals) {
+      const mark = e.judgment === "BUY" ? "✓BUY "
+        : e.judgment === "SELL" ? "✗SELL"
+        : e.judgment === "REDUCE" ? "✗REDU"
+        : e.judgment === "ADD" ? "✓ADD "
+        : e.judgment === "HOLD" ? "  HOLD"
+        : "  SKIP";
+      lines.push(`  ${mark}  ${e.ticker}  ${e.brief}`);
+    }
+  }
+
+  // 调仓动作（含理由）
+  const acts = (out.actions || []).filter((a: Action) => a.action !== "HOLD");
+  lines.push("\n── 调仓动作 ──");
+  if (acts.length === 0) {
+    lines.push("  （全 HOLD，无调仓）");
+  }
+  for (const a of acts) {
+    const w = a.target_weight > 0
+      ? ` → ${(a.target_weight * 100).toFixed(1)}%（${(a.current_weight * 100).toFixed(1)}%→${(a.target_weight * 100).toFixed(1)}%）`
+      : "";
+    lines.push(`  ${actionIcon(a.action)} ${a.action} ${a.name}（${a.ticker}）${w}`);
+    if (a.reason) lines.push(`      理由：${a.reason}`);
+  }
+
+  // 组合总结
+  if (out.summary) {
+    lines.push(`\n── 组合总结 ──\n  ${out.summary}`);
+  }
+
+  // 约束博弈（revise 次数 + 违规）
+  const cc = archive.constraint_check;
+  if (cc && (cc.revise_count ?? 0) > 0) {
+    lines.push(`\n── 约束博弈（revise ${cc.revise_count} 次）──`);
+    for (const v of (cc.violations || [])) {
+      lines.push(`  • ${typeof v === "string" ? v : (v.rule ? v.rule + "：" : "") + (v.detail || "")}`);
+    }
+  }
+
+  return lines.join("\n");
 }
 
 // ── 报告生成（--report / --show 用；在 simulator 副本上调 closeOpenPositions，不污染增量状态） ──
@@ -460,6 +628,7 @@ async function main() {
   node dist/backtest-cli.js --api-key <KEY> --date 2026-06-18        # 跑指定单日
   node dist/backtest-cli.js --api-key <KEY> --dates 2026-06-17,06-18 # 慢路径：一次多日
   node dist/backtest-cli.js --show                                    # 看当前进度
+  node dist/backtest-cli.js --day 2026-06-23                         # 看某天为什么这么调仓
   node dist/backtest-cli.js --report                                  # 生成完整报告
   node dist/backtest-cli.js --reset                                   # 清空重开
 
@@ -474,6 +643,8 @@ async function main() {
                     不足 1 手的高价股自动跳过（回测真实反映"买不起"）
   --lot-size <N>    最小手数（默认 100；科创板 200）
   --show            只读 state，显示 NAV 曲线 + 持仓 + 累计，不跑
+  --day <D>         查看某天的调仓决策（每股评估 + 动作理由 + 组合总结 + 约束博弈）
+                    读 days/<D>/rebalance.json，跑回测当天自动归档
   --report          读 state，生成 run-<ts>/ 完整报告（含未平仓交易）
   --reset           删 state.json，从 100% 现金重开（重跑历史的第一步）
   --help            显示本帮助
@@ -524,6 +695,20 @@ async function main() {
   const capital = capitalCli ?? state?.config.capital ?? DEFAULT_CAPITAL;
   const lotSize = lotSizeCli ?? state?.config.lotSize ?? DEFAULT_LOT_SIZE;
   const simOptions = { realCapital: capital, lotSize };
+
+  // ── --day <DATE>：查看某天的调仓决策（读 days/<date>/rebalance.json）──
+  const dayArg = argValue(args, "--day");
+  if (dayArg) {
+    const archivePath = path.join(backtestDir, "days", dayArg, "rebalance.json");
+    if (!fs.existsSync(archivePath)) {
+      console.error(`error: ${dayArg} 无归档决策（${path.relative(watchlistDir, archivePath)} 不存在）`);
+      console.error("       归档在跑回测当天自动生成；历史日需重跑（--reset → 逐日跑到目标日）");
+      process.exit(1);
+    }
+    const archive = JSON.parse(fs.readFileSync(archivePath, "utf-8"));
+    console.log(renderDayRebalance(archive));
+    process.exit(0);
+  }
 
   // ── --show：只读展示 ──
   if (hasFlag(args, "--show")) {
@@ -641,7 +826,7 @@ async function main() {
     }
     const scan = JSON.parse(fs.readFileSync(scanPath, "utf-8")) as ScanSummary;
     const { priceMap, actions } = await runSingleDay(
-      simulator, date, scan, topN, shallowCaller, rebalanceCaller,
+      simulator, date, scan, topN, shallowCaller, rebalanceCaller, backtestDir,
     );
     await printDaySummary(simulator, date, priceMap, actions);
   }
@@ -678,7 +863,10 @@ async function main() {
   }
 }
 
-main().catch(e => {
-  console.error(`fatal: ${e instanceof Error ? e.message : e}`);
-  process.exit(1);
-});
+// 只在作为主入口运行时执行 CLI；被 import（如测试引入纯函数）时不跑 main()。
+if (require.main === module) {
+  main().catch(e => {
+    console.error(`fatal: ${e instanceof Error ? e.message : e}`);
+    process.exit(1);
+  });
+}
