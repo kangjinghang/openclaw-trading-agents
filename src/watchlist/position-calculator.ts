@@ -60,6 +60,11 @@ export function hasTechnicalBreakdown(report: StockReport): boolean {
   );
 }
 
+// fitness → 基础仓位（趋势模式线性映射）。
+// 系数演进：0.008（初值，fit8=6.4%太轻）→ 0.015（06-27，仍不够）→ 0.022（06-28 方向B）。
+// 0.022 的决策链：诊断出"fitness偏低(avg5.3)→小仓→满不了仓"死循环后，配合评分标准放宽，
+// 让 fit7-8 能拿 14-17% 仓位，3-5 只集中可达 60%+ 仓位。回测验证：仓位 38%→63%。
+// 完整推理见 docs/backtest-evolution.md 决策C。调参前先看 docs/backtest-params.md。
 export function baseWeight(fitness: number): number {
   const clamped = Math.max(0, Math.min(10, fitness));
   return clamped * 0.022; // 线性：fit3=6.6%, fit5=11%, fit7=15.4%, fit8=17.6%, fit10=22%（小账户集中定位）

@@ -213,7 +213,12 @@ export class PositionSimulator {
    *
    *  手数取整（lotRoundingEnabled 时）：BUY/ADD/REDUCE 的成交股数取整到 lotSize 的倍数，
    *  不足 1 手的 BUY 记入 skippedBuys（回测真实反映"买不起 1 手"的高价股）。
-   *  返回 { skippedBuys }；未启用取整时恒为空数组。 */
+   *  返回 { skippedBuys }；未启用取整时恒为空数组。
+   *
+   *  为什么取整在成交层而不在候选池过滤？因为候选池阶段（candidates.json / scan.json）
+   *  没有价格数据——价格 last_close 要到 rebalancer 拉完 K 线才有。而且固定价格阈值粗糙，
+   *  "买不买得起一手"取决于动态仓位（fitness×系数），不该在候选池用固定阈值判断。
+   *  完整推理见 docs/backtest-evolution.md 决策A。 */
   async applyPlan(
     result: RebalancePipelineResult,
     date: string,
