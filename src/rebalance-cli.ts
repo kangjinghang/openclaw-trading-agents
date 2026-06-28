@@ -55,7 +55,7 @@ rebalancer: 读 holdings.json + scan.json → 调仓方案 (plan.json + plan.md)
 Options:
   --date <D>         扫描日（默认最新 scan）
   --top-n <N>        从 ranker 取前 N 候选（默认 15）
-  --model <M>        模型（默认 glm-5-turbo）可选: glm-5.2, glm-5.1, glm-5-turbo, glm-5, glm-4.7, glm-4.7-flash, glm-4.7-flashx, glm-4.6, glm-4.5-air, glm-4.5-airx, glm-4.5-flash
+  --model <M>        模型（默认 glm-5.2）可选: glm-5.2, glm-5.1, glm-5-turbo, glm-5, glm-4.7, glm-4.7-flash, glm-4.7-flashx, glm-4.6, glm-4.5-air, glm-4.5-airx, glm-4.5-flash
   --api-key <K>      API key（默认 OPENAI_API_KEY env）
   --base-url <U>     base URL（默认 OPENAI_BASE_URL env）
   --shallow-concurrency <N>  shallow-analyzer 并发（默认 2；GLM-5.x 推理模型 429 时调小）
@@ -102,7 +102,9 @@ Options:
   // LLM 配置（优先级：CLI args > env > 代码默认；不读 plugin config）
   const apiKey = argValue(args, "--api-key") ?? process.env.OPENAI_API_KEY;
   const baseUrl = argValue(args, "--base-url") ?? process.env.OPENAI_BASE_URL ?? "https://open.bigmodel.cn/api/coding/paas/v4";
-  const model = argValue(args, "--model") ?? "glm-5-turbo";
+  // 默认 glm-5.2：实测比 glm-5-turbo 快 2.6×（5.6min vs 15min）、fitness 更准（avg 6.1 vs 5.4，
+  // 修正 turbo 系统性压分如火炬电子 4→7）、revise 一次过。turbo 单次偶发 226s 阻塞并发槽。
+  const model = argValue(args, "--model") ?? "glm-5.2";
   if (!apiKey) {
     console.error(`error: 缺 API key`);
     process.exit(2);

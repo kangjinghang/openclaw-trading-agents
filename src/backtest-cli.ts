@@ -637,7 +637,7 @@ async function main() {
 选项:
   --api-key <K>     LLM API key（或 OPENAI_API_KEY env）
   --base-url <U>    base URL（默认 OPENAI_BASE_URL env）
-  --model <M>       模型（默认 glm-5-turbo）
+  --model <M>       模型（默认 glm-5.2）
   --date <D>        跑指定单日（必须未处理过；重跑历史用 --reset）
   --dates <D1,D2>   慢路径：一次跑多日（批量补数据用）
   --top-n <N>       候选数（默认 15）
@@ -675,7 +675,7 @@ async function main() {
 
   const apiKey = argValue(args, "--api-key") ?? process.env.OPENAI_API_KEY;
   const baseUrl = argValue(args, "--base-url") ?? process.env.OPENAI_BASE_URL ?? "https://open.bigmodel.cn/api/coding/paas/v4";
-  const model = argValue(args, "--model") ?? "glm-5-turbo";
+  const model = argValue(args, "--model") ?? "glm-5.2";
   const topN = Math.max(1, parseInt(argValue(args, "--top-n") ?? "15", 10) || 15);
   // 真实本金 + 手数：手数取整让回测真实反映"买不起 1 手"的高价股。
   // 默认 20 万小账户 / A 股主板 1 手=100 股；续跑时优先用 state 里记录的值，CLI 显式传参可覆盖。

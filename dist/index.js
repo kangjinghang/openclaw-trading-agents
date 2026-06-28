@@ -205,7 +205,7 @@ function formatError(data) {
             "",
             "请求过于频繁，建议：",
             "1. 降低并发: 配置 `llm_concurrency: 1`",
-            "2. 换用更快模型: 配置 `analyst: glm-5-turbo`",
+            "2. 换用更快模型: 配置 `analyst: glm-4-flash`（非推理模型，无 reasoning 开销）",
             "3. 稍后重试",
             "",
             `原始错误: ${msg}`,
@@ -217,7 +217,7 @@ function formatError(data) {
             "",
             "分析耗时过长被中断，建议：",
             "1. 增大超时: 在 openclaw.json 中设置 `diagnostics.stuckSessionAbortMs: 1800000` (30分钟)",
-            "2. 使用更快模型: 配置 `analyst: glm-5-turbo`, `analyst_thinking: disabled`",
+            "2. 使用更快模型: 配置 `analyst: glm-4-flash`, `analyst_thinking: disabled`",
             "",
             `原始错误: ${msg}`,
         ].join("\n");
