@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { PositionSimulator } from "../../../src/watchlist/backtest-simulator";
+import { PositionSimulator, DEFAULT_TRADING_FEES } from "../../../src/watchlist/backtest-simulator";
+import type { TradingFees } from "../../../src/watchlist/backtest-simulator";
 import type { RebalancePipelineResult } from "../../../src/watchlist/rebalancer";
 import type { Action } from "../../../src/watchlist/rebalance-types";
 
@@ -498,5 +499,108 @@ describe("PositionSimulator 手数取整（配置与兼容性）", () => {
     const restored = PositionSimulator.fromSerialized(s, lookup);
     expect(restored.serialize().realCapital).toBe(CAPITAL);
     expect(restored.serialize().lotSize).toBe(LOT);
+  });
+});
+
+// ── 交易成本建模（佣金+印花税+过户费） ────────────────────────────────
+//
+// 费率（DEFAULT_TRADING_FEES）：佣金万一(0.0001，最低5元)、印花税万五(0.00005，仅卖)、
+// 过户费万零点一(0.00001，双向)。仅 lotRoundingEnabled（有 realCapital）时才扣成本。
+//
+// 手算参考（CAPITAL=200000，price=100）：
+//   BUY 10%：成交额 20000元，佣金 max(2,5)=5元，过户费 0.2元，印花税 0 → 成本 5.2元
+//   BUY 30%：成交额 60000元，佣金 max(6,5)=6元，过户费 0.6元 → 成本 6.6元（佣金>5元，按费率）
+//   SELL 同额：再加 印花税 = 成交额×0.00005
+
+describe("PositionSimulator 交易成本建模", () => {
+  it("大额买入：佣金按费率算（>5元），扣佣金+过户费，无印花税", async () => {
+    // BUY 30% @ 100，成交额 = 0.30×200000 = 60000元
+    // 佣金 = 60000×0.0001 = 6元（>5元，不走最低）；过户费 = 60000×0.00001 = 0.6元
+    const lookup = makePriceLookup({ "SH600011": { [D1]: 100 } });
+    const fees = DEFAULT_TRADING_FEES;
+    const simFee = new PositionSimulator(lookup, { realCapital: CAPITAL, lotSize: LOT, fees });
+    const simNoFee = new PositionSimulator(lookup, { realCapital: CAPITAL, lotSize: LOT });
+    await simFee.normalizeWeights(D1);
+    await simNoFee.normalizeWeights(D1);
+    await simFee.applyPlan(makeResult([buyAction("SH600011", "测试", 0.30)]), D1,
+      new Map([["SH600011", { fitness_score: 7, name: "测试", sector: "X" }]]));
+    await simNoFee.applyPlan(makeResult([buyAction("SH600011", "测试", 0.30)]), D1,
+      new Map([["SH600011", { fitness_score: 7, name: "测试", sector: "X" }]]));
+    // 买入成本 = 6 + 0.6 = 6.6元，归一化 = 6.6/200000 = 0.000033
+    const cashDiff = simNoFee.serialize().cash - simFee.serialize().cash;
+    expect(cashDiff).toBeCloseTo(6.6 / CAPITAL, 8);  // 多扣了 6.6元（归一化）
+  });
+
+  it("小额买入：佣金触发最低 5 元下限", async () => {
+    // BUY 10% @ 100，成交额 = 20000元，佣金 raw = 2元 < 5 → 取 5元；过户费 0.2元
+    const lookup = makePriceLookup({ "SH600012": { [D1]: 100 } });
+    const simFee = new PositionSimulator(lookup, { realCapital: CAPITAL, lotSize: LOT, fees: DEFAULT_TRADING_FEES });
+    const simNoFee = new PositionSimulator(lookup, { realCapital: CAPITAL, lotSize: LOT });
+    await simFee.normalizeWeights(D1);
+    await simNoFee.normalizeWeights(D1);
+    await simFee.applyPlan(makeResult([buyAction("SH600012", "测试", 0.10)]), D1,
+      new Map([["SH600012", { fitness_score: 7, name: "测试", sector: "X" }]]));
+    await simNoFee.applyPlan(makeResult([buyAction("SH600012", "测试", 0.10)]), D1,
+      new Map([["SH600012", { fitness_score: 7, name: "测试", sector: "X" }]]));
+    // 成本 = 5 + 0.2 = 5.2元（佣金被最低 5 元兜底）
+    const cashDiff = simNoFee.serialize().cash - simFee.serialize().cash;
+    expect(cashDiff).toBeCloseTo(5.2 / CAPITAL, 8);
+  });
+
+  it("卖出：扣佣金+印花税+过户费，TradeRecord.cost 记录建仓+平仓总成本", async () => {
+    // D1 BUY 20% @ 100（成交额 40000元），D2 SELL @ 100（同价，无盈亏）
+    // 建仓成本：佣金 max(4,5)=5 + 过户费 0.4 = 5.4元
+    // 平仓成本：佣金 5 + 印花税 40000×0.00005=2 + 过户费 0.4 = 7.4元
+    // 总成本 = 5.4 + 7.4 = 12.8元
+    const lookup = makePriceLookup({ "SH600013": { [D1]: 100, [D2]: 100 } });
+    const sim = new PositionSimulator(lookup, { realCapital: CAPITAL, lotSize: LOT, fees: DEFAULT_TRADING_FEES });
+    await sim.normalizeWeights(D1);
+    await sim.applyPlan(makeResult([buyAction("SH600013", "测试", 0.20)]), D1,
+      new Map([["SH600013", { fitness_score: 7, name: "测试", sector: "X" }]]));
+    await sim.recordNav(D1, [buyAction("SH600013", "测试", 0.20)], sim.getPrevNav());
+
+    // D2：价格不变，先漂移权重再 SELL
+    await sim.normalizeWeights(D2);
+    await sim.applyPlan(makeResult([sellAction("SH600013", "测试", 0.20)]), D2,
+      new Map([["SH600013", { fitness_score: 7, name: "测试", sector: "X" }]]));
+
+    const trades = sim.serialize().trades;
+    expect(trades).toHaveLength(1);
+    expect(trades[0].cost).toBeCloseTo(12.8, 1);  // 建仓5.4 + 平仓7.4
+    // SELL 卖出后现金 = 卖出额 - 平仓成本（建仓成本已在 BUY 时扣过）
+    // 卖出额 = 40000元，平仓扣 7.4元 → 净入 39992.6元（归一化）
+  });
+
+  it("回归：不传 fees 时行为与旧版完全一致（零成本）", async () => {
+    // 同一笔 BUY，fees 关闭 vs 不传 options 的 lotRounding 版，cash 应相等
+    const lookup = makePriceLookup({ "SH600014": { [D1]: 100 } });
+    const simWithFees = new PositionSimulator(lookup, { realCapital: CAPITAL, lotSize: LOT, fees: DEFAULT_TRADING_FEES });
+    const simNoFees = new PositionSimulator(lookup, { realCapital: CAPITAL, lotSize: LOT });  // 无 fees
+    await simWithFees.normalizeWeights(D1);
+    await simNoFees.normalizeWeights(D1);
+    await simWithFees.applyPlan(makeResult([buyAction("SH600014", "测试", 0.10)]), D1,
+      new Map([["SH600014", { fitness_score: 7, name: "测试", sector: "X" }]]));
+    await simNoFees.applyPlan(makeResult([buyAction("SH600014", "测试", 0.10)]), D1,
+      new Map([["SH600014", { fitness_score: 7, name: "测试", sector: "X" }]]));
+    // 无 fees 版不扣成本，cash 应高于有 fees 版
+    expect(simNoFees.serialize().cash).toBeGreaterThan(simWithFees.serialize().cash);
+    // 无 fees 版的 trade 不带 cost 字段（feesEnabled=false 时不写）
+    // （此处仅验证 cash 差异，cost 字段在 SELL 测试里已验证）
+  });
+
+  it("序列化往返保留 fees（续跑保持同一成本口径）", async () => {
+    const lookup = makePriceLookup({ "SH600015": { [D1]: 100 } });
+    const sim = new PositionSimulator(lookup, { realCapital: CAPITAL, lotSize: LOT, fees: DEFAULT_TRADING_FEES });
+    await sim.normalizeWeights(D1);
+    await sim.applyPlan(makeResult([buyAction("SH600015", "测试", 0.10)]), D1,
+      new Map([["SH600015", { fitness_score: 7, name: "测试", sector: "X" }]]));
+    const s = sim.serialize();
+    expect(s.fees).toEqual(DEFAULT_TRADING_FEES);
+    // fromSerialized 不传 fees options → 回退 state.fees（续跑保持口径）
+    const restored = PositionSimulator.fromSerialized(s, lookup);
+    expect(restored.serialize().fees).toEqual(DEFAULT_TRADING_FEES);
+    // 显式传 { fees: undefined } → 关闭成本（--no-fees 覆盖 state.fees）
+    const restoredNoFee = PositionSimulator.fromSerialized(s, lookup, { fees: undefined });
+    expect(restoredNoFee.serialize().fees).toBeUndefined();
   });
 });

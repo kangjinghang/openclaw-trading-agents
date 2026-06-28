@@ -9,7 +9,14 @@
 // 设计：以"份额(shares)"为底层真实状态，权重是份额×价格的导出量。
 // 初始总资产归一化为 1.0，cash + Σ(shares×price) = 1.0。
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PositionSimulator = void 0;
+exports.PositionSimulator = exports.DEFAULT_TRADING_FEES = void 0;
+/** 默认交易成本（A 股标准 + 用户实盘佣金费率万一）。 */
+exports.DEFAULT_TRADING_FEES = {
+    commissionRate: 0.0001, // 万一
+    commissionMin: 5, // 最低 5 元/笔
+    stampTaxRate: 0.00005, // 万五（仅卖出）
+    transferFeeRate: 0.00001, // 万零点一（双向）
+};
 // ── PositionSimulator ─────────────────────────────────────────────────
 class PositionSimulator {
     constructor(priceLookup, options) {
@@ -19,15 +26,43 @@ class PositionSimulator {
         this.lastRebalanceDate = null;
         this.navHistory = [];
         this.trades = [];
+        // 建仓成本记账（归一化）：ticker → 建仓时扣的佣金+过户费（归一化）。
+        // 平仓时取出，加到 TradeRecord.cost 里（建仓成本 + 平仓成本之和），供审计。
+        this.entryCostByTicker = new Map();
         this.priceLookup = priceLookup;
         if (options && (options.realCapital ?? 0) > 0 && (options.lotSize ?? 0) > 0) {
             this.realCapital = options.realCapital;
             this.lotSize = options.lotSize;
         }
+        this.fees = options?.fees;
     }
     /** 是否启用手数取整。 */
     get lotRoundingEnabled() {
         return this.realCapital !== undefined && this.lotSize !== undefined;
+    }
+    /** 是否启用交易成本建模。仅在 lotRoundingEnabled（有 realCapital 换算）时才有意义——
+     *  成本以"元"计算，需要 realCapital 把归一化金额换算成真实金额。 */
+    get feesEnabled() {
+        return this.lotRoundingEnabled && this.fees !== undefined;
+    }
+    /** 算单笔交易成本（元）。value 为真实成交金额（元），isSell 决定是否收印花税。
+     *  佣金：max(value × commissionRate, commissionMin) —— 小账户单笔常触发最低 5 元。
+     *  印花税：仅卖出收（value × stampTaxRate），买入为 0。
+     *  过户费：双向收（value × transferFeeRate）。
+     *  未启用 fees 时返回全 0（向后兼容）。 */
+    computeFees(value, isSell) {
+        if (!this.fees) {
+            return { commission: 0, stampTax: 0, transferFee: 0, total: 0 };
+        }
+        const commission = Math.max(value * this.fees.commissionRate, this.fees.commissionMin);
+        const stampTax = isSell ? value * this.fees.stampTaxRate : 0;
+        const transferFee = value * this.fees.transferFeeRate;
+        return { commission, stampTax, transferFee, total: commission + stampTax + transferFee };
+    }
+    /** 把真实金额（元）的成本转成归一化成本（除以 realCapital）。
+     *  simulator 全程在归一化空间操作 cash，所以扣成本也要归一化。 */
+    feesToNorm(feeYuan) {
+        return this.realCapital ? feeYuan / this.realCapital : 0;
     }
     /** 把归一化目标市值转成取整后的真实手数。
      *  返回 lotShares（lotSize 的倍数，0 = 不足 1 手）。仅在 lotRoundingEnabled 时有意义。 */
@@ -149,6 +184,13 @@ class PositionSimulator {
                 const entryPrice = pos.entry_price;
                 const returnPct = (exitPrice / entryPrice - 1) * 100;
                 const holdDays = this.calcHoldDays(pos.entry_date, date);
+                // 卖出成本：佣金 + 印花税（仅卖出）+ 过户费（双向）
+                const sellValueYuan = pos.shares * exitPrice * (this.realCapital ?? 0);
+                const sellFees = this.computeFees(sellValueYuan, true);
+                // 建仓成本（建仓时记的归一化值 → 转回元）+ 平仓成本 = 该笔交易累计成本
+                const entryCostNorm = this.entryCostByTicker.get(a.ticker) ?? 0;
+                const entryCostYuan = entryCostNorm * (this.realCapital ?? 0);
+                const totalTradeCost = this.feesEnabled ? entryCostYuan + sellFees.total : null;
                 // 记交易（平仓）+ 记录建仓时 fitness（校准评分预测力用）
                 this.trades.push({
                     ticker: a.ticker, name: pos.name,
@@ -156,10 +198,14 @@ class PositionSimulator {
                     exitDate: date, exitPrice, holdDays, returnPct,
                     exitReason: a.reason,
                     entryFitness: pos.entry_fitness ?? null,
+                    ...(totalTradeCost !== null ? { cost: totalTradeCost } : {}),
                 });
-                // 释放现金：卖出的份额按当日价格变现
-                this.cash += pos.shares * exitPrice;
+                // 释放现金：卖出的份额按当日价格变现，扣卖出成本（归一化）
+                const sellProceedsNorm = pos.shares * exitPrice;
+                const sellFeesNorm = this.feesToNorm(sellFees.total);
+                this.cash += sellProceedsNorm - sellFeesNorm;
                 this.positions.delete(a.ticker);
+                this.entryCostByTicker.delete(a.ticker);
                 this.recentSells[a.ticker] = date;
             }
         }
@@ -184,7 +230,7 @@ class PositionSimulator {
                     continue; // 减仓不足 1 手，跳过
                 sharesToSellNorm = lotShares / this.realCapital; // 取整后回归一化
             }
-            this.cash += sharesToSellNorm * exitPrice;
+            this.cash += sharesToSellNorm * exitPrice - this.feesToNorm(this.computeFees(sharesToSellNorm * exitPrice * (this.realCapital ?? 0), true).total);
             pos.shares -= sharesToSellNorm;
             // REDUCE 不记 recent_sells（还有剩余仓位）
             // REDUCE 不平仓所以不记完整交易（或记部分？简化：不记）
@@ -217,7 +263,10 @@ class PositionSimulator {
                         continue; // 增量不足 1 手
                     sharesToAdd = lotShares / this.realCapital; // 取整后回归一化
                     // ADD 的成交市值用实际取整后的份额算（而非 targetValue），保证 cash 精确
-                    this.cash = Math.max(0, this.cash - sharesToAdd * entryPrice);
+                    // 买入成本：佣金 + 过户费（无印花税）
+                    const addValueYuan = sharesToAdd * entryPrice * this.realCapital;
+                    const addFeesNorm = this.feesToNorm(this.computeFees(addValueYuan, false).total);
+                    this.cash = Math.max(0, this.cash - sharesToAdd * entryPrice - addFeesNorm);
                     existing.shares += sharesToAdd;
                     existing.weight = a.target_weight;
                     continue;
@@ -225,8 +274,13 @@ class PositionSimulator {
                 existing.shares += sharesToAdd;
                 existing.weight = a.target_weight;
                 // ADD 保持 entry_date（anti-churn 锁连续）
-                // 消耗现金
-                this.cash = Math.max(0, this.cash - sharesToAdd * entryPrice);
+                // 消耗现金 + 买入成本（佣金 + 过户费，无印花税）
+                const addFallbackValueYuan = sharesToAdd * entryPrice * (this.realCapital ?? 0);
+                const addFallbackFeesNorm = this.feesToNorm(this.computeFees(addFallbackValueYuan, false).total);
+                this.cash = Math.max(0, this.cash - sharesToAdd * entryPrice - addFallbackFeesNorm);
+                if (this.feesEnabled) {
+                    this.entryCostByTicker.set(a.ticker, (this.entryCostByTicker.get(a.ticker) ?? 0) + addFallbackFeesNorm);
+                }
             }
             else {
                 // BUY：新建仓
@@ -247,6 +301,9 @@ class PositionSimulator {
                     shares = lotShares / this.realCapital; // 取整后回归一化
                     filledValue = shares * entryPrice; // 实际成交市值（≤ targetValue）
                 }
+                // 买入成本：佣金 + 过户费（无印花税）。无论是否取整都按实际成交额算。
+                const buyValueYuan = filledValue * (this.realCapital ?? 0);
+                const buyFeesNorm = this.feesToNorm(this.computeFees(buyValueYuan, false).total);
                 this.positions.set(a.ticker, {
                     ticker: a.ticker,
                     name: a.name,
@@ -258,7 +315,11 @@ class PositionSimulator {
                     // 记录建仓时 LLM 评分，供平仓后校准"评分 vs 实际收益"预测力
                     entry_fitness: report?.fitness_score,
                 });
-                this.cash = Math.max(0, this.cash - filledValue);
+                this.cash = Math.max(0, this.cash - filledValue - buyFeesNorm);
+                // 记建仓成本（归一化），平仓时取出加进 TradeRecord.cost
+                if (this.feesEnabled) {
+                    this.entryCostByTicker.set(a.ticker, (this.entryCostByTicker.get(a.ticker) ?? 0) + buyFeesNorm);
+                }
             }
         }
         // HOLD 的持仓不动（权重已在 normalizeWeights 里漂移）
@@ -366,16 +427,32 @@ class PositionSimulator {
             trades: this.trades.map(t => ({ ...t })),
             ...(this.realCapital !== undefined ? { realCapital: this.realCapital } : {}),
             ...(this.lotSize !== undefined ? { lotSize: this.lotSize } : {}),
+            ...(this.fees !== undefined ? { fees: this.fees } : {}),
         };
     }
     /** 从序列化状态恢复（跨进程续跑）。
      *  priceLookup 是注入依赖，每次新建进程时由调用方重新注入。
-     *  options 可显式覆盖 state 里的 realCapital/lotSize（CLI 传 --capital 时优先）。 */
+     *  options 可显式覆盖 state 里的 realCapital/lotSize/fees（CLI 传 --capital/--no-fees 时优先）。 */
     static fromSerialized(state, priceLookup, options) {
-        const opts = options ?? (state.realCapital !== undefined && state.lotSize !== undefined
-            ? { realCapital: state.realCapital, lotSize: state.lotSize }
-            : undefined);
-        const sim = new PositionSimulator(priceLookup, opts);
+        // 选项优先级：显式 options > state 记录 > 缺省
+        // fees 特殊：options.fees 显式传入（含 null/undefined 占位）时以 options 为准，
+        // 否则回退 state.fees（续跑保持上一轮的成本口径）。
+        const realCapital = options?.realCapital ?? state.realCapital;
+        const lotSize = options?.lotSize ?? state.lotSize;
+        const opts = {};
+        if (realCapital !== undefined && lotSize !== undefined) {
+            opts.realCapital = realCapital;
+            opts.lotSize = lotSize;
+        }
+        // options 带 fees 键（含 undefined）→ 以 options 为准；否则回退 state.fees
+        if (options && "fees" in options) {
+            if (options.fees)
+                opts.fees = options.fees;
+        }
+        else if (state.fees) {
+            opts.fees = state.fees;
+        }
+        const sim = new PositionSimulator(priceLookup, Object.keys(opts).length > 0 ? opts : undefined);
         sim.cash = state.cash;
         sim.recentSells = { ...state.recentSells };
         sim.lastRebalanceDate = state.lastRebalanceDate;

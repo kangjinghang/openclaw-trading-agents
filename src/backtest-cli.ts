@@ -35,8 +35,10 @@ import type { Action, StockReport, Holdings } from "./watchlist/rebalance-types"
 import type { ScanSummary } from "./watchlist/types";
 import {
   PositionSimulator,
+  DEFAULT_TRADING_FEES,
   type BacktestResults,
   type SerializedSimState,
+  type TradingFees,
 } from "./watchlist/backtest-simulator";
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
@@ -642,6 +644,7 @@ async function main() {
   --capital <RMB>   真实本金（默认 200000）。启用后 BUY/ADD/REDUCE 按手数取整，
                     不足 1 手的高价股自动跳过（回测真实反映"买不起"）
   --lot-size <N>    最小手数（默认 100；科创板 200）
+  --no-fees         关闭交易成本建模（默认开：佣金万一+印花税万五+过户费万零点一）
   --show            只读 state，显示 NAV 曲线 + 持仓 + 累计，不跑
   --day <D>         查看某天的调仓决策（每股评估 + 动作理由 + 组合总结 + 约束博弈）
                     读 days/<D>/rebalance.json，跑回测当天自动归档
@@ -694,7 +697,13 @@ async function main() {
   // 续跑必须用同一本金口径，否则取整语义不一致。
   const capital = capitalCli ?? state?.config.capital ?? DEFAULT_CAPITAL;
   const lotSize = lotSizeCli ?? state?.config.lotSize ?? DEFAULT_LOT_SIZE;
-  const simOptions = { realCapital: capital, lotSize };
+  // 交易成本建模：默认开启（佣金万一+印花税万五+过户费万零点一），让回测收益真实化。
+  // --no-fees 关闭（调试/对比零成本基准用）。续跑时保持上一轮口径（state.simulator.fees）。
+  const feesDisabled = hasFlag(args, "--no-fees");
+  const fees: TradingFees | undefined = feesDisabled ? undefined : DEFAULT_TRADING_FEES;
+  // fromSerialized 的 options.fees 用「带键 undefined」表示显式禁用，区分"未传"和"显式关"。
+  // 这里统一构造 simOptions：fees 为 undefined 时也写入键，让续跑时 --no-fees 能覆盖 state.fees。
+  const simOptions = { realCapital: capital, lotSize, fees };
 
   // ── --day <DATE>：查看某天的调仓决策（读 days/<date>/rebalance.json）──
   const dayArg = argValue(args, "--day");
@@ -717,7 +726,7 @@ async function main() {
       process.exit(0);
     }
     console.log(`回测进度：${state.processedDates.length} 天（${state.processedDates[0]} → ${state.lastProcessedDate}）`);
-    console.log(`配置：top-${state.config.topN} | 模型 ${state.config.model} | 本金 ${capital.toLocaleString()} | 手数取整 ${lotSize}股`);
+    console.log(`配置：top-${state.config.topN} | 模型 ${state.config.model} | 本金 ${capital.toLocaleString()} | 手数取整 ${lotSize}股${feesDisabled ? " | 手续费关" : " | 手续费开(万一+万五)"}`);
     const sim = PositionSimulator.fromSerialized(state.simulator, lookupPrice, simOptions);
     // 展示当前持仓浮动盈亏（用最后处理日的价格）
     const lastDate = state.lastProcessedDate!;
