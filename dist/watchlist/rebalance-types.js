@@ -17,7 +17,7 @@ exports.DEFAULT_REBALANCE_CONFIG = void 0;
 //   max_revise_retries 3       ✅ 2→3，多一次收敛机会（换手/持仓数违规时需要 LLM 砍动作）
 //   anti_churn_days 7          ⚠️ 经验值（防 churn vs 灵活调仓的平衡点，未压力测试）
 exports.DEFAULT_REBALANCE_CONFIG = {
-    top_n: 10,
+    top_n: 15, // 候选数 15（max_positions=5 的 3 倍，给跨行业选股 + 备选留空间；太小→非电子强标的进不来）
     constraints: {
         single_name: 0.22, // 单仓上限 22%（集中定位，对应 fit10 baseWeight 22% 不被截断）
         single_sector: 0.25, // 单行业 25%（分散，一级聚合）

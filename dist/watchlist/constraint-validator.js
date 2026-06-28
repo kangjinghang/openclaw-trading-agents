@@ -165,7 +165,7 @@ function validateRebalance(plan, ctx, c) {
 /** 把 violations 拼成 LLM revise 用的 feedback 字符串。空 violations 返回空。
  *  关键：不只是报错，还要给可执行的修正指引——否则 LLM 不知道该砍哪个动作，盲目重试
  *  往往收敛不了（这正是之前满仓卡死时 revise 2 次仍失败的原因之一）。 */
-function composeReviseFeedback(violations) {
+function composeReviseFeedback(violations, ctx) {
     if (violations.length === 0)
         return "";
     const lines = violations.map((v, i) => `${i + 1}. [${v.rule}] ${v.detail}`);
@@ -177,12 +177,25 @@ function composeReviseFeedback(violations) {
     if (violations.some(v => v.rule.includes("日换手上限"))) {
         tips.push("- 换手超限：减少【同时进行的买卖对数】。优先只做最该做的 1-2 笔，其余改 HOLD 下次再调");
     }
-    if (violations.some(v => v.rule.includes("单行业上限"))) {
-        tips.push("- 行业超限：同行业不要再 BUY/ADD，优先 HOLD 或 REDUCE 该行业持仓");
-    }
     if (violations.some(v => v.rule.includes("anti-churn 卖锁"))) {
         tips.push("- 撞卖锁：被锁的持仓禁止 SELL/REDUCE（除非止损/止盈信号）。变通方式：①把那只改 HOLD，等解锁后再卖 "
             + "②改卖其他没锁的持仓 ③只做买入不做卖出。不要死磕同一只被锁的标的");
+    }
+    // 行业超限：最关键的指引——给 LLM 非超限行业的强标的清单，让它转向（而不是死磕同行业）
+    if (violations.some(v => v.rule.includes("单行业上限"))) {
+        const overSectors = ctx?.overSectors ?? new Set();
+        const overStr = overSectors.size > 0 ? Array.from(overSectors).join("/") : "超限行业";
+        tips.push(`- 行业超限：${overStr} 已满，不要再往这些行业 BUY/ADD。应转向【其他行业的强标的】。`);
+        // 筛出非超限行业、未超 single_name、fitness≥7 的候选，作为"可转向"清单
+        const reports = ctx?.reports ?? [];
+        const alts = reports
+            .filter(r => !overSectors.has(r.sector) && !r.deal_breaker && r.fitness_score >= 7)
+            .sort((a, b) => (b.fitness_score ?? 0) - (a.fitness_score ?? 0))
+            .slice(0, 5);
+        if (alts.length > 0) {
+            const altStr = alts.map(a => `${a.name}(${a.sector},fit${a.fitness_score})`).join("、");
+            tips.push(`- 候选池中非${overStr}行业的强标的（可转向配置）：${altStr}`);
+        }
     }
     return [
         "你的上一次方案违反了以下约束，请修正：",

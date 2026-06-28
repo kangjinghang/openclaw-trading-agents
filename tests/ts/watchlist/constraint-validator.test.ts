@@ -318,6 +318,42 @@ describe("composeReviseFeedback", () => {
     expect(feedback).toContain("HOLD");        // 变通方式 ①：改 HOLD 等解锁
     expect(feedback).toContain("只做买入");     // 变通方式 ③：只买不卖
   });
+
+  it("行业超限 + reports → 反馈含非超限行业强标的清单（教 LLM 转向，不死磕同行业）", () => {
+    // 06-25 case：电子占 37% 超限，但候选池有非电子强标的（中科曙光 fit8、巨化 fit8）
+    // LLM 死磕电子——反馈要给具体的非超限行业强标的清单
+    const violations = [
+      { rule: "3. 单行业上限", detail: "电子 行业 sum 0.372 超 0.25 上限" },
+    ];
+    const reports = [
+      { ticker: "SH603019", name: "中科曙光", sector: "计算机设备", fitness_score: 8, deal_breaker: false },
+      { ticker: "SH600176", name: "中国巨石", sector: "玻璃玻纤", fitness_score: 7, deal_breaker: false },
+      { ticker: "SH603986", name: "兆易创新", sector: "电子", fitness_score: 9, deal_breaker: false },  // 电子，应被排除
+      { ticker: "SZ300331", name: "苏大维格", sector: "电子", fitness_score: 7, deal_breaker: false },  // 电子，应被排除
+      { ticker: "SZ300762", name: "弱标的", sector: "纺织", fitness_score: 5, deal_breaker: false },    // fit<7，应被排除
+    ];
+    const feedback = composeReviseFeedback(violations, { overSectors: new Set(["电子"]), reports });
+    expect(feedback).toContain("电子 已满");
+    expect(feedback).toContain("转向");                // 教 LLM 转向
+    expect(feedback).toContain("中科曙光");             // 非电子强标的在清单里
+    expect(feedback).toContain("中国巨石");
+    expect(feedback).not.toContain("兆易创新");         // 电子的不该出现在转向清单里
+    expect(feedback).not.toContain("苏大维格");
+  });
+
+  it("行业超限但无非超限强标的 → 只给方向指引，不列空清单", () => {
+    // 极端情况：候选池全是电子（候选池偏科到没有非电子强标的）
+    const violations = [
+      { rule: "3. 单行业上限", detail: "电子 行业 sum 0.372 超 0.25 上限" },
+    ];
+    const reports = [
+      { ticker: "SH603986", name: "兆易创新", sector: "电子", fitness_score: 9, deal_breaker: false },
+    ];
+    const feedback = composeReviseFeedback(violations, { overSectors: new Set(["电子"]), reports });
+    expect(feedback).toContain("电子 已满");
+    expect(feedback).toContain("转向");              // 方向指引还在
+    expect(feedback).not.toContain("可转向配置");     // 没有可转向清单时不列
+  });
 });
 
 describe("validateRebalance 规则 12: 持仓数 ≤ max_positions", () => {

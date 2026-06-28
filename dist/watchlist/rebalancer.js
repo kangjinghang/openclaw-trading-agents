@@ -284,7 +284,11 @@ function extractJson(content) {
 async function runRebalanceWithRevise(caller, basePrompt, ctx, config, positionCtx, 
 /** ticker → 当前仓位（持仓股才有，候选股=0）。
  *  用于 parse 后补齐 current_weight（LLM 不再输出这个字段）。 */
-currentWeights) {
+currentWeights, 
+/** 候选股报告，供 revise 反馈筛"非超限行业强标的"推荐给 LLM 转向。
+ *  候选池偏科时（如电子占 60%），LLM 撞行业上限后不会转向，死磕同行业。
+ *  给它具体的非超限行业强标的清单，它才有出路。 */
+reports) {
     let userMessage = basePrompt;
     let lastPlan = null;
     let lastViolations = [];
@@ -327,7 +331,22 @@ currentWeights) {
         lastViolations = result.violations;
         if (attempt >= config.max_revise_retries)
             break;
-        const feedback = (0, constraint_validator_1.composeReviseFeedback)(result.violations);
+        // 行业超限时，重算超限行业集合，供反馈给出"转向非超限行业强标的"指引。
+        // 从失败的 plan + ctx.sectors 重算（比解析 detail 字符串稳健），筛 sum>single_sector 的行业。
+        let overSectors;
+        if (result.violations.some(v => v.rule.includes("单行业上限"))) {
+            const sums = new Map();
+            for (const a of parsed.actions) {
+                if (a.target_weight <= 0)
+                    continue;
+                const sec = ctx.sectors.get(a.ticker);
+                if (!sec)
+                    continue;
+                sums.set(sec, (sums.get(sec) ?? 0) + a.target_weight);
+            }
+            overSectors = new Set([...sums.entries()].filter(([, w]) => w > config.constraints.single_sector + 0.001).map(([s]) => s));
+        }
+        const feedback = (0, constraint_validator_1.composeReviseFeedback)(result.violations, { overSectors, reports });
         userMessage = basePrompt + "\n\n" + feedback;
         reviseCount++;
     }
@@ -496,7 +515,7 @@ async function rebalancePipeline(input) {
     const currentWeights = new Map();
     for (const p of input.holdings.positions)
         currentWeights.set(p.ticker, p.weight);
-    const rebalanceResult = await runRebalanceWithRevise(input.rebalanceCaller, prompt, ctx, config, positionCtx, currentWeights);
+    const rebalanceResult = await runRebalanceWithRevise(input.rebalanceCaller, prompt, ctx, config, positionCtx, currentWeights, reports);
     if (!rebalanceResult.plan) {
         return {
             reports,

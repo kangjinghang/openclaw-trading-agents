@@ -550,7 +550,7 @@ async function main() {
   --model <M>       模型（默认 glm-5-turbo）
   --date <D>        跑指定单日（必须未处理过；重跑历史用 --reset）
   --dates <D1,D2>   慢路径：一次跑多日（批量补数据用）
-  --top-n <N>       候选数（默认 10）
+  --top-n <N>       候选数（默认 15）
   --capital <RMB>   真实本金（默认 200000）。启用后 BUY/ADD/REDUCE 按手数取整，
                     不足 1 手的高价股自动跳过（回测真实反映"买不起"）
   --lot-size <N>    最小手数（默认 100；科创板 200）
@@ -584,7 +584,7 @@ async function main() {
     const apiKey = argValue(args, "--api-key") ?? process.env.OPENAI_API_KEY;
     const baseUrl = argValue(args, "--base-url") ?? process.env.OPENAI_BASE_URL ?? "https://open.bigmodel.cn/api/coding/paas/v4";
     const model = argValue(args, "--model") ?? "glm-5-turbo";
-    const topN = Math.max(1, parseInt(argValue(args, "--top-n") ?? "10", 10) || 10);
+    const topN = Math.max(1, parseInt(argValue(args, "--top-n") ?? "15", 10) || 15);
     // 真实本金 + 手数：手数取整让回测真实反映"买不起 1 手"的高价股。
     // 默认 20 万小账户 / A 股主板 1 手=100 股；续跑时优先用 state 里记录的值，CLI 显式传参可覆盖。
     const capitalArg = argValue(args, "--capital");

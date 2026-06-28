@@ -30,7 +30,11 @@ export interface RebalanceResult {
 export declare function runRebalanceWithRevise(caller: RebalanceLlmCaller, basePrompt: string, ctx: ValidationContext, config: RebalanceConfig, positionCtx?: ApplyPositionsContext, 
 /** ticker → 当前仓位（持仓股才有，候选股=0）。
  *  用于 parse 后补齐 current_weight（LLM 不再输出这个字段）。 */
-currentWeights?: Map<string, number>): Promise<RebalanceResult>;
+currentWeights?: Map<string, number>, 
+/** 候选股报告，供 revise 反馈筛"非超限行业强标的"推荐给 LLM 转向。
+ *  候选池偏科时（如电子占 60%），LLM 撞行业上限后不会转向，死磕同行业。
+ *  给它具体的非超限行业强标的清单，它才有出路。 */
+reports?: StockReport[]): Promise<RebalanceResult>;
 export interface RebalancePipelineInput {
     scan: ScanSummary;
     holdings: Holdings;

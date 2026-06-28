@@ -81,7 +81,7 @@ rebalancer: 读 holdings.json + scan.json → 调仓方案 (plan.json + plan.md)
 
 Options:
   --date <D>         扫描日（默认最新 scan）
-  --top-n <N>        从 ranker 取前 N 候选（默认 10）
+  --top-n <N>        从 ranker 取前 N 候选（默认 15）
   --model <M>        模型（默认 glm-5-turbo）可选: glm-5.2, glm-5.1, glm-5-turbo, glm-5, glm-4.7, glm-4.7-flash, glm-4.7-flashx, glm-4.6, glm-4.5-air, glm-4.5-airx, glm-4.5-flash
   --api-key <K>      API key（默认 OPENAI_API_KEY env）
   --base-url <U>     base URL（默认 OPENAI_BASE_URL env）
@@ -171,7 +171,7 @@ Options:
     console.log(`  模型: ${model}`);
     console.log(`  持仓: ${holdings.positions.length} 支 / cash ${(holdings.cash_pct * 100).toFixed(1)}%`);
     // 拉 data（4 Python scripts 并行）
-    const topN = Math.max(1, parseInt(argValue(args, "--top-n") ?? "10", 10) || 10);
+    const topN = Math.max(1, parseInt(argValue(args, "--top-n") ?? "15", 10) || 15);
     const metasForFetch = [
         ...scan.top_picks.slice(0, topN).map(p => ({
             ticker: p.ticker, name: p.name,
