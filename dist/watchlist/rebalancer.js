@@ -80,6 +80,15 @@ const REBALANCER_PROMPT_TEMPLATE = `# 角色
   "summary": "一句话总结今日调仓逻辑"
 }
 
+# ⚠️ evaluations 与 actions 的语义分离（revise 时尤其重要）
+- **evaluations 是你对每只股的「真实评估」**——基于基本面/趋势/风险，与当日换手、持仓数、行业上限等约束**无关**。
+  一只股值不值得买，不会因为"今天额度满了"而变成 SKIP。
+- **actions 是「今日实际执行」**——受当日硬约束限制。强标的今天因约束买不进，actions 里不放它，
+  但它的 evaluation 仍应是 BUY（理由写真实逻辑，如"订单落地+量价齐升"），而非"额度已满"。
+- **revise 修正时只调整 actions**（砍掉超限的 BUY、改成 HOLD 下次再调），
+  **不要修改 evaluations 的判断**——不要把约束理由（换手超限/额度已满/持仓已满）写进 brief。
+  被 constraints 否决不是你对这只股的真实评价。
+
 注意：
 - actions 里**不要**写 current_weight / target_weight / delta / priority（代码会自动算）
 - portfolio_after 字段**不要写**（代码会自动重算）

@@ -203,6 +203,10 @@ function composeReviseFeedback(violations, ctx) {
         ...lines,
         ...(tips.length > 0 ? ["", "修正建议：", ...tips] : []),
         "",
+        "注意：只调整 actions 来满足约束，**不要修改 evaluations 的判断**。",
+        "evaluations 是你对每只股的真实评估（基于逻辑/趋势/风险），与当日换手/持仓/行业约束无关。",
+        "被约束砍掉的强标的，evaluation 仍应保留 BUY + 真实理由，不要写成「额度已满/换手超限」。",
+        "",
         "请重新输出 REBALANCE_PLAN，确保满足所有硬约束。",
     ].join("\n");
 }
