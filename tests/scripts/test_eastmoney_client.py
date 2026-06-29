@@ -178,3 +178,45 @@ def test_select_security_passes_select_type(with_key):
     assert out["rows"][0]["name"] == "贵州茅台"
     _, kwargs = mp.call_args
     assert kwargs["json"]["selectType"] == "A股"
+
+
+def test_search_data_direct_query(with_key):
+    """单实体（≤5）走直接查数，不走 toolPreTaskResultList。"""
+    from eastmoney_client import get_client
+    c = get_client()
+    entity_resp = {"data": {"entityList": [{"entityId": "E1", "secuCode": "600519", "marketChar": "SH", "fullName": "贵州茅台"}]}}
+    data_resp = {"code": 0, "data": {"searchDataResultDTO": {"dataTableDTOList": [{"title": "茅台财报", "table": {"headName": ["指标"], "PE": ["30"]}}]}}}
+    responses = [_ok_payload(entity_resp), _ok_payload(data_resp)]
+    with mock.patch("eastmoney_client.requests.post", side_effect=responses) as mp:
+        out = c.search_data("贵州茅台 财务数据")
+    assert out["tables"][0]["title"] == "茅台财报"
+    assert out["use_entity_tags"] is False
+    assert mp.call_count == 2  # 实体识别 + 查数
+
+
+def test_search_data_multi_entity_uses_tool_pre_task(with_key):
+    """>5 实体走多实体：query 改写为「选定实体的{indicators}」，带 toolPreTaskResultList。"""
+    from eastmoney_client import get_client
+    c = get_client()
+    entities = [{"entityId": f"E{i}", "secuCode": f"60000{i}", "marketChar": "SH"} for i in range(6)]
+    entity_resp = {"data": {"entityList": entities}}
+    data_resp = {"code": 0, "data": {"searchDataResultDTO": {"dataTableDTOList": []}}}
+    responses = [_ok_payload(entity_resp), _ok_payload(data_resp)]
+    with mock.patch("eastmoney_client.requests.post", side_effect=responses) as mp:
+        out = c.search_data("白酒板块 营收 净利", indicators="营收 净利")
+    assert out["use_entity_tags"] is True
+    assert out["search_query"] == "选定实体的营收 净利"
+    _, kwargs = mp.call_args_list[1]  # 第二次请求（查数）
+    tctx = kwargs["json"]["toolContext"]
+    assert "toolPreTaskResultList" in tctx
+
+
+def test_recognize_entities_extracts_tags(with_key):
+    from eastmoney_client import get_client
+    c = get_client()
+    entity_resp = {"data": {"entityList": [{"entityId": "E1", "secuCode": "600519", "marketChar": "SH", "fullName": "贵州茅台"}]}}
+    with mock.patch("eastmoney_client.requests.post", return_value=_ok_payload(entity_resp)):
+        tags = c.recognize_entities("贵州茅台")
+    assert len(tags) == 1
+    assert tags[0]["entityId"] == "E1"
+    assert tags[0]["secuCode"] == "600519"

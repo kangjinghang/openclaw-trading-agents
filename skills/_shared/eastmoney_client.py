@@ -14,6 +14,7 @@
 
 import json
 import os
+import re
 import secrets
 import time
 import uuid
@@ -177,7 +178,6 @@ class EastmoneyClient:
     @staticmethod
     def _extract_frequency(entity_name):
         """从 entityName 括号内容映射频率：年→yearly, 季→quarterly, 月→monthly, 周→weekly, 日→daily。"""
-        import re
         m = re.search(r"[（(]([^)）]*)[)）]", entity_name or "")
         if not m:
             return "unknown"
@@ -225,6 +225,7 @@ class EastmoneyClient:
                 rows.append(row)
             tables.append({
                 "frequency": self._extract_frequency(entity_name),
+                # 表级标签：取 nameMap 首个值（best-effort，单指标场景准确；多指标时各行已有自己的 indicator_name）
                 "indicator_name": next(iter(name_map.values()), entity_name),
                 "head_name": head_name,
                 "rows": rows,
@@ -248,14 +249,145 @@ class EastmoneyClient:
         payload = self._post_mcp(body, "selectSecurity", "em/select_security")
         if not payload:
             return {"rows": [], "columns": [], "count": 0, "query": query}
-        data = payload.get("data") if isinstance(payload, dict) else {}
-        result = (data.get("allResults") or {}).get("result") or {} if isinstance(data, dict) else {}
+        if not isinstance(payload, dict):
+            return {"rows": [], "columns": [], "count": 0, "query": query}
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            return {"rows": [], "columns": [], "count": 0, "query": query}
+        result = (data.get("allResults") or {}).get("result") or {}
         data_list = result.get("dataList") or []
         columns = result.get("columns") or []
         col_names = [c.get("name") or c.get("field") for c in columns if isinstance(c, dict)]
         rows = [dict(zip(col_names, row)) for row in data_list]
-        count = data.get("securityCount", len(rows)) if isinstance(data, dict) else len(rows)
+        count = data.get("securityCount", len(rows))
         return {"rows": rows, "columns": col_names, "count": count, "query": query}
+
+    # ── 实体识别 + 金融数据查询（mx-finance-data） ──────────────────────
+    _ENTITY_TAG_FIELDS = ("entityId", "secuCode", "marketChar", "fullName", "market", "classCode")
+    _DIRECT_QUERY_ENTITY_LIMIT = 5
+
+    @staticmethod
+    def _flatten_value(v):
+        if v is None:
+            return ""
+        if isinstance(v, (dict, list)):
+            return json.dumps(v, ensure_ascii=False)
+        return str(v)
+
+    @classmethod
+    def _normalize_entity_tag(cls, raw):
+        """从实体识别结果提取完整字段（仅传 entityId 只返回首个实体数据）。"""
+        entity_id = cls._flatten_value(raw.get("entityId")).strip() if isinstance(raw, dict) else ""
+        if not entity_id:
+            raise ValueError("missing entityId")
+        tag = {"entityId": entity_id}
+        for field in cls._ENTITY_TAG_FIELDS:
+            if field == "entityId":
+                continue
+            val = raw.get(field) if isinstance(raw, dict) else None
+            if val not in (None, ""):
+                tag[field] = cls._flatten_value(val)
+        return tag
+
+    @classmethod
+    def _extract_entity_tags(cls, api_result):
+        """从实体识别响应提取 tag 列表。entityMetricList 取每组首项，否则用 entityList。"""
+        if not isinstance(api_result, dict):
+            return []
+        data = api_result.get("data")
+        if not isinstance(data, dict):
+            return []
+        raw_items = []
+        metric = data.get("entityMetricList")
+        if isinstance(metric, list):
+            for group in metric:
+                if isinstance(group, list) and group and isinstance(group[0], dict):
+                    raw_items.append(group[0])
+        else:
+            ent_list = data.get("entityList")
+            if isinstance(ent_list, list):
+                raw_items = [it for it in ent_list if isinstance(it, dict)]
+        tags = []
+        for item in raw_items:
+            try:
+                tags.append(cls._normalize_entity_tag(item))
+            except ValueError:
+                continue
+        return tags
+
+    def recognize_entities(self, query):
+        """实体识别（mx-finance-data 前置，/proxy/entity/saas）。返回 tag 列表。"""
+        body = {"content": query, "typeCodes": _ENTITY_TYPE_CODES}
+        payload = self._request(body, "/proxy/entity/saas", "em/recognize_entities")
+        return self._extract_entity_tags(payload) if payload else []
+
+    @staticmethod
+    def _extract_data_table_list(api_result):
+        """兼容 dataTableDTOList 的 3 级路径。返回 (list, error)。"""
+        if not isinstance(api_result, dict):
+            return [], "not dict"
+        dto = api_result.get("dataTableDTOList")
+        if isinstance(dto, list):
+            return dto, None
+        data = api_result.get("data")
+        if isinstance(data, dict):
+            sr = data.get("searchDataResultDTO")
+            if isinstance(sr, dict):
+                dto = sr.get("dataTableDTOList")
+                if isinstance(dto, list):
+                    return dto, None
+            dto = data.get("dataTableDTOList")
+            if isinstance(dto, list):
+                return dto, None
+        return [], "no dataTableDTOList"
+
+    def search_data(self, query, indicators=None):
+        """金融数据查询（mx-finance-data）。含实体识别前置 + 多实体分支。
+
+        返回 {tables, use_entity_tags, recognized_entity_count, search_query, query}。
+        """
+        tags = self.recognize_entities(query)
+        result = {"tables": [], "use_entity_tags": False, "recognized_entity_count": len(tags),
+                  "search_query": query, "query": query}
+        if not self.available:
+            return result
+        entity_tags = None
+        search_query = query
+        if len(tags) > self._DIRECT_QUERY_ENTITY_LIMIT:
+            if not (indicators or "").strip():
+                result["error"] = "多实体查数（>5）缺少 indicators"
+                return result
+            entity_tags = tags
+            result["use_entity_tags"] = True
+            search_query = f"选定实体的{indicators.strip()}"
+            result["search_query"] = search_query
+            result["indicators"] = indicators.strip()
+
+        tool_context = {
+            "callId": f"call_{uuid.uuid4().hex[:8]}",
+            "userInfo": {"userId": f"user_{uuid.uuid4().hex[:8]}"},
+        }
+        if entity_tags:
+            tool_context["toolPreTaskResultList"] = [{
+                "taskName": "股票基金筛选",
+                "entityTagListMap": {"1": entity_tags},
+            }]
+        body = {"query": search_query, "toolContext": tool_context}
+        payload = self._post_mcp(body, "searchData", "em/search_data")
+        if not payload:
+            return result
+        dto_list, _ = self._extract_data_table_list(payload)
+        tables = []
+        for block in dto_list:
+            if not isinstance(block, dict):
+                continue
+            tables.append({
+                "title": block.get("title") or block.get("inputTitle") or block.get("entityName") or "",
+                "condition": block.get("condition"),
+                "raw": block,
+            })
+        result["tables"] = tables
+        return result
 
     # ── 族 B：投顾助手 API ──────────────────────────────────────────────
     def _post_advisor(self, body, endpoint, stage, timeout=None):
