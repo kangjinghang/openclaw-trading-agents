@@ -578,27 +578,27 @@ class EastmoneyClient:
         step2: write/choice/reportList 报告期列表 → 选定 reportDate
         step3: write/performance/comment 生成点评（带 em_base_info，1200s）
 
-        任一步失败整体返回带 error 的 dict（不返回 {}，保留诊断信息）。
+        任一步失败整体返回 {}（诊断信息经 record_call 的 stage 可观测）。
         """
         if not self.available:
-            return {"error": "EM_API_KEY 未配置"}
+            return {}
         # step1 实体识别
         s1 = self._request({"content": query}, "/proxy/entity/dialogTagsV2", "em/earnings_entity")
         ent = self._pick_review_entity(s1)
         if not ent:
-            return {"error": "实体识别失败或不支持（需沪深京港美）"}
+            return {}
         em_code = ent["em_code"]
         # step2 报告期列表
         s2 = self._post_report({"emCode": em_code}, "write/choice/reportList", "em/earnings_period")
         period = self._choose_report_period(s2, report_date)
         if not period:
-            return {"error": "未找到报告期", "em_code": em_code}
+            return {}
         # step3 点评（带 em_base_info）
         s3 = self._post_report({"query": em_code, "reportDate": period},
                                "write/performance/comment", "em/earnings_review",
                                base_info=True)
         if not s3:
-            return {"error": "点评生成失败", "em_code": em_code, "reportDate": period}
+            return {}
         data = s3.get("data") if isinstance(s3.get("data"), dict) else {}
         pdf_b64 = data.get("pdfBase64")
         word_b64 = data.get("wordBase64")

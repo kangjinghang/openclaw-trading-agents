@@ -211,6 +211,19 @@ def test_search_data_multi_entity_uses_tool_pre_task(with_key):
     assert "toolPreTaskResultList" in tctx
 
 
+def test_search_data_multi_entity_without_indicators_errors(with_key):
+    """>5 实体但无 indicators 时设置 result['error']，不发起查数请求（仅实体识别 1 次）。"""
+    from eastmoney_client import get_client
+    c = get_client()
+    entities = [{"entityId": f"E{i}", "secuCode": f"60000{i}", "marketChar": "SH"} for i in range(6)]
+    entity_resp = {"data": {"entityList": entities}}
+    with mock.patch("eastmoney_client.requests.post", return_value=_ok_payload(entity_resp)) as mp:
+        out = c.search_data("白酒板块 营收 净利")  # no indicators
+    assert "error" in out
+    assert out["use_entity_tags"] is False
+    assert mp.call_count == 1  # 只调了实体识别，没查数
+
+
 def test_recognize_entities_extracts_tags(with_key):
     from eastmoney_client import get_client
     c = get_client()
@@ -345,8 +358,31 @@ def test_earnings_review_step1_fail_returns_empty(with_key):
     s1 = {"data": {"entityMetricList": [[{"classCode": "999", "secuCode": "xxx"}]]}}
     with mock.patch("eastmoney_client.requests.post", return_value=_ok_payload(s1)) as mp:
         out = c.earnings_review("未知实体")
-    assert out.get("title", "") == ""
+    assert out == {}
     assert mp.call_count == 1  # step1 失败即停
+
+
+def test_earnings_review_step2_no_period_returns_empty(with_key):
+    """step1 实体识别成功但 step2 无报告期 → 整体返回 {}。"""
+    from eastmoney_client import get_client
+    c = get_client()
+    s1 = {"data": {"entityMetricList": [[{"classCode": "002001", "secuCode": "600519", "marketChar": "SH", "shortName": "贵州茅台"}]]}}
+    s2 = {"code": 0, "data": {"reportDateList": []}}  # 空报告期列表
+    responses = [_ok_payload(s1), _ok_payload(s2)]
+    with mock.patch("eastmoney_client.requests.post", side_effect=responses) as mp:
+        out = c.earnings_review("贵州茅台")
+    assert out == {}
+    assert mp.call_count == 2  # step1 + step2，未到 step3
+
+
+def test_earnings_review_unconfigured_returns_empty_dict(no_key):
+    """未配 key 时 earnings_review 返回 {}（falsy），与其他方法契约一致。"""
+    import eastmoney_client
+    eastmoney_client._client = None
+    c = eastmoney_client.get_client()
+    out = c.earnings_review("贵州茅台")
+    assert out == {}
+    assert not out  # falsy check — caller can do `if not client.earnings_review(q):`
 
 
 def test_supported_skills_covers_all_15():
@@ -385,4 +421,4 @@ def test_smoke_unconfigured_no_exception(no_key):
     assert c.ask("x")["answer"] == ""
     assert c.search_kb("x")["valid"] is False
     assert c.generate_report("industry", "x")["title"] == ""
-    assert c.earnings_review("x").get("title", "") == ""
+    assert c.earnings_review("x") == {}
