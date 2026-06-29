@@ -254,3 +254,43 @@ def test_comparable_company_returns_list_structure(with_key):
     assert out["success"] is True
     assert len(out["data"]) == 2
     assert "/comparable-company-analysis" in mp.call_args.args[0]
+
+
+def test_ask_omits_deepthink_when_false(with_key):
+    """deep_think=False 时不下发 deepThink key（对齐官方'省略即关闭'）。"""
+    from eastmoney_client import get_client
+    c = get_client()
+    payload = {"code": 200, "data": {"displayData": "茅台当前估值...", "refIndexList": [{"refId": 1, "type": "资讯"}]}}
+    with mock.patch("eastmoney_client.requests.post", return_value=_ok_payload(payload)) as mp:
+        out = c.ask("茅台当前估值")
+    assert "deepThink" not in mp.call_args.kwargs["json"]
+    assert "估值" in out["answer"]
+    assert out["references"][0]["refId"] == 1
+
+
+def test_ask_includes_deepthink_when_true(with_key):
+    from eastmoney_client import get_client
+    c = get_client()
+    with mock.patch("eastmoney_client.requests.post", return_value=_ok_payload({"code": 200, "data": {"displayData": "x"}})) as mp:
+        c.ask("茅台", deep_think=True)
+    assert mp.call_args.kwargs["json"]["deepThink"] is True
+
+
+def test_search_kb_returns_chunks(with_key):
+    from eastmoney_client import get_client
+    c = get_client()
+    payload = {"data": {"chunks": [{"title": "宁德时代研报", "text": "营收增长...", "fileName": "研报.md"}]}}
+    with mock.patch("eastmoney_client.requests.post", return_value=_ok_payload(payload)):
+        out = c.search_kb("宁德时代")
+    assert out["content"]  # 有内容
+    assert out["valid"] is True
+
+
+def test_search_kb_filters_status_message(with_key):
+    """'您暂无知识库权限'这类纯状态文案应标 valid=False。"""
+    from eastmoney_client import get_client
+    c = get_client()
+    payload = {"data": "您暂无知识库权限"}
+    with mock.patch("eastmoney_client.requests.post", return_value=_ok_payload(payload)):
+        out = c.search_kb("x")
+    assert out["valid"] is False

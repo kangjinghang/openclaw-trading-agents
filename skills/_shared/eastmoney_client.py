@@ -444,6 +444,54 @@ class EastmoneyClient:
         data = payload.get("data")
         return {"success": ok and isinstance(data, list), "data": data if isinstance(data, list) else [], "query": question}
 
+    def ask(self, question, deep_think=False):
+        """金融问答助手（mx-financial-assistant）。
+
+        deep_think=True 时写 deepThink:True（对齐官方"省略即关闭"，False 时不下发该 key）。
+        返回 {answer, references, question}。
+        """
+        body = {"question": question}
+        if deep_think:
+            body["deepThink"] = True
+        # 问答类 timeout 较长（深度思考），用 600s
+        payload = self._post_advisor(body, "ask", "em/ask", timeout=600)
+        if not payload:
+            return {"answer": "", "references": [], "question": question}
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        answer = data.get("displayData") or ""
+        refs = data.get("refIndexList") or []
+        return {"answer": answer, "references": refs if isinstance(refs, list) else [], "question": question}
+
+    @staticmethod
+    def _has_valid_kb_content(raw):
+        """判断是否真正检索到内容（非权限/空库/无命中状态文案）。
+
+        只有 chunks/items/results/list 或 displayData 才算有效。
+        """
+        if not isinstance(raw, dict):
+            return False
+        data = raw.get("data")
+        if isinstance(data, str):
+            return False  # 纯状态字符串
+        if isinstance(data, dict):
+            for key in ("chunks", "items", "results", "list"):
+                if isinstance(data.get(key), list) and data[key]:
+                    return True
+            if isinstance(data.get("displayData"), str) and data["displayData"].strip():
+                return True
+        return False
+
+    def search_kb(self, query):
+        """私域知识库检索（mx-personal-kb-search）。返回 {content, valid, query}。"""
+        body = {"query": query}
+        payload = self._post_advisor(body, "private-domain-search", "em/search_kb", timeout=60)
+        if not payload:
+            return {"content": "", "valid": False, "query": query}
+        valid = self._has_valid_kb_content(payload)
+        # 复用文本提取逻辑取内容
+        content = self._extract_text_content(payload) if payload else ""
+        return {"content": content, "valid": valid, "query": query}
+
     # ── 族 C：报告生成 API ──────────────────────────────────────────────
     def _post_report(self, body, endpoint, stage, timeout=_DEFAULT_REPORT_TIMEOUT,
                      base_info=False):
