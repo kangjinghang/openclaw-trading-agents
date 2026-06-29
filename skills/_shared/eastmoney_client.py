@@ -489,7 +489,7 @@ class EastmoneyClient:
             return {"content": "", "valid": False, "query": query}
         valid = self._has_valid_kb_content(payload)
         # 复用文本提取逻辑取内容
-        content = self._extract_text_content(payload) if payload else ""
+        content = self._extract_text_content(payload)
         return {"content": content, "valid": valid, "query": query}
 
     # ── 族 C：报告生成 API ──────────────────────────────────────────────
@@ -498,6 +498,54 @@ class EastmoneyClient:
         """族 C：报告生成。endpoint 是 assistant/ 下的完整子路径（含 write/）。"""
         return self._request(body, f"/proxy/app-robo-advisor-api/assistant/{endpoint}",
                              stage, timeout=timeout, base_info=base_info)
+
+    @staticmethod
+    def _decode_and_save(base64_str, output_dir, filename):
+        """base64 解码并落盘。返回路径或 None。"""
+        import base64 as _b64
+        from pathlib import Path
+        if not (isinstance(base64_str, str) and base64_str.strip()):
+            return None
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        path = out / filename
+        path.write_bytes(_b64.b64decode(base64_str))
+        return str(path)
+
+    def generate_report(self, kind, query, output_dir=None):
+        """4 个同构报告统一入口（industry/tracking/initial_coverage/thematic）。
+
+        返回 {title, content, shareUrl, attachments, saved, query}。
+        attachments: {pdf: base64, word: base64}（原始）。
+        output_dir 给定时落盘 PDF/Word，saved 记录路径。
+        """
+        if kind not in _REPORT_KINDS:
+            raise ValueError(f"Unknown report kind: {kind}. Supported: {list(_REPORT_KINDS.keys())}")
+        info = _REPORT_KINDS[kind]
+        body = {"query": query}
+        payload = self._post_report(body, info["path"], f"em/report_{kind}")
+        if not payload:
+            return {"title": "", "content": "", "shareUrl": None,
+                    "attachments": {}, "saved": {}, "query": query}
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        pdf_b64 = data.get("pdfBase64")
+        word_b64 = data.get("wordBase64")
+        attachments = {"pdf": pdf_b64, "word": word_b64}
+        saved = {}
+        if output_dir:
+            safe_title = re.sub(r'[\\/:*?"<>|]', "_", data.get("title") or info["slug"])
+            if pdf_b64:
+                saved["pdf"] = self._decode_and_save(pdf_b64, output_dir, f"{safe_title}.pdf")
+            if word_b64:
+                saved["word"] = self._decode_and_save(word_b64, output_dir, f"{safe_title}.docx")
+        return {
+            "title": data.get("title") or "",
+            "content": data.get("content") or "",
+            "shareUrl": data.get("shareUrl"),
+            "attachments": attachments,
+            "saved": saved,
+            "query": query,
+        }
 
 
 # ── 进程级单例 ────────────────────────────────────────────────────────────

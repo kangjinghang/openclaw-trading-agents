@@ -294,3 +294,24 @@ def test_search_kb_filters_status_message(with_key):
     with mock.patch("eastmoney_client.requests.post", return_value=_ok_payload(payload)):
         out = c.search_kb("x")
     assert out["valid"] is False
+
+
+def test_generate_report_returns_title_content_and_attachments(with_key):
+    from eastmoney_client import get_client
+    c = get_client()
+    payload = {"code": 200, "data": {"title": "半导体行业研究报告", "content": "## 行业概述\n...", "shareUrl": "http://x", "pdfBase64": "JVBERi0=", "wordBase64": "UEsDBA=="}}
+    with mock.patch("eastmoney_client.requests.post", return_value=_ok_payload(payload)) as mp:
+        out = c.generate_report("industry", "半导体行业")
+    assert out["title"] == "半导体行业研究报告"
+    assert out["shareUrl"] == "http://x"
+    assert out["attachments"]["pdf"] == "JVBERi0="
+    assert out["attachments"]["word"] == "UEsDBA=="
+    # url 是 requests.post 第一个位置参数，path 含 write/industry/research
+    assert "write/industry/research" in mp.call_args.args[0]
+
+
+def test_generate_report_unknown_kind_raises(with_key):
+    from eastmoney_client import get_client
+    c = get_client()
+    with pytest.raises(ValueError):
+        c.generate_report("nonexistent", "x")
