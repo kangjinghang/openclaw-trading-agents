@@ -43,6 +43,8 @@
 #### A. 硬约束（必须遵守，违反即视为不合规）
 列出交易执行过程中必须遵守的硬性约束，例如仓位上限、止损价下限、单笔最大建仓比例等。
 
+**重要：仓位上限与止损价下限必须同时在 RISK_JUDGE 块里填对应的数值字段**（`max_position_pct` / `min_stop_loss`），不能只写在文字里。这两个数值字段是下游强制执行的权威值，文字约束仅供人读。两者必须一致，否则下游会以数值字段为准并记录不一致警告。不设仓位/止损约束时数值字段可省略。
+
 #### B. 软建议（推荐但非强制）
 列出非强制性但建议遵守的操作建议，例如分批建仓、避开集合竞价等。
 
@@ -63,11 +65,11 @@
 <!-- VERDICT: {"direction": "pass", "reason": "综合风险可控"} -->
 
 第二块（RISK_JUDGE，结构化约束，**必须**与上方 §3-§4 章节内容一致）：
-<!-- RISK_JUDGE: {"verdict": "pass", "reason": "综合风险可控", "hard_constraints": ["仓位≤30%"], "soft_constraints": ["分两笔建仓"], "execution_preconditions": ["开盘不追高"], "de_risk_triggers": ["跌破60.5减半仓"]} -->
+<!-- RISK_JUDGE: {"verdict": "pass", "reason": "综合风险可控", "hard_constraints": ["仓位≤30%"], "max_position_pct": 30, "soft_constraints": ["分两笔建仓"], "execution_preconditions": ["开盘不追高"], "de_risk_triggers": ["跌破60.5减半仓"]} -->
 
 正确示例（revise）：
 <!-- VERDICT: {"direction": "revise", "reason": "需降低仓位并调整止损"} -->
-<!-- RISK_JUDGE: {"verdict": "revise", "reason": "需降低仓位并调整止损", "hard_constraints": ["仓位≤20%", "止损价≥60.5元"], "soft_constraints": ["分两批建仓"], "execution_preconditions": ["开盘不追高", "北向资金净流入"], "de_risk_triggers": ["跌破60.5减半仓", "MACD死叉清仓"]} -->
+<!-- RISK_JUDGE: {"verdict": "revise", "reason": "需降低仓位并调整止损", "hard_constraints": ["仓位≤20%", "止损价≥60.5元"], "max_position_pct": 20, "min_stop_loss": 60.5, "soft_constraints": ["分两批建仓"], "execution_preconditions": ["开盘不追高", "北向资金净流入"], "de_risk_triggers": ["跌破60.5减半仓", "MACD死叉清仓"]} -->
 
 正确示例（reject）：
 <!-- VERDICT: {"direction": "reject", "reason": "发现重大风险"} -->
@@ -78,3 +80,5 @@
 <!-- RISK_JUDGE: {"verdict": "pass|revise|reject", ...} -->
 
 注意：`hard_constraints` / `soft_constraints` / `execution_preconditions` / `de_risk_triggers` 均为字符串数组，可为空数组 `[]`，但不可省略字段名。`reason` 为简短结论（与 §2 中的理由一致）。
+
+`max_position_pct`（总仓位上限%，0-100）与 `min_stop_loss`（止损价下限，元）为数值字段，下游以它们为权威值强制执行。设了仓位/止损硬约束就必须填这两个字段，且与 `hard_constraints` 文本里的数字保持一致；不设时可省略。

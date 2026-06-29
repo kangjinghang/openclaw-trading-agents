@@ -330,6 +330,22 @@ export interface RiskJudge {
     soft_constraints: string[];
     execution_preconditions: string[];
     de_risk_triggers: string[];
+    /**
+     * 总仓位上限（%），权威数值。prompt 要求 LLM 在 RISK_JUDGE 里直接填这个数字，
+     * resolveMaxPosition 优先读它；hard_constraints 文本里的"仓位≤20%"仅供人读，
+     * 作为 fallback（旧解析器/LLM 未填数值字段时）。
+     * undefined = 风控未给仓位上限 → position_pct 不被 cap（维持原值）。
+     *
+     * 反转了之前的"文本为主、不设数值字段防漂移"设计（risk.ts 旧注释）：数值字段
+     * 为单一权威源，反而消除了"正则漏匹配→cap 静默失效"的系统性风险（600600 真实回归）。
+     */
+    max_position_pct?: number;
+    /**
+     * 止损价下限（元），权威数值。同 max_position_pct：prompt 直填，orchestrator
+     * 优先读它；hard_constraints 文本里的"止损价≥60.5元"降为 fallback。
+     * undefined = 风控未给止损下限 → stop_loss 不被上调（维持原值）。
+     */
+    min_stop_loss?: number;
 }
 /** Risk Manager final assessment. */
 export interface RiskAssessment {

@@ -38,6 +38,9 @@ exports.RISK_ROLES = void 0;
 exports.parseRiskArgument = parseRiskArgument;
 exports.parseRiskJudge = parseRiskJudge;
 exports.extractPositionCap = extractPositionCap;
+exports.extractStopLossFromText = extractStopLossFromText;
+exports.resolveMaxPosition = resolveMaxPosition;
+exports.resolveMinStopLoss = resolveMinStopLoss;
 exports.runRiskDebate = runRiskDebate;
 exports.runRiskManager = runRiskManager;
 const llm_client_1 = require("./llm-client");
@@ -133,6 +136,15 @@ function parseRiskJudge(content) {
     if (!RISK_VERDICTS.has(verdictRaw))
         return null;
     const coerceStrArray = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+    // 权威数值字段：prompt 要求 LLM 直接在 RISK_JUDGE 里填这两个数字。校验为数字且
+    // 范围合法后 clamp。非法值（NaN/越界）忽略 → 走正则 fallback（resolveMaxPosition）。
+    // 这两个字段是"强类型数值替代正则反推"的主路径，消除正则漏匹配导致 cap 静默失效。
+    const max_position_pct = typeof obj.max_position_pct === "number" && Number.isFinite(obj.max_position_pct)
+        ? Math.max(0, Math.min(100, obj.max_position_pct))
+        : undefined;
+    const min_stop_loss = typeof obj.min_stop_loss === "number" && Number.isFinite(obj.min_stop_loss) && obj.min_stop_loss > 0
+        ? obj.min_stop_loss
+        : undefined;
     return {
         verdict: verdictRaw,
         reason: typeof obj.reason === "string" ? obj.reason : "",
@@ -140,6 +152,8 @@ function parseRiskJudge(content) {
         soft_constraints: coerceStrArray(obj.soft_constraints),
         execution_preconditions: coerceStrArray(obj.execution_preconditions),
         de_risk_triggers: coerceStrArray(obj.de_risk_triggers),
+        ...(max_position_pct !== undefined ? { max_position_pct } : {}),
+        ...(min_stop_loss !== undefined ? { min_stop_loss } : {}),
     };
 }
 /**
@@ -189,6 +203,61 @@ function extractPositionCap(hardConstraints) {
         }
     }
     return caps.length > 0 ? Math.min(...caps) : undefined;
+}
+/** 从 hard_constraints 文本里抽止损价下限（元），如 "止损价≥60.5元"。
+ *  仅用于 resolveMinStopLoss 的 fallback（数值字段缺失时）。提取多个时取最大值
+ *  （最严格：要求更高的止损价）。无匹配返回 undefined。 */
+function extractStopLossFromText(hardConstraints) {
+    if (!hardConstraints || hardConstraints.length === 0)
+        return undefined;
+    const floors = [];
+    for (const c of hardConstraints) {
+        const m = c.match(/止损[价额]?(?:≥|>=|不低于|至少)\s*(\d+(?:\.\d+)?)/);
+        if (m) {
+            const v = parseFloat(m[1]);
+            if (Number.isFinite(v) && v > 0)
+                floors.push(v);
+        }
+    }
+    return floors.length > 0 ? Math.max(...floors) : undefined;
+}
+/**
+ * 解析仓位上限的统一入口：数值字段优先，正则 fallback。
+ *
+ * - judge.max_position_pct 存在 → 直接用（已 clamp 0-100），这是权威路径
+ * - 否则 fallback 到 extractPositionCap(hard_constraints)（旧正则，兜底）
+ *
+ * 返回 cap（undefined = 无上限）+ mismatch 标志。mismatch=true 表示数值字段
+ * 与正则抽出的值不一致（差值 > 0.5%）——调用方应 recordWarning，但仍以数值字段为准。
+ * 这是对"正则反推"系统弱点的收敛：数值字段为单一权威源，正则仅兜底 + 一致性校验。
+ */
+function resolveMaxPosition(judge) {
+    if (!judge)
+        return { cap: undefined, mismatch: false };
+    const fromField = judge.max_position_pct;
+    const fromRegex = extractPositionCap(judge.hard_constraints);
+    if (fromField !== undefined) {
+        // 数值字段权威。与正则抽出的值比对（仅当两者都有时），不一致记 mismatch。
+        const mismatch = fromRegex !== undefined && Math.abs(fromField - fromRegex) > 0.5;
+        return { cap: fromField, mismatch };
+    }
+    // 数值字段缺失 → 正则 fallback（旧行为，cap 可能因正则漏匹配而 undefined）
+    return { cap: fromRegex, mismatch: false };
+}
+/**
+ * 解析止损价下限的统一入口：数值字段优先，正则 fallback。与 resolveMaxPosition
+ * 对称。orchestrator 用它替代内联的 hard_constraints 正则。
+ */
+function resolveMinStopLoss(judge) {
+    if (!judge)
+        return { floor: undefined, mismatch: false };
+    const fromField = judge.min_stop_loss;
+    const fromRegex = extractStopLossFromText(judge.hard_constraints);
+    if (fromField !== undefined) {
+        const mismatch = fromRegex !== undefined && Math.abs(fromField - fromRegex) > 0.01;
+        return { floor: fromField, mismatch };
+    }
+    return { floor: fromRegex, mismatch: false };
 }
 async function runRiskDebate(tradingPlan, analystReports, config, openaiClient, traceLogger) {
     const promptsBaseDir = path.join(SKILLS_DIR, "trading-analysis", "prompts");
@@ -284,7 +353,8 @@ async function runRiskManager(riskDebate, tradingPlan, config, openaiClient, tra
             });
         }
     }
-    const max_position_override = extractPositionCap(judge?.hard_constraints);
+    // 仓位上限：数值字段优先（max_position_pct 权威），正则 fallback。
+    const { cap: max_position_override, mismatch: posCapMismatch } = resolveMaxPosition(judge);
     // Risk produced hard constraints but none yielded a position-% cap → the
     // plan's position_pct is uncapped. This is the class behind the 600600
     // "judge says ≤10% but position stayed 15%" regression (a cap the regex
@@ -300,8 +370,18 @@ async function runRiskManager(riskDebate, tradingPlan, config, openaiClient, tra
         !isSellSide) {
         traceLogger.recordWarning({
             phase: "risk",
-            fn: "extractPositionCap",
+            fn: "resolveMaxPosition",
             detail: `有 ${judge.hard_constraints.length} 条硬约束但未提取到仓位% cap，position_pct=${tradingPlan.position_pct}% 未被风控约束`,
+            severity: "warn",
+        });
+    }
+    // 数值字段与正则抽出的值不一致 → 以数值字段为准，但记录可审计（防 LLM 填的数字与
+    // 文本描述漂移，下游悄无声息地用了错误的 cap）。
+    if (posCapMismatch && judge?.max_position_pct !== undefined) {
+        traceLogger.recordWarning({
+            phase: "risk",
+            fn: "resolveMaxPosition",
+            detail: `max_position_pct=${judge.max_position_pct}% 与 hard_constraints 文本不一致，以数值字段为准`,
             severity: "warn",
         });
     }

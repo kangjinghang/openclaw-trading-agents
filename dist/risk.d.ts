@@ -36,6 +36,32 @@ export declare function parseRiskJudge(content: string): RiskJudge | null;
  * explicitly skipped — they cap a tranche, not the total.
  */
 export declare function extractPositionCap(hardConstraints: string[] | undefined): number | undefined;
+/** 从 hard_constraints 文本里抽止损价下限（元），如 "止损价≥60.5元"。
+ *  仅用于 resolveMinStopLoss 的 fallback（数值字段缺失时）。提取多个时取最大值
+ *  （最严格：要求更高的止损价）。无匹配返回 undefined。 */
+export declare function extractStopLossFromText(hardConstraints: string[] | undefined): number | undefined;
+/**
+ * 解析仓位上限的统一入口：数值字段优先，正则 fallback。
+ *
+ * - judge.max_position_pct 存在 → 直接用（已 clamp 0-100），这是权威路径
+ * - 否则 fallback 到 extractPositionCap(hard_constraints)（旧正则，兜底）
+ *
+ * 返回 cap（undefined = 无上限）+ mismatch 标志。mismatch=true 表示数值字段
+ * 与正则抽出的值不一致（差值 > 0.5%）——调用方应 recordWarning，但仍以数值字段为准。
+ * 这是对"正则反推"系统弱点的收敛：数值字段为单一权威源，正则仅兜底 + 一致性校验。
+ */
+export declare function resolveMaxPosition(judge: RiskJudge | null | undefined): {
+    cap: number | undefined;
+    mismatch: boolean;
+};
+/**
+ * 解析止损价下限的统一入口：数值字段优先，正则 fallback。与 resolveMaxPosition
+ * 对称。orchestrator 用它替代内联的 hard_constraints 正则。
+ */
+export declare function resolveMinStopLoss(judge: RiskJudge | null | undefined): {
+    floor: number | undefined;
+    mismatch: boolean;
+};
 export declare function runRiskDebate(tradingPlan: TradingPlan, analystReports: AnalystReport[], config: TradingAgentsConfig, openaiClient: OpenAI, traceLogger: TraceLogger): Promise<RiskDebateResult>;
 export declare function runRiskManager(riskDebate: RiskDebateResult, tradingPlan: TradingPlan, config: TradingAgentsConfig, openaiClient: OpenAI, traceLogger: TraceLogger): Promise<RiskAssessment>;
 //# sourceMappingURL=risk.d.ts.map

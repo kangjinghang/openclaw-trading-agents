@@ -1119,19 +1119,22 @@ async function runFullAnalysis(ticker, date, config, openaiClient, signal, onPro
             tradingPlan = { ...tradingPlan, position_pct: capped };
         }
     }
-    // Apply stop_loss constraint from risk hard_constraints.
-    // Mirror the position cap pattern: enforce after loop, not inside.
-    if (riskAssessment.judge?.hard_constraints) {
-        for (const constraint of riskAssessment.judge.hard_constraints) {
-            const stopLossMatch = constraint.match(/止损[价额]?(?:≥|>=|不低于|至少)\s*(\d+(?:\.\d+)?)/);
-            if (stopLossMatch) {
-                const minStopLoss = parseFloat(stopLossMatch[1]);
-                if (tradingPlan.stop_loss < minStopLoss) {
-                    log(`  风控硬约束：止损价 ${tradingPlan.stop_loss} → ${minStopLoss}`);
-                    tradingPlan = { ...tradingPlan, stop_loss: minStopLoss };
-                }
-            }
-        }
+    // Apply stop_loss constraint: 数值字段优先（min_stop_loss 权威），正则 fallback。
+    // Mirror the position cap pattern: enforce after loop, not inside. 之前这段是
+    // orchestrator 内联的正则反推，现在统一走 risk.ts 的 resolveMinStopLoss，与仓位 cap
+    // 对称，消除分散的正则逻辑。
+    const { floor: minStopLoss, mismatch: stopLossMismatch } = (0, risk_1.resolveMinStopLoss)(riskAssessment.judge);
+    if (minStopLoss !== undefined && tradingPlan.stop_loss < minStopLoss) {
+        log(`  风控硬约束：止损价 ${tradingPlan.stop_loss} → ${minStopLoss}`);
+        tradingPlan = { ...tradingPlan, stop_loss: minStopLoss };
+    }
+    if (stopLossMismatch && riskAssessment.judge?.min_stop_loss !== undefined) {
+        traceLogger.recordWarning({
+            phase: "risk",
+            fn: "resolveMinStopLoss",
+            detail: `min_stop_loss=${riskAssessment.judge.min_stop_loss} 与 hard_constraints 文本不一致，以数值字段为准`,
+            severity: "warn",
+        });
     }
     log(`[7/7] 风控评估: ${riskAssessment.status} (风险评分 ${riskAssessment.risk_score})`);
     tracker.emit("riskMgr");

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { runRiskDebate, runRiskManager, parseRiskJudge, extractPositionCap, parseRiskArgument, RISK_ROLES } from "../../src/risk";
+import { runRiskDebate, runRiskManager, parseRiskJudge, extractPositionCap, extractStopLossFromText, resolveMaxPosition, resolveMinStopLoss, parseRiskArgument, RISK_ROLES } from "../../src/risk";
 import { TradingAgentsConfig, TradingPlan, RiskDebateResult } from "../../src/types";
 import OpenAI from "openai";
 
@@ -276,7 +276,7 @@ describe("Risk Module", () => {
         mockTraceLogger
       );
 
-      const calls = mockTraceLogger.recordWarning.mock.calls.filter((c: any[]) => c[0].fn === "extractPositionCap");
+      const calls = mockTraceLogger.recordWarning.mock.calls.filter((c: any[]) => c[0].fn === "resolveMaxPosition");
       expect(calls.length).toBeGreaterThanOrEqual(1);
       expect(calls[0][0]).toMatchObject({ phase: "risk", severity: "warn" });
     });
@@ -564,6 +564,92 @@ describe("parseRiskJudge", () => {
     const content = `<!-- RISK_JUDGE: ["not", "an", "object"] -->`;
 
     expect(parseRiskJudge(content)).toBeNull();
+  });
+
+  it("reads and clamps max_position_pct / min_stop_loss numeric fields", () => {
+    const content = `<!-- RISK_JUDGE: {"verdict": "revise", "reason": "x", "hard_constraints": ["仓位≤20%"], "max_position_pct": 20, "min_stop_loss": 60.5} -->`;
+    const r = parseRiskJudge(content)!;
+    expect(r.max_position_pct).toBe(20);
+    expect(r.min_stop_loss).toBe(60.5);
+  });
+
+  it("clamps out-of-range max_position_pct to [0,100]", () => {
+    const over = parseRiskJudge(`<!-- RISK_JUDGE: {"verdict":"pass","max_position_pct":150} -->`)!;
+    expect(over.max_position_pct).toBe(100);
+    const neg = parseRiskJudge(`<!-- RISK_JUDGE: {"verdict":"pass","max_position_pct":-5} -->`)!;
+    expect(neg.max_position_pct).toBe(0);
+  });
+
+  it("ignores non-number / non-positive numeric fields", () => {
+    const a = parseRiskJudge(`<!-- RISK_JUDGE: {"verdict":"pass","max_position_pct":"twenty"} -->`)!;
+    expect(a.max_position_pct).toBeUndefined();
+    const b = parseRiskJudge(`<!-- RISK_JUDGE: {"verdict":"pass","min_stop_loss":0} -->`)!;
+    expect(b.min_stop_loss).toBeUndefined();
+    const c = parseRiskJudge(`<!-- RISK_JUDGE: {"verdict":"pass","min_stop_loss":-1} -->`)!;
+    expect(c.min_stop_loss).toBeUndefined();
+  });
+
+  it("omits numeric fields when absent (backward compat with old RISK_JUDGE)", () => {
+    const r = parseRiskJudge(`<!-- RISK_JUDGE: {"verdict":"pass","hard_constraints":["仓位≤30%"]} -->`)!;
+    expect(r.max_position_pct).toBeUndefined();
+    expect(r.min_stop_loss).toBeUndefined();
+  });
+});
+
+describe("resolveMaxPosition", () => {
+  it("uses the numeric field when present (authoritative)", () => {
+    const judge = { verdict: "revise" as const, reason: "", hard_constraints: [], soft_constraints: [], execution_preconditions: [], de_risk_triggers: [], max_position_pct: 15 };
+    expect(resolveMaxPosition(judge).cap).toBe(15);
+  });
+
+  it("falls back to regex when numeric field absent", () => {
+    const judge = { verdict: "revise" as const, reason: "", hard_constraints: ["仓位≤25%"], soft_constraints: [], execution_preconditions: [], de_risk_triggers: [] };
+    expect(resolveMaxPosition(judge).cap).toBe(25);
+  });
+
+  it("returns undefined when neither field nor regex matches", () => {
+    const judge = { verdict: "pass" as const, reason: "", hard_constraints: [], soft_constraints: [], execution_preconditions: [], de_risk_triggers: [] };
+    expect(resolveMaxPosition(judge).cap).toBeUndefined();
+  });
+
+  it("flags mismatch when numeric field disagrees with regex", () => {
+    const judge = { verdict: "revise" as const, reason: "", hard_constraints: ["仓位≤30%"], soft_constraints: [], execution_preconditions: [], de_risk_triggers: [], max_position_pct: 20 };
+    const { cap, mismatch } = resolveMaxPosition(judge);
+    expect(cap).toBe(20);          // 数值字段为准
+    expect(mismatch).toBe(true);   // 文本说 30，数值说 20
+  });
+
+  it("no mismatch when numeric field and regex agree (within tolerance)", () => {
+    const judge = { verdict: "revise" as const, reason: "", hard_constraints: ["仓位≤20%"], soft_constraints: [], execution_preconditions: [], de_risk_triggers: [], max_position_pct: 20 };
+    expect(resolveMaxPosition(judge).mismatch).toBe(false);
+  });
+
+  it("handles null/undefined judge", () => {
+    expect(resolveMaxPosition(null).cap).toBeUndefined();
+    expect(resolveMaxPosition(undefined).cap).toBeUndefined();
+  });
+});
+
+describe("resolveMinStopLoss", () => {
+  it("uses the numeric field when present", () => {
+    const judge = { verdict: "revise" as const, reason: "", hard_constraints: [], soft_constraints: [], execution_preconditions: [], de_risk_triggers: [], min_stop_loss: 60.5 };
+    expect(resolveMinStopLoss(judge).floor).toBe(60.5);
+  });
+
+  it("falls back to regex when numeric field absent", () => {
+    const judge = { verdict: "revise" as const, reason: "", hard_constraints: ["止损价≥58.9元"], soft_constraints: [], execution_preconditions: [], de_risk_triggers: [] };
+    expect(resolveMinStopLoss(judge).floor).toBe(58.9);
+  });
+
+  it("flags mismatch when numeric field disagrees with regex", () => {
+    const judge = { verdict: "revise" as const, reason: "", hard_constraints: ["止损价≥60.5元"], soft_constraints: [], execution_preconditions: [], de_risk_triggers: [], min_stop_loss: 58.0 };
+    const { floor, mismatch } = resolveMinStopLoss(judge);
+    expect(floor).toBe(58.0);
+    expect(mismatch).toBe(true);
+  });
+
+  it("extractStopLossFromText takes the max (most strict) of multiple", () => {
+    expect(extractStopLossFromText(["止损价≥58.9元", "止损不低于60.5元"])).toBe(60.5);
   });
 });
 
