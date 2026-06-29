@@ -174,6 +174,63 @@ class EastmoneyClient:
         payload = self._post_mcp(body, "searchNews", "em/search_news")
         return self._extract_text_content(payload) if payload else ""
 
+    @staticmethod
+    def _extract_frequency(entity_name):
+        """从 entityName 括号内容映射频率：年→yearly, 季→quarterly, 月→monthly, 周→weekly, 日→daily。"""
+        import re
+        m = re.search(r"[（(]([^)）]*)[)）]", entity_name or "")
+        if not m:
+            return "unknown"
+        token = m.group(1)
+        for kw, freq in (("年", "yearly"), ("季", "quarterly"),
+                         ("月", "monthly"), ("周", "weekly"), ("日", "daily")):
+            if kw in token:
+                return freq
+        return "unknown"
+
+    def search_macro_data(self, query):
+        """宏观经济数据查询（mx-macro-data）。返回 {tables, query}。
+
+        tables 每项含 frequency/indicator_name/indicator_code/head_name/rows。
+        """
+        body = {
+            "query": query,
+            "toolContext": {
+                "callId": f"call_{uuid.uuid4().hex[:8]}",
+                "userInfo": {"userId": f"user_{uuid.uuid4().hex[:8]}"},
+            },
+        }
+        payload = self._post_mcp(body, "searchMacroData", "em/search_macro_data")
+        if not payload:
+            return {"tables": [], "query": query}
+        data = payload.get("data") if isinstance(payload, dict) else None
+        raw_tables = data.get("dataTables") if isinstance(data, dict) else None
+        if not isinstance(raw_tables, list):
+            return {"tables": [], "query": query}
+        tables = []
+        for item in raw_tables:
+            if not isinstance(item, dict):
+                continue
+            tbl = item.get("table") or {}
+            name_map = item.get("nameMap") or {}
+            entity_name = item.get("entityName") or ""
+            head_name = tbl.get("headName") or []
+            rows = []
+            for code, vals in tbl.items():
+                if code == "headName" or not isinstance(vals, list):
+                    continue
+                row = dict(zip([str(h) for h in head_name], vals))
+                row["indicator_code"] = code
+                row["indicator_name"] = name_map.get(code, code)
+                rows.append(row)
+            tables.append({
+                "frequency": self._extract_frequency(entity_name),
+                "indicator_name": next(iter(name_map.values()), entity_name),
+                "head_name": head_name,
+                "rows": rows,
+            })
+        return {"tables": tables, "query": query}
+
     # ── 族 B：投顾助手 API ──────────────────────────────────────────────
     def _post_advisor(self, body, endpoint, stage, timeout=None):
         """族 B：/proxy/app-robo-advisor-api/assistant/<endpoint>，Markdown 类。"""

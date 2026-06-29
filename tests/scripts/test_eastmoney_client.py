@@ -146,3 +146,23 @@ def test_search_news_extracts_text(with_key):
     assert body["query"] == "茅台"
     assert "callId" in body["toolContext"]
     assert "userId" in body["toolContext"]["userInfo"]  # 补上官方缺的 userId
+
+
+def test_search_macro_data_parses_frequency(with_key):
+    from eastmoney_client import get_client
+    c = get_client()
+    payload = {
+        "data": {
+            "dataTables": [
+                {
+                    "table": {"headName": ["指标", "2023年"], "EMM0001": ["GDP", "5.2%"]},
+                    "nameMap": {"EMM0001": "国内生产总值"},
+                    "entityName": "GDP（年）",
+                }
+            ]
+        }
+    }
+    with mock.patch("eastmoney_client.requests.post", return_value=_ok_payload(payload)):
+        out = c.search_macro_data("中国 GDP 增速")
+    assert out["tables"][0]["frequency"] == "yearly"
+    assert out["tables"][0]["indicator_name"] == "国内生产总值"
