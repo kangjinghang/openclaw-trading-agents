@@ -9,6 +9,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
 from http_helpers import em_get, output_json, normalize_ticker, record_call
+from iwencai_client import get_client as get_iwencai_client
 
 
 # ── Sentiment keyword dictionaries ──────────────────────────────
@@ -267,6 +268,22 @@ def _fetch_stock_news_eastmoney(code, page_size=15):
         return []
 
 
+def _fetch_stock_news(code):
+    """个股新闻：问财官方 OpenAPI 主源，空/未配/失败 → 东财兜底。
+
+    对齐 news.py 已验证模式（行 685-692）。问财主源返回权威财经媒体 + 真实来源
+    + 相关度评分；东财 search-api-web 需 TLS 指纹（cffi_get）但本函数原 em_get
+    路径未过指纹、实测返回 0 条（被 JA3 反爬挡掉），现降为兜底。返回
+    (articles, source)，source ∈ {"iwencai","eastmoney","none"}。
+    """
+    iw = get_iwencai_client()
+    articles = iw.search_news(code) if code else []
+    if articles:
+        return articles, "iwencai"
+    articles = _fetch_stock_news_eastmoney(code)
+    return articles, ("eastmoney" if articles else "none")
+
+
 def fetch_sentiment(ticker, date):
     """Fetch sentiment indicators with pre-computed sentiment score."""
     code = normalize_ticker(ticker)
@@ -274,8 +291,9 @@ def fetch_sentiment(ticker, date):
 
     data["hot_rank"] = _fetch_hot_rank(date)
     data["zt_pool"] = _fetch_zt_pool(date, code)
-    articles = _fetch_stock_news_eastmoney(code)
+    articles, source = _fetch_stock_news(code)
     data["stock_news"] = articles
+    data["stock_news_source"] = source
     data["news_count"] = len(articles)
 
     # Pre-compute sentiment score

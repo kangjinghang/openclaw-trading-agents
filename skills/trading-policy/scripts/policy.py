@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
 from http_helpers import em_get, output_json, normalize_ticker, record_call
+from iwencai_client import get_client as get_iwencai_client
 
 # news.py lives in a sibling skill dir; import it to reuse _fetch_macro_nbs /
 # _build_macro_sector_view (single source of truth for the macro→sector engine).
@@ -82,6 +83,35 @@ def _fetch_policy_eastmoney(code, lookback_days=30):
         return []
 
 
+def _fetch_policy_news(code, lookback_days=30):
+    """个股政策新闻：问财官方 OpenAPI 主源，空/未配/失败 → 东财兜底。
+
+    对齐 news.py 已验证模式。问财 search_news 返回 {title,content,time,source}；
+    本文件下游消费 stock_policy_news 期望 {date,title,content,source}（date 非
+    time），故做字段映射。东财 search-api-web 的 em_get 路径未过 TLS 指纹、实测
+    返回 0 条（被 JA3 反爬挡掉），现降为兜底。返回 (articles, source)，
+    source ∈ {"iwencai","eastmoney","none"}。
+    """
+    iw = get_iwencai_client()
+    raw = iw.search_news(code) if code else []
+    if raw:
+        cutoff = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+        articles = []
+        for a in raw:
+            date_str = (a.get("time") or "")[:10]
+            if date_str >= cutoff:
+                articles.append({
+                    "date": date_str,
+                    "title": a.get("title", ""),
+                    "content": a.get("content", ""),
+                    "source": a.get("source", "问财"),
+                })
+        if articles:
+            return articles, "iwencai"
+    articles = _fetch_policy_eastmoney(code, lookback_days)
+    return articles, ("eastmoney" if articles else "none")
+
+
 def _fetch_macro_policy_akshare(limit=20):
     """Fetch macro policy telegrams from akshare (东方财富全球财经快讯).
 
@@ -125,7 +155,9 @@ def fetch_policy(ticker, date, lookback_days=30):
     data = {"ticker": code, "date": date, "lookback_days": lookback_days}
 
     try:
-        data["stock_policy_news"] = _fetch_policy_eastmoney(code, lookback_days)
+        articles, source = _fetch_policy_news(code, lookback_days)
+        data["stock_policy_news"] = articles
+        data["stock_policy_source"] = source
     except Exception as e:
         data["stock_policy_error"] = str(e)
 
