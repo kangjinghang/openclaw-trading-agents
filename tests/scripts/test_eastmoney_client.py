@@ -166,3 +166,15 @@ def test_search_macro_data_parses_frequency(with_key):
         out = c.search_macro_data("中国 GDP 增速")
     assert out["tables"][0]["frequency"] == "yearly"
     assert out["tables"][0]["indicator_name"] == "国内生产总值"
+
+
+def test_select_security_passes_select_type(with_key):
+    from eastmoney_client import get_client
+    c = get_client()
+    payload = {"data": {"allResults": {"result": {"dataList": [["600519", "贵州茅台"]], "columns": [{"field": "code"}, {"field": "name"}]}}, "securityCount": 1}}
+    with mock.patch("eastmoney_client.requests.post", return_value=_ok_payload(payload)) as mp:
+        out = c.select_security("股价大于500元的股票", "A股")
+    assert out["count"] == 1
+    assert out["rows"][0]["name"] == "贵州茅台"
+    _, kwargs = mp.call_args
+    assert kwargs["json"]["selectType"] == "A股"

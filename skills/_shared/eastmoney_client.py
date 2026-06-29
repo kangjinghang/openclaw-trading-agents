@@ -231,6 +231,32 @@ class EastmoneyClient:
             })
         return {"tables": tables, "query": query}
 
+    def select_security(self, query, select_type):
+        """选股/选板块/选基金（mx-stocks-screener）。
+
+        select_type: A股/港股/美股/基金/ETF/可转债/板块。
+        返回 {rows, columns, count, query}。
+        """
+        body = {
+            "query": query,
+            "selectType": select_type,
+            "toolContext": {
+                "callId": f"call_{uuid.uuid4().hex[:8]}",
+                "userInfo": {"userId": f"user_{uuid.uuid4().hex[:8]}"},
+            },
+        }
+        payload = self._post_mcp(body, "selectSecurity", "em/select_security")
+        if not payload:
+            return {"rows": [], "columns": [], "count": 0, "query": query}
+        data = payload.get("data") if isinstance(payload, dict) else {}
+        result = (data.get("allResults") or {}).get("result") or {} if isinstance(data, dict) else {}
+        data_list = result.get("dataList") or []
+        columns = result.get("columns") or []
+        col_names = [c.get("name") or c.get("field") for c in columns if isinstance(c, dict)]
+        rows = [dict(zip(col_names, row)) for row in data_list]
+        count = data.get("securityCount", len(rows)) if isinstance(data, dict) else len(rows)
+        return {"rows": rows, "columns": col_names, "count": count, "query": query}
+
     # ── 族 B：投顾助手 API ──────────────────────────────────────────────
     def _post_advisor(self, body, endpoint, stage, timeout=None):
         """族 B：/proxy/app-robo-advisor-api/assistant/<endpoint>，Markdown 类。"""
