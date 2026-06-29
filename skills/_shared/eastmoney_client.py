@@ -16,6 +16,7 @@ import json
 import os
 import secrets
 import time
+import uuid
 
 import requests
 
@@ -137,6 +138,41 @@ class EastmoneyClient:
     def _post_mcp(self, body, endpoint, stage):
         """族 A：/proxy/b/mcp/tool/<endpoint>，结构化表格类。"""
         return self._request(body, f"/proxy/b/mcp/tool/{endpoint}", stage)
+
+    @staticmethod
+    def _extract_text_content(payload):
+        """从 searchNews 响应递归剥 data/result 包裹，取首个文本字段。
+
+        优先级：llmSearchResponse > searchResponse > content > answer > summary。
+        list/dict 转 json.dumps，都没有则整体 json.dumps 兜底。
+        """
+        if not isinstance(payload, dict):
+            return ""
+        node = payload
+        # 剥一层 data/result
+        for wrap in ("data", "result"):
+            inner = node.get(wrap) if isinstance(node, dict) else None
+            if isinstance(inner, dict):
+                node = inner
+        for key in ("llmSearchResponse", "searchResponse", "content", "answer", "summary"):
+            v = node.get(key) if isinstance(node, dict) else None
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+            if isinstance(v, (list, dict)) and v:
+                return json.dumps(v, ensure_ascii=False, indent=2)
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+
+    def search_news(self, query):
+        """金融资讯搜索（mx-finance-search）。返回文本字符串。"""
+        body = {
+            "query": query,
+            "toolContext": {
+                "callId": f"call_{uuid.uuid4().hex[:8]}",
+                "userInfo": {"userId": f"user_{uuid.uuid4().hex[:8]}"},
+            },
+        }
+        payload = self._post_mcp(body, "searchNews", "em/search_news")
+        return self._extract_text_content(payload) if payload else ""
 
     # ── 族 B：投顾助手 API ──────────────────────────────────────────────
     def _post_advisor(self, body, endpoint, stage, timeout=None):

@@ -132,3 +132,17 @@ def test_record_call_emitted_on_success_and_failure(with_key, monkeypatch):
     failure_calls = [x for x in calls if x[1] is False]
     assert len(success_calls) == 1 and success_calls[0][0] == "em/ok"
     assert len(failure_calls) == 1 and failure_calls[0][0] == "em/fail"
+
+
+def test_search_news_extracts_text(with_key):
+    from eastmoney_client import get_client
+    c = get_client()
+    payload = {"data": {"llmSearchResponse": "茅台三季度营收同比增长..."}}
+    with mock.patch("eastmoney_client.requests.post", return_value=_ok_payload(payload)) as mp:
+        out = c.search_news("茅台")
+    assert out == "茅台三季度营收同比增长..."
+    _, kwargs = mp.call_args
+    body = kwargs["json"]
+    assert body["query"] == "茅台"
+    assert "callId" in body["toolContext"]
+    assert "userId" in body["toolContext"]["userInfo"]  # 补上官方缺的 userId
