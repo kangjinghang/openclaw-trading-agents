@@ -547,6 +547,112 @@ class EastmoneyClient:
             "query": query,
         }
 
+    def earnings_review(self, query, report_date=None, output_dir=None):
+        """业绩点评（stock-earnings-review）。3 步协议 + em_base_info。
+
+        step1: /proxy/entity/dialogTagsV2 实体识别 → em_code
+        step2: write/choice/reportList 报告期列表 → 选定 reportDate
+        step3: write/performance/comment 生成点评（带 em_base_info，1200s）
+
+        任一步失败整体返回带 error 的 dict（不返回 {}，保留诊断信息）。
+        """
+        if not self.available:
+            return {"error": "EM_API_KEY 未配置"}
+        # step1 实体识别
+        s1 = self._request({"content": query}, "/proxy/entity/dialogTagsV2", "em/earnings_entity")
+        ent = self._pick_review_entity(s1)
+        if not ent:
+            return {"error": "实体识别失败或不支持（需沪深京港美）"}
+        em_code = ent["em_code"]
+        # step2 报告期列表
+        s2 = self._post_report({"emCode": em_code}, "write/choice/reportList", "em/earnings_period")
+        period = self._choose_report_period(s2, report_date)
+        if not period:
+            return {"error": "未找到报告期", "em_code": em_code}
+        # step3 点评（带 em_base_info）
+        s3 = self._post_report({"query": em_code, "reportDate": period},
+                               "write/performance/comment", "em/earnings_review",
+                               base_info=True)
+        if not s3:
+            return {"error": "点评生成失败", "em_code": em_code, "reportDate": period}
+        data = s3.get("data") if isinstance(s3.get("data"), dict) else {}
+        pdf_b64 = data.get("pdfBase64")
+        word_b64 = data.get("wordBase64")
+        saved = {}
+        if output_dir:
+            if pdf_b64:
+                saved["pdf"] = self._decode_and_save(pdf_b64, output_dir, "review.pdf")
+            if word_b64:
+                saved["word"] = self._decode_and_save(word_b64, output_dir, "review.doc")
+        return {
+            "title": data.get("title") or "",
+            "content": data.get("content") or "",
+            "shareUrl": data.get("shareUrl"),
+            "em_code": em_code,
+            "reportDate": period,
+            "attachments": {"pdf": pdf_b64, "word": word_b64},
+            "saved": saved,
+            "query": query,
+        }
+
+    @staticmethod
+    def _pick_review_entity(api_result):
+        """从 dialogTagsV2 响应提取首个支持的实体（classCode ∈ 沪深京港美）。"""
+        if not isinstance(api_result, dict):
+            return None
+        data = api_result.get("data")
+        if not isinstance(data, dict):
+            return None
+        cand = None
+        metric = data.get("entityMetricList")
+        if isinstance(metric, list) and metric and isinstance(metric[0], list) and metric[0]:
+            cand = metric[0][0] if isinstance(metric[0][0], dict) else None
+        if not cand:
+            ent_list = data.get("entityList")
+            cand = ent_list[0] if isinstance(ent_list, list) and ent_list and isinstance(ent_list[0], dict) else None
+        if not isinstance(cand, dict):
+            return None
+        class_code = str(cand.get("classCode") or "")
+        if class_code not in _EARNINGS_SUPPORTED_CLASS_CODES:
+            return None
+        secu_code = str(cand.get("secuCode") or "").strip()
+        market_char = str(cand.get("marketChar") or "").strip()
+        # 拼 em_code（含 . 则原样，否则补 marketChar 后缀）
+        if "." in secu_code:
+            em_code = secu_code
+        elif market_char:
+            em_code = f"{secu_code}.{market_char}" if not market_char.startswith(".") else f"{secu_code}{market_char}"
+        else:
+            return None
+        return {"em_code": em_code, "secu_code": secu_code, "class_code": class_code,
+                "secu_name": cand.get("shortName") or ""}
+
+    @staticmethod
+    def _choose_report_period(api_result, selected=None):
+        """从 reportList 响应选报告期。selected 非空则精确匹配，否则取首个。"""
+        if not isinstance(api_result, dict):
+            return None
+        data = api_result.get("data")
+        if not isinstance(data, dict):
+            return None
+        periods = data.get("reportDateList")
+        if not isinstance(periods, list) or not periods:
+            return None
+        # 元素可能是 str 或 dict
+        norm = []
+        for p in periods:
+            if isinstance(p, str):
+                norm.append(p)
+            elif isinstance(p, dict):
+                norm.append(p.get("reportDate") or p.get("period") or p.get("date") or "")
+        norm = [p for p in norm if p]
+        if selected:
+            for p in norm:
+                if p == selected:
+                    return p
+            return None
+        return norm[0] if norm else None
+
 
 # ── 进程级单例 ────────────────────────────────────────────────────────────
 _client = None

@@ -315,3 +315,35 @@ def test_generate_report_unknown_kind_raises(with_key):
     c = get_client()
     with pytest.raises(ValueError):
         c.generate_report("nonexistent", "x")
+
+
+def test_earnings_review_three_steps_success(with_key):
+    """3 步全成功：实体识别 → 报告期 → 点评（带 em_base_info）。"""
+    from eastmoney_client import get_client
+    c = get_client()
+    # step1 实体识别（dialogTagsV2）
+    s1 = {"data": {"entityMetricList": [[{"classCode": "002001", "secuCode": "600519", "marketChar": "SH", "shortName": "贵州茅台"}]]}}
+    # step2 报告期列表
+    s2 = {"code": 0, "data": {"reportDateList": ["2023-12-31", "2023-09-30"]}}
+    # step3 点评
+    s3 = {"code": 0, "data": {"title": "茅台2023年报点评", "content": "业绩超预期...", "shareUrl": "http://x", "pdfBase64": "JVBERi0="}}
+    responses = [_ok_payload(s1), _ok_payload(s2), _ok_payload(s3)]
+    with mock.patch("eastmoney_client.requests.post", side_effect=responses) as mp:
+        out = c.earnings_review("贵州茅台", report_date="2023-12-31")
+    assert out["title"] == "茅台2023年报点评"
+    assert out["em_code"] == "600519.SH"
+    assert mp.call_count == 3
+    # step3 带 em_base_info
+    _, kwargs3 = mp.call_args_list[2]
+    assert "em_base_info" in kwargs3["headers"]
+
+
+def test_earnings_review_step1_fail_returns_empty(with_key):
+    """实体识别失败（classCode 不支持）整体返回空，不继续后续步骤。"""
+    from eastmoney_client import get_client
+    c = get_client()
+    s1 = {"data": {"entityMetricList": [[{"classCode": "999", "secuCode": "xxx"}]]}}
+    with mock.patch("eastmoney_client.requests.post", return_value=_ok_payload(s1)) as mp:
+        out = c.earnings_review("未知实体")
+    assert out.get("title", "") == ""
+    assert mp.call_count == 1  # step1 失败即停
