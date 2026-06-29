@@ -347,3 +347,42 @@ def test_earnings_review_step1_fail_returns_empty(with_key):
         out = c.earnings_review("未知实体")
     assert out.get("title", "") == ""
     assert mp.call_count == 1  # step1 失败即停
+
+
+def test_supported_skills_covers_all_15():
+    """supported_skills 覆盖全部 15 个 mx-skills。"""
+    from eastmoney_client import get_client
+    import eastmoney_client
+    eastmoney_client._client = None
+    c = get_client()
+    skills = c.supported_skills
+    expected_slugs = [
+        "mx-finance-data", "mx-finance-search", "mx-macro-data", "mx-stocks-screener",
+        "stock-diagnosis", "fund-diagnosis", "stock-market-hotspot-discovery",
+        "comparable-company-analysis", "mx-financial-assistant", "mx-personal-kb-search",
+        "industry-research-report", "industry-stock-tracker",
+        "initiation-of-coverage-or-deep-dive", "topic-research-report", "stock-earnings-review",
+    ]
+    for slug in expected_slugs:
+        assert slug in skills, f"missing {slug}"
+    assert len(skills) >= 15
+
+
+def test_smoke_unconfigured_no_exception(no_key):
+    """未配 key 时所有 13 个方法调用不抛异常，返回空。"""
+    import eastmoney_client
+    eastmoney_client._client = None
+    c = eastmoney_client.get_client()
+    assert c.search_news("x") == ""
+    assert c.search_data("x")["tables"] == []
+    assert c.search_macro_data("x")["tables"] == []
+    assert c.select_security("x", "A股")["count"] == 0
+    assert c.recognize_entities("x") == []
+    assert c.diagnose_stock("x") == ""
+    assert c.diagnose_fund("x") == ""
+    assert c.discover_hotspot("x") == ""
+    assert c.comparable_company_analysis("x")["success"] is False
+    assert c.ask("x")["answer"] == ""
+    assert c.search_kb("x")["valid"] is False
+    assert c.generate_report("industry", "x")["title"] == ""
+    assert c.earnings_review("x").get("title", "") == ""

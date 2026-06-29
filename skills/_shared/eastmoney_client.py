@@ -70,6 +70,30 @@ class EastmoneyClient:
         self.timeout = timeout
         self.available = bool(self.api_key)
 
+    @property
+    def supported_skills(self):
+        """返回所有支持的 skill slug → 中文名映射（15 个 mx-skills）。"""
+        return {
+            # 族 A：MCP 数据查询
+            "mx-finance-data": "全市场金融数据查询",
+            "mx-finance-search": "金融资讯搜索",
+            "mx-macro-data": "宏观经济数据查询",
+            "mx-stocks-screener": "智能选股选板块",
+            # 族 B：投顾诊断/问答
+            "stock-diagnosis": "沪深京A股综合诊断",
+            "fund-diagnosis": "公募基金综合诊断",
+            "stock-market-hotspot-discovery": "股市热点发现",
+            "comparable-company-analysis": "可比公司分析",
+            "mx-financial-assistant": "金融问答助手",
+            "mx-personal-kb-search": "妙想私域知识库检索",
+            # 族 C：报告生成（generate_report 合并 4 个同构 + earnings_review 1 个）
+            "industry-research-report": "行业研究报告",
+            "industry-stock-tracker": "行业个股跟踪报告",
+            "initiation-of-coverage-or-deep-dive": "首次覆盖/深度研究报告",
+            "topic-research-report": "专题研究报告",
+            "stock-earnings-review": "上市公司业绩点评",
+        }
+
     def _trace_id(self):
         return secrets.token_hex(32)
 
