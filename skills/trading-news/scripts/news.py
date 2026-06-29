@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
 from http_helpers import em_get, http_get, cffi_get, output_json, normalize_ticker, record_call
+from iwencai_client import get_client as get_iwencai_client
 
 _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
@@ -330,6 +331,10 @@ def _fetch_commodities():
         url = (f"https://stock2.finance.sina.com.cn/futures/api/jsonp.php"
                f"/var%20_{symbol}2021_08_17=/InnerFuturesNewService.getDailyKLine"
                f"?symbol={symbol}&_=2021_08_17")
+        # 预置 None：http_get 在连接建立前抛异常（DNS/连接拒绝）时 r 从未赋值，
+        # 下方 except 里 getattr(r,...) 会触发 UnboundLocalError——和 fundamentals
+        # 的 snapshot 问题同模式。预置后异常分支也能安全记录。
+        r = None
         try:
             r = http_get(url, timeout=15, headers={"User-Agent": _UA})
             m = re.search(r"=\((\[.*\])\)", r.text, re.S)
@@ -373,7 +378,7 @@ def _fetch_commodities():
             record_call(f"news/commodity_{symbol}", success=False, error=str(e),
                         duration_ms=(time.monotonic() - start) * 1000, url=url,
                         status_code=getattr(r, 'status_code', None),
-                        response_size=len(r.content) if hasattr(r, 'content') else None)
+                        response_size=len(r.content) if r is not None and hasattr(r, 'content') else None)
     return result
 
 
@@ -668,12 +673,23 @@ def fetch_news(ticker, date, lookback_days=7, skip_macro=False, company_name=Non
     data = {"ticker": code, "date": date, "lookback_days": lookback_days}
 
     try:
-        # 东财 search-api-web 为唯一源（复刻 akshare stock_news_em 请求逻辑，
-        # 走 curl_cffi TLS 指纹）。返回按时间倒序的最新新闻（实测当天有效），
-        # 无 pywencai 那种 2024 老研报/重复条目问题。
-        # 历史上曾用 pywencai 作主源，但实测问财返回公司关联文档（含跨年研报 +
-        # 同篇重复），信噪比差；已移除，东财为唯一源。
-        articles = _fetch_news_eastmoney(code)
+        # 个股新闻：问财官方 OpenAPI 为主源（权威源 + 相关度评分 + 真实来源），
+        # 空/未配 key/失败 → 东财 search-api-web 兜底。
+        #
+        # 历史脉络：曾用 pywencai（第三方逆向网页库）作主源，因信噪比差（跨年研报 +
+        # 重复）已移除，东财变唯一源。现引入问财【官方 OpenAPI】（非 pywencai 逆向），
+        # 走 API key 认证、返回质量高（实测经济日报/证券时报等权威源、有 publish_source
+        # 真实来源 + score 相关度），正好填补当年 pywencai 让出的位置。未配
+        # IWENCAI_API_KEY 时优雅降级回东财，零行为变化。
+        query = company_name or code
+        iw = get_iwencai_client()
+        articles = iw.search_news(query) if query else []
+        if articles:
+            data["stock_news_source"] = "iwencai"
+        else:
+            # 问财空/未配/失败 → 东财兜底（复刻 akshare stock_news_em，走 curl_cffi TLS 指纹）
+            articles = _fetch_news_eastmoney(code)
+            data["stock_news_source"] = "eastmoney"
 
         # 过滤榜单类噪音：资金流向榜、概念涨跌、特大单统计等。
         # 这些是市场面/板块面信号，对个股决策无增量，LLM 看到可能误判为个股信号。
@@ -707,20 +723,24 @@ def fetch_news(ticker, date, lookback_days=7, skip_macro=False, company_name=Non
         data["macro_news_source"] = "skipped"
         return data
 
-    # Macro news: 东方财富全球财经快讯（akshare.stock_info_global_em）。
-    # 历史上曾用 CLS 财联社电报作主源 + akshare 兜底，但 CLS 的
-    # nodeapi/telegraphList 接口已稳定 404（2026-06 实测 3/3 失败），
-    # akshare 的 CLS 实现同 URL 同样失效。现简化为 EM 单源——稳定、
-    # 200 条、0.2s。macro_news_source / macro_news_error 保留以维持
-    # 输出结构稳定 + 错误可观测。
+    # Macro news: 问财官方 OpenAPI 为主源（权威财经媒体/券商研报覆盖好），
+    # 空/未配/失败 → 东方财富全球财经快讯（akshare.stock_info_global_em）兜底。
+    # 历史脉络：CLS 财联社电报接口已稳定 404（2026-06 实测），EM 单源曾作过渡。
+    # 问财官方 API 实测对宏观主题（"A股 大盘 走势"/"央行降准 货币政策"）返回
+    # 当日券商晨会/证券时报/工银国际等权威源，质量优于 EM 快讯。未配 key 回退 EM。
     macro_source = "none"
     macro_articles = []
     try:
-        macro_articles = _fetch_global_news_akshare()
+        iw = get_iwencai_client()
+        macro_articles = iw.search_news("A股 大盘 走势 宏观政策")
         if macro_articles:
-            macro_source = "eastmoney"
+            macro_source = "iwencai"
         else:
-            data["macro_news_error"] = "macro source returned empty"
+            macro_articles = _fetch_global_news_akshare()
+            if macro_articles:
+                macro_source = "eastmoney"
+            else:
+                data["macro_news_error"] = "macro source returned empty"
     except Exception as e:
         data["macro_news_error"] = str(e)
 
@@ -800,10 +820,11 @@ def main():
     try:
         data = fetch_news(args.ticker, args.date, args.lookback_days,
                           skip_macro=args.skip_macro, company_name=args.company_name)
-        # Reflect the macro source actually used (cls/akshare/skipped/none) in the
-        # top-level _source so it's visible without drilling into data.
+        # Reflect the sources actually used (个股/宏观各可能是 iwencai/eastmoney/skipped/none)
+        # in the top-level _source so it's visible without drilling into data.
+        stock_src = data.get("stock_news_source", "eastmoney")
         macro_src = data.get("macro_news_source", "none")
-        output_json(True, data=data, source=f"eastmoney+{macro_src}")
+        output_json(True, data=data, source=f"{stock_src}+{macro_src}")
     except Exception as e:
         output_json(False, error=str(e))
 

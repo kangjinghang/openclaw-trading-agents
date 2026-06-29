@@ -116,6 +116,7 @@ Plugin config file: `~/.openclaw/plugins/trading-agents/config.json`. Standalone
 
 - `OPENAI_API_KEY` — required (runtime only; tests are stubbed)
 - `OPENAI_BASE_URL` — optional, for OpenAI-compatible APIs (ZhiPu, DeepSeek, etc.)
+- `IWENCAI_API_KEY` — optional. 问财官方 OpenAPI key（`openapi.iwencai.com`，非 pywencai 逆向库）。配置后 `news.py` 优先用官方源拉个股+宏观新闻（权威财经媒体、有真实来源/相关度评分），未配/失效/超时自动回退东财+akshare（零行为变化）。客户端封装在 `skills/_shared/iwencai_client.py`，可扩展（以后扒其他官方 skill 往 `IwencaiClient` 类加方法）。可选 `IWENCAI_BASE_URL` 覆盖端点。
 - `py-mini-racer==0.6.0` — required for 同花顺 fund_flow (个股资金流) via akshare. Install the **legacy** `py-mini-racer` (==0.6.0, final release 2021), NOT the newer `mini-racer` (>=0.12.4). Both packages write to the same `py_mini_racer/` directory, and the newer `mini-racer` uses a background event-loop thread that **deadlocks on Windows** (`MiniRacer()` hangs forever). akshare's `pyproject.toml` declares `mini-racer>=0.12.4` but that only works on Mac/Linux — on Windows use the legacy package. If `mini-racer` got installed (e.g. via `pip install akshare`), uninstall it: `pip uninstall mini-racer` then `pip install py-mini-racer==0.6.0`.
 - Python 3.11+ with mootdx, akshare, pandas, requests, pywencai
 - Reports saved to `~/.openclaw/trading-reports/{ticker}/{date}_{mode}.json` + detail directory with phase subdirs (01_analysts/, 02_debate/, etc.)
