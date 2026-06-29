@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "_shared"))
 from http_helpers import http_get, eastmoney_datacenter, output_json, normalize_ticker, record_call
+from iwencai_client import get_client as get_iwencai_client
 
 import requests
 
@@ -251,20 +252,65 @@ def _score_dragon_tiger(records):
     return scored
 
 
-def _fetch_sector_fund_flow(top_n=8):
-    """Fetch industry board fund-flow ranking (主力净流入) from 同花顺 10jqka.
+def _fetch_sector_fund_flow_iwencai(top_n=8):
+    """iwencai 主源：行业板块主力资金净流入/净流出排名（官方 OpenAPI）。
 
-    Board rotation is a primary A-share driver. Returns top-N inflow and
-    top-N outflow industry boards so the LLM can read main theme (主线) vs
-    weak (弱势) camps. Source: akshare stock_fund_flow_industry (同花顺 hyzjl).
-    Replaces the old 东财 push2 source (push2.eastmoney.com 被持续封禁).
+    分两次查询（流入 top + 流出 top）：问财 query2data 必须用"前N"措辞才返回完整
+    指标字段（实测不带前缀只返回标识字段）；且"净流入前N"返回全正、"净流出前N"
+    返回全负，无法一次查询覆盖双向，故分别取。净额单位是元，转成「亿」(/1e8)。
+    返回 (result, None) 或 (None, error)。
+    """
+    start = time.monotonic()
 
-    同花顺 净额 单位是「亿」(与东财 f62/1e8 对齐)，无超大单净额
-    (super_net_yi 置 0；下游只用 name + main_net_yi)。
+    def _parse(query):
+        datas, _, _ = iw.select_sector(query, limit=str(top_n))
+        boards = []
+        for row in datas:
+            name = str(row.get("指数简称", "") or "").strip()
+            if not name:
+                continue
+            net_yuan = next((v for k, v in row.items()
+                             if "主力净买入额" in str(k) and isinstance(v, (int, float))), None)
+            chg = next((v for k, v in row.items()
+                        if "涨跌幅" in str(k) and isinstance(v, (int, float))), None)
+            if net_yuan is None:
+                continue
+            boards.append({
+                "name": name,
+                "change_pct": round(float(chg), 4) if chg is not None else 0,
+                "main_net_yi": round(float(net_yuan) / 1e8, 2),
+                "super_net_yi": 0,
+            })
+        return boards
 
-    Note: akshare uses py_mini_racer (JS runtime) for anti-bot hexin-v header
-    + BeautifulSoup HTML parsing — not feasible to inline. Trace records the
-    request URL and DataFrame row count as response_size proxy.
+    try:
+        iw = get_iwencai_client()
+        inflow = _parse(f"今日主力净流入前{top_n}的行业板块")
+        outflow = _parse(f"今日主力净流出前{top_n}的行业板块")
+        record_call("hot_money/sector_fund_flow_iwencai", success=True,
+                    duration_ms=(time.monotonic() - start) * 1000,
+                    response_size=len(inflow) + len(outflow))
+        if not inflow and not outflow:
+            return None, "iwencai returned empty"
+    except Exception as e:
+        record_call("hot_money/sector_fund_flow_iwencai", success=False, error=str(e),
+                    duration_ms=(time.monotonic() - start) * 1000)
+        return None, f"{type(e).__name__}: {e}"
+
+    result = {
+        "inflow_top": inflow,
+        "outflow_top": outflow,
+        "total_boards": len(inflow) + len(outflow),
+    }
+    return result, None
+
+
+def _fetch_sector_fund_flow_akshare(top_n=8):
+    """兜底：行业板块资金流（akshare stock_fund_flow_industry，同花顺 hyzjl）。
+
+    同花顺 净额 单位是「亿」，无超大单净额（super_net_yi 置 0）。
+    依赖 akshare + py_mini_racer（JS 反爬 hexin-v header），Windows 上易死锁，
+    故仅作 iwencai 主源失败时的兜底。返回 result 或 None。
     """
     _URL = "http://data.10jqka.com.cn/funds/hyzjl/field/tradezdf/order/desc/ajax/1/free/1/"
     start = time.monotonic()
@@ -280,17 +326,17 @@ def _fetch_sector_fund_flow(top_n=8):
             }
             for _, row in df.iterrows()
         ]
-        record_call("hot_money/sector_fund_flow", success=True,
+        record_call("hot_money/sector_fund_flow_akshare", success=True,
                     duration_ms=(time.monotonic() - start) * 1000,
                     url=_URL, response_size=len(df))
     except Exception as e:
-        record_call("hot_money/sector_fund_flow", success=False, error=str(e),
+        record_call("hot_money/sector_fund_flow_akshare", success=False, error=str(e),
                     duration_ms=(time.monotonic() - start) * 1000,
                     url=_URL)
         return None
 
     if not boards:
-        record_call("hot_money/sector_fund_flow", success=False, error="No items returned",
+        record_call("hot_money/sector_fund_flow_akshare", success=False, error="No items returned",
                     duration_ms=(time.monotonic() - start) * 1000,
                     url=_URL)
         return None
@@ -302,6 +348,22 @@ def _fetch_sector_fund_flow(top_n=8):
         "total_boards": len(boards_sorted),
     }
     return result
+
+
+def _fetch_sector_fund_flow(top_n=8):
+    """行业板块资金流：iwencai 官方主源，空/未配/失败 → akshare 兜底。
+
+    返回 (result, source)，source ∈ {"iwencai","akshare","none"}。
+    Board rotation is a primary A-share driver — top-N inflow/outflow 让 LLM
+    读主线 vs 弱势。
+    """
+    result, err = _fetch_sector_fund_flow_iwencai(top_n)
+    if result:
+        return result, "iwencai"
+    result = _fetch_sector_fund_flow_akshare(top_n)
+    if result:
+        return result, "akshare"
+    return None, "none"
 
 
 def fetch_hot_money(ticker, date, global_data=None):
@@ -319,11 +381,14 @@ def fetch_hot_money(ticker, date, global_data=None):
     if global_data:
         data["northbound"] = global_data.get("northbound")
         data["sector_fund_flow"] = global_data.get("sector_fund_flow")
+        data["sector_fund_flow_source"] = global_data.get("sector_fund_flow_source")
         data["hot_stocks"] = global_data.get("hot_stocks")
     else:
         # 无全局预取（global-only 预取 timeout/失败）→ 各源独立拉取。
         data["northbound"] = _fetch_northbound()
-        data["sector_fund_flow"] = _fetch_sector_fund_flow()
+        sff, sff_source = _fetch_sector_fund_flow()
+        data["sector_fund_flow"] = sff
+        data["sector_fund_flow_source"] = sff_source
         data["hot_stocks"] = _fetch_hot_stocks(date)
     data["dragon_tiger"] = _fetch_dragon_tiger(code, date)
     # 5-dimension quality scoring of dragon-tiger appearances (None when no
@@ -343,9 +408,11 @@ def fetch_global_only(date):
     沪市几乎不收录，覆盖率天花板过低，对调仓决策信号价值有限。
     全局的 northbound/sector_fund_flow/hot_stocks 不受影响（全市场覆盖）。
     """
+    sff, sff_source = _fetch_sector_fund_flow()
     return {
         "northbound": _fetch_northbound(),
-        "sector_fund_flow": _fetch_sector_fund_flow(),
+        "sector_fund_flow": sff,
+        "sector_fund_flow_source": sff_source,
         "hot_stocks": _fetch_hot_stocks(date),
     }
 

@@ -119,3 +119,49 @@ def test_policy_news_both_empty_returns_none():
         articles, source = policy._fetch_policy_news("贵州茅台", lookback_days=30)
     assert source == "none"
     assert articles == []
+
+
+# ════════════════════════════════════════════════════════════════════════
+# policy.py: _fetch_macro_policy_news（宏观政策新闻，iwencai 主源 + akshare 兜底）
+# ════════════════════════════════════════════════════════════════════════
+
+def test_macro_policy_iwencai_primary_maps_time_to_date():
+    """iwencai 宏观新闻命中：time→date 映射 + limit 截断。"""
+    import policy
+    iw_articles = [
+        _iw_article("央行降准", time="2026-06-29 09:00:00", source="证券时报"),
+        _iw_article("财政政策发力", time="2026-06-28 10:00:00", source="财联社"),
+    ]
+    with mock.patch.object(policy, "get_iwencai_client") as gi, \
+         mock.patch.object(policy, "_fetch_macro_policy_akshare") as ga:
+        gi.return_value.search_news.return_value = iw_articles
+        articles, source = policy._fetch_macro_policy_news(limit=5)
+    assert source == "iwencai"
+    assert len(articles) == 2
+    assert articles[0]["date"] == "2026-06-29"  # time → date 映射
+    assert articles[0]["title"] == "央行降准"
+    ga.assert_not_called()  # 主源命中，akshare 不被调用
+
+
+def test_macro_policy_iwencai_empty_falls_back_to_akshare():
+    """iwencai 空 → 走 akshare 兜底，source=eastmoney。"""
+    import policy
+    ak_articles = [{"date": "2026-06-29", "title": "EM快讯", "content": "x", "source": "东方财富全球"}]
+    with mock.patch.object(policy, "get_iwencai_client") as gi, \
+         mock.patch.object(policy, "_fetch_macro_policy_akshare", return_value=ak_articles) as ga:
+        gi.return_value.search_news.return_value = []
+        articles, source = policy._fetch_macro_policy_news()
+    assert source == "eastmoney"
+    assert len(articles) == 1
+    ga.assert_called_once()
+
+
+def test_macro_policy_iwencai_limit_truncation():
+    """limit 参数截断 iwencai 返回条数。"""
+    import policy
+    iw_articles = [_iw_article(f"新闻{i}", time="2026-06-29") for i in range(10)]
+    with mock.patch.object(policy, "get_iwencai_client") as gi:
+        gi.return_value.search_news.return_value = iw_articles
+        articles, source = policy._fetch_macro_policy_news(limit=3)
+    assert source == "iwencai"
+    assert len(articles) == 3  # 截断到 limit

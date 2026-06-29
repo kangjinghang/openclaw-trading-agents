@@ -112,6 +112,33 @@ def _fetch_policy_news(code, lookback_days=30):
     return articles, ("eastmoney" if articles else "none")
 
 
+def _fetch_macro_policy_news(limit=20):
+    """宏观政策新闻：问财官方 OpenAPI 主源，空/未配/失败 → akshare 兜底。
+
+    对齐 news.py 宏观新闻已验证模式（行 734）。问财对宏观主题（央行/财政/
+    货币政策）实测返回当日券商晨会/证券时报等权威源，质量优于 EM 快讯。
+    iwencai 返回 {title,content,time,source}，下游 macro_policy_news 期望
+    {date,title,content,source}（date 非 time），故做字段映射 + limit 截断。
+    akshare 兜底失败时抛 RuntimeError（维持原契约，调用方记 macro_policy_error）。
+    返回 (articles, source)，source ∈ {"iwencai","eastmoney"}。
+    """
+    iw = get_iwencai_client()
+    raw = iw.search_news("宏观政策 央行 财政政策 货币政策")
+    if raw:
+        articles = []
+        for a in raw[:limit]:
+            articles.append({
+                "date": (a.get("time") or "")[:10],
+                "title": a.get("title", ""),
+                "content": a.get("content", ""),
+                "source": a.get("source", "问财"),
+            })
+        if articles:
+            return articles, "iwencai"
+    # 兜底：akshare 东方财富全球财经快讯（失败抛 RuntimeError，维持原契约）
+    return _fetch_macro_policy_akshare(limit), "eastmoney"
+
+
 def _fetch_macro_policy_akshare(limit=20):
     """Fetch macro policy telegrams from akshare (东方财富全球财经快讯).
 
@@ -169,10 +196,9 @@ def fetch_policy(ticker, date, lookback_days=30):
     macro_source = "none"
     macro_articles = []
     try:
-        macro_articles = _fetch_macro_policy_akshare()
-        if macro_articles:
-            macro_source = "eastmoney"
-        else:
+        macro_articles, macro_source = _fetch_macro_policy_news()
+        if not macro_articles:
+            macro_source = "none"
             data["macro_policy_error"] = "macro source returned empty"
     except Exception as e:
         data["macro_policy_error"] = str(e)
