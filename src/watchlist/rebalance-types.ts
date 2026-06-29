@@ -201,6 +201,10 @@ export interface RebalancePlanFile {
   /** 全市场宏观视图（一次性抓取，注入组合决策层）。
    *  拉取失败时不写该字段。详见 data-fetcher.ts 的 MacroView。 */
   macro_view?: import("./data-fetcher").MacroView;
+  /** 本次生效的约束配置（写进 planFile 供 plan.md 渲染真实阈值对比，
+   *  而非硬编码 0.15/0.30/0.50/0.10——后者会与真实 single_name=0.22 等配置不符，
+   *  让合规方案在 plan.md 里误报 ✗）。缺失时 formatter 回退到默认配置并标注。 */
+  constraints?: RebalanceConstraints;
 }
 
 // ═══ 配置 ═══

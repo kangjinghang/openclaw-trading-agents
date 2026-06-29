@@ -642,7 +642,7 @@ def compute_technical_indicators(data: list) -> str:
         sma_pos = "在均线上方" if all(last_close > v for v in sma_vals) else "在均线下方" if all(last_close < v for v in sma_vals) else "与均线交织"
         lines.append(f"| SMA 排列 | 价={last_close:.2f} | {sma_pos} |")
 
-    if dif_series and dea_series:
+    if macd_data:
         macd_state = f"DIF {'>' if dif > dea else '<'} DEA" if dif != dea else "DIF = DEA"
         lines.append(f"| MACD | DIF={dif:.3f} | {macd_state}，柱={'+'if macd_hist>0 else ''}{macd_hist:.3f} |")
 

@@ -121,17 +121,38 @@ describe("formatPlanMarkdown", () => {
     expect(md).toContain("跳过股");
   });
 
-  it("渲染约束检查（含 sector_warnings 若有）", () => {
+  it("渲染约束检查（无 constraints → 按默认配置 + 标注回退）", () => {
     const md = formatPlanMarkdown(makePlanFile({ sector_warnings: ["2 只股 industry 拉取失败"] }));
     expect(md).toContain("## 约束检查");
     expect(md).toContain("权重和 = 100%");
-    expect(md).toContain("单仓 ≤15%");
-    expect(md).toContain("单行业 ≤30%");
-    expect(md).toContain("日换手 ≤30%");
-    expect(md).toContain("现金 ≥10%");
+    // 默认配置阈值（rebalance-types.ts DEFAULT_REBALANCE_CONFIG），非旧硬编码 15/30/30/10
+    expect(md).toContain("单仓 ≤22%");
+    expect(md).toContain("单行业 ≤25%");
+    expect(md).toContain("日换手 ≤50%");
+    expect(md).toContain("现金 ≥3%");
+    // 换手率用单向算法 max(买,卖)，与 constraint-validator 规则 4 对齐
+    expect(md).toContain("单向 max(买");
+    // 无 constraints 时应有回退标注
+    expect(md).toContain("按默认配置对比");
     expect(md).toContain("revise 次数: 0");
     expect(md).toContain("行业警告");
     expect(md).toContain("2 只股 industry 拉取失败");
+  });
+
+  it("渲染约束检查（带 constraints → 按真实生效阈值对比）", () => {
+    const md = formatPlanMarkdown(makePlanFile({
+      constraints: {
+        single_name: 0.30, single_sector: 0.40, daily_turnover: 0.60,
+        cash_reserve: 0.05, initial_stop_drawdown: 0.07, initial_stop_days: 3,
+        max_positions: 5, take_profit_threshold: 0.15,
+      },
+    }));
+    expect(md).toContain("单仓 ≤30%");
+    expect(md).toContain("单行业 ≤40%");
+    expect(md).toContain("日换手 ≤60%");
+    expect(md).toContain("现金 ≥5%");
+    // 有 constraints 时不该出现回退标注
+    expect(md).not.toContain("按默认配置对比");
   });
 
   it("渲染执行顺序（含 cash 累计）", () => {

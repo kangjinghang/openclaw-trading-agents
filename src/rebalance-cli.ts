@@ -225,6 +225,7 @@ Options:
     sector_warnings: result.sector_warnings,
     position_traces: result.position_traces,
     data_health: dataHealth,
+    constraints: result.constraints,
     ...(macroView ? { macro_view: macroView } : {}),
   };
   writeAtomicJson(path.join(rebalanceDir, "plan.json"), planFile);

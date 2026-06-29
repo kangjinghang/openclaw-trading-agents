@@ -8,6 +8,7 @@
 //       → 被跳过的候选简表 → 约束检查 → 执行顺序 → LLM 总结
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.formatPlanMarkdown = formatPlanMarkdown;
+const rebalance_types_1 = require("./rebalance-types");
 const ACTION_LABEL = {
     BUY: "买入", SELL: "清仓", ADD: "加仓", REDUCE: "减仓", HOLD: "持有",
 };
@@ -90,22 +91,34 @@ function formatPlanMarkdown(plan) {
         lines.push("");
     }
     // ── 约束检查 ───────────────────────────────────────────────────────
+    // 阈值来自本次生效的约束配置（plan.constraints），而非硬编码常量——后者会与
+    // 真实 single_name=0.22 / daily_turnover=0.50 等配置不符，让合规方案在 plan.md
+    // 里误报 ✗。换手率用单向算法 max(Σ买, Σ卖)，与 constraint-validator 规则 4 对齐
+    // （满仓换仓双向累加数学上必超上限，趋势模式修复时只改了 validator 漏改这里）。
     lines.push("## 约束检查");
     lines.push("");
     const pa = plan.rebalancer_output.portfolio_after;
+    const c = plan.constraints ?? rebalance_types_1.DEFAULT_REBALANCE_CONFIG.constraints;
+    const usingDefault = !plan.constraints;
     const totalWeight = pa.positions.reduce((s, p) => s + p.weight, 0);
     const maxSingle = Math.max(0, ...actions.map(a => a.target_weight));
     const sectorSums = computeSectorSums(actions, plan.reports);
     const maxSector = sectorSums.length > 0 ? sectorSums[0] : null;
-    const turnover = actions.reduce((s, a) => s + Math.abs(a.delta), 0);
+    const buyTotal = actions.reduce((s, a) => s + Math.max(0, a.delta), 0);
+    const sellTotal = actions.reduce((s, a) => s + Math.max(0, -a.delta), 0);
+    const turnover = Math.max(buyTotal, sellTotal);
     lines.push(`- 权重和 = 100%: ${Math.abs(totalWeight + pa.cash_pct - 1) < 0.001 ? "✓" : "✗"} (${(totalWeight * 100).toFixed(1)}% + cash ${(pa.cash_pct * 100).toFixed(1)}%)`);
-    lines.push(`- 单仓 ≤15%: ${maxSingle <= 0.15 + 0.001 ? "✓" : "✗"} (max ${(maxSingle * 100).toFixed(1)}%)`);
+    lines.push(`- 单仓 ≤${(c.single_name * 100).toFixed(0)}%: ${maxSingle <= c.single_name + 0.001 ? "✓" : "✗"} (max ${(maxSingle * 100).toFixed(1)}%)`);
     if (maxSector) {
-        lines.push(`- 单行业 ≤30%: ${maxSector.sum <= 0.30 + 0.001 ? "✓" : "✗"} (${maxSector.sector} ${(maxSector.sum * 100).toFixed(1)}%)`);
+        lines.push(`- 单行业 ≤${(c.single_sector * 100).toFixed(0)}%: ${maxSector.sum <= c.single_sector + 0.001 ? "✓" : "✗"} (${maxSector.sector} ${(maxSector.sum * 100).toFixed(1)}%)`);
     }
-    lines.push(`- 日换手 ≤30%: ${turnover <= 0.30 + 0.001 ? "✓" : "✗"} (${(turnover * 100).toFixed(1)}%)`);
-    lines.push(`- 现金 ≥10%: ${pa.cash_pct >= 0.10 - 0.001 ? "✓" : "✗"} (${(pa.cash_pct * 100).toFixed(1)}%)`);
+    lines.push(`- 日换手 ≤${(c.daily_turnover * 100).toFixed(0)}%: ${turnover <= c.daily_turnover + 0.001 ? "✓" : "✗"} (单向 max(买${(buyTotal * 100).toFixed(1)}%, 卖${(sellTotal * 100).toFixed(1)}%))`);
+    lines.push(`- 现金 ≥${(c.cash_reserve * 100).toFixed(0)}%: ${pa.cash_pct >= c.cash_reserve - 0.001 ? "✓" : "✗"} (${(pa.cash_pct * 100).toFixed(1)}%)`);
     lines.push(`- revise 次数: ${plan.constraint_check.revise_count}`);
+    if (usingDefault) {
+        lines.push("");
+        lines.push(`_注：plan.json 未带 constraints，按默认配置对比（单仓 ${(c.single_name * 100).toFixed(0)}% / 行业 ${(c.single_sector * 100).toFixed(0)}% / 换手 ${(c.daily_turnover * 100).toFixed(0)}% / 现金 ${(c.cash_reserve * 100).toFixed(0)}%）。_`);
+    }
     if (plan.sector_warnings && plan.sector_warnings.length > 0) {
         lines.push("");
         lines.push("**⚠️ 行业警告：**");

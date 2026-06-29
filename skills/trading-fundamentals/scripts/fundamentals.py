@@ -106,6 +106,11 @@ def fetch_fundamentals(ticker, date):
         market = 1 if code.startswith("6") else 0
         client = Quotes.factory(market=market, timeout=10)
         fin = client.finance(symbol=code)
+        # 预置空 dict：mootdx finance() 返回 None/空时下面的 if 分支不进入，
+        # 若不预置则后续 if snapshot / record_call(...len(str(snapshot))) 会触发
+        # UnboundLocalError，被外层 except 吞成 financial_snapshot_error —— 整块
+        # 财务快照（流通股本/净资产/营收/BVPS/ROE）静默丢失而非优雅降级。
+        snapshot = {}
         if fin is not None and not (hasattr(fin, 'empty') and fin.empty):
             row = fin.iloc[0] if hasattr(fin, 'iloc') else fin
             field_map = {
@@ -126,7 +131,6 @@ def fetch_fundamentals(ticker, date):
                 # 等价数据已在其他子源：资产负债率见 financial_health.debt_ratio_pct，
                 # 毛利率见 quarterly_trends.gross_margin（东财 datacenter，真实可用）。
             }
-            snapshot = {}
             for py_name, en_name in field_map.items():
                 if hasattr(row, 'index') and py_name in row.index:
                     val = row[py_name]

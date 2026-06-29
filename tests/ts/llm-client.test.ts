@@ -139,13 +139,17 @@ describe('parseVerdict', () => {
     expect(result!.direction).toBe('Sell');
   });
 
-  // ── Sell wins over Buy on tie (conservative) ───────────────────
+  // ── Ties resolve to Hold (most conservative — no action) ──────
+  // Layer-3 is the last-resort bare keyword scan (first 20 lines, no context).
+  // A tie means "no clear directional signal": in a trading system the safe
+  // default is Hold (no position) rather than Sell (which opens a short and can
+  // trigger stop-loss cascades). A strictly-winning Sell still wins.
 
-  it('should prefer Sell when buy and sell keywords tie', () => {
+  it('should resolve to Hold when buy and sell keywords tie', () => {
     const content = '市场分析报告\n\n做多和做空信号并存';
     const result = parseVerdict(content);
     expect(result).not.toBeNull();
-    expect(result!.direction).toBe('Sell');
+    expect(result!.direction).toBe('Hold');
   });
 });
 

@@ -400,14 +400,19 @@ function classifyDirection(text) {
             idx = upper.indexOf(upperKw, idx + upperKw.length);
         }
     }
-    // Return the highest-scoring category; ties broken by priority: Sell > Buy > Hold
+    // Return the highest-scoring category; ties broken toward Hold (most
+    // conservative — no action). This is the last-resort Layer-3 keyword scan
+    // (bare scan of the first 20 lines, no context), so a tie means "no clear
+    // signal": in a trading system the safe default is Hold (no position) rather
+    // than Sell (which opens a short / can trigger stop-loss cascades). A real
+    // Sell still wins when sellScore strictly exceeds the others.
     const maxScore = Math.max(buyScore, sellScore, holdScore);
     if (maxScore === 0)
         return null;
-    if (sellScore === maxScore)
-        return "Sell";
-    if (buyScore === maxScore)
+    if (buyScore === maxScore && buyScore > sellScore)
         return "Buy";
+    if (sellScore === maxScore && sellScore > buyScore)
+        return "Sell";
     return "Hold";
 }
 //# sourceMappingURL=llm-client.js.map

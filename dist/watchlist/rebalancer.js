@@ -534,6 +534,7 @@ async function rebalancePipeline(input) {
             status: rebalanceResult.status,
             sector_warnings,
             position_traces: Object.fromEntries(rebalanceResult.positionTraces),
+            constraints: config.constraints,
         };
     }
     // 5. execution plan
@@ -550,6 +551,7 @@ async function rebalancePipeline(input) {
         status: rebalanceResult.status,
         sector_warnings,
         position_traces: Object.fromEntries(rebalanceResult.positionTraces),
+        constraints: config.constraints,
     };
 }
 //# sourceMappingURL=rebalancer.js.map

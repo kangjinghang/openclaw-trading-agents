@@ -413,6 +413,9 @@ export interface RebalancePipelineResult {
   sector_warnings: string[];
   /** 仓位计算器溯源（ticker → 可读字符串） */
   position_traces: Record<string, string>;
+  /** 本次生效的约束配置（DEFAULT + CLI overrides 合并后的最终值）。
+   *  写进 planFile.constraints，让 plan.md 的"约束检查"段按真实阈值对比。 */
+  constraints: RebalanceConstraints;
 }
 
 /** 完整 pipeline：候选选择 → shallow-analyzer → rebalancer + revise → execution plan。 */
@@ -578,6 +581,7 @@ export async function rebalancePipeline(input: RebalancePipelineInput): Promise<
       status: rebalanceResult.status,
       sector_warnings,
       position_traces: Object.fromEntries(rebalanceResult.positionTraces),
+      constraints: config.constraints,
     };
   }
 
@@ -596,5 +600,6 @@ export async function rebalancePipeline(input: RebalancePipelineInput): Promise<
     status: rebalanceResult.status,
     sector_warnings,
     position_traces: Object.fromEntries(rebalanceResult.positionTraces),
+    constraints: config.constraints,
   };
 }

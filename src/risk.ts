@@ -299,7 +299,23 @@ export async function runRiskManager(
       severity: "error",
     });
   } else {
-    status = (judge?.verdict || verdict!.direction || "pass").toLowerCase() as RiskAssessment["status"];
+    // RISK_JUDGE 是结构化主路径（已白名单校验）。VERDICT 是降级路径，但 parseVerdict
+    // 返回的是方向词（Buy/Sell/Hold/看多/看空/中性…），**绝非风控状态词**。直接强转
+    // 会让 status 落成 "buy"/"sell"/"hold" 等从未被定义的值——下游 orchestrator 的
+    // revise 循环不触发、crossStageChecks 的 pass 判断不成立、final.risk_assessment
+    // 字段被污染成非法状态。这里对降级值也走白名单，非法一律归 pass + error 级警告。
+    const rawStatus = (judge?.verdict || verdict?.direction || "pass").toLowerCase();
+    if (RISK_VERDICTS.has(rawStatus)) {
+      status = rawStatus as RiskAssessment["status"];
+    } else {
+      status = "pass";
+      traceLogger.recordWarning({
+        phase: "risk",
+        fn: "runRiskManager",
+        detail: `VERDICT 降级值 "${verdict?.direction}" 不是合法风控状态（pass/revise/reject），status 默认 pass`,
+        severity: "error",
+      });
+    }
   }
 
   const max_position_override = extractPositionCap(judge?.hard_constraints);
