@@ -37,7 +37,7 @@ describe('runResearchManager', () => {
     mockClient = {
       chat: { completions: { create: vi.fn() } }
     } as any;
-    mockTraceLogger = { record: vi.fn(), count: 0 };
+    mockTraceLogger = { record: vi.fn(), recordWarning: vi.fn(), count: 0 };
   });
 
   afterEach(() => {
@@ -202,5 +202,82 @@ describe('runResearchManager', () => {
 
     const callArgs = mockCreate.mock.calls[0][0] as any;
     expect(callArgs.model).toBe('gpt-4o'); // mockConfig.models.decision
+  });
+
+  it('prefers structured bull_score/bear_score/confidence from VERDICT block', async () => {
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+    mockCreate.mockResolvedValueOnce({
+      choices: [{
+        message: {
+          // 正则路径会抽到 75/45/0.72，但 VERDICT 块的结构化值 80/30/0.9 应当胜出
+          content: `### 评分
+- **多头得分**：75
+- **空头得分**：45
+
+### 最终决策
+- **信心水平**：0.72
+
+<!-- VERDICT: {"direction": "Buy", "reason": "x", "bull_score": 80, "bear_score": 30, "confidence": 0.9} -->`
+        }
+      }],
+      usage: { prompt_tokens: 1000, completion_tokens: 400, total_tokens: 1400 }
+    } as any);
+
+    const result = await runResearchManager([], mockDebateResult(), '', mockConfig, mockClient, mockTraceLogger);
+
+    expect(result.bull_score).toBe(80);   // 结构化值，非正则的 75
+    expect(result.bear_score).toBe(30);   // 结构化值，非正则的 45
+    expect(result.confidence).toBe(0.9);  // 结构化值，非正则的 0.72
+    // 全部走结构化路径，不应有 fallback warning
+    const warnings = mockTraceLogger.recordWarning.mock.calls;
+    expect(warnings.length).toBe(0);
+  });
+
+  it('records a warning when structured score fields are missing (fallback no longer silent)', async () => {
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+    mockCreate.mockResolvedValueOnce({
+      choices: [{
+        message: {
+          content: `### 评分
+- **多头得分**：60
+- **空头得分**：55
+
+<!-- VERDICT: {"direction": "Buy", "reason": "x"} -->`
+        }
+      }],
+      usage: { prompt_tokens: 500, completion_tokens: 100, total_tokens: 600 }
+    } as any);
+
+    await runResearchManager([], mockDebateResult(), '', mockConfig, mockClient, mockTraceLogger);
+
+    const warnings = mockTraceLogger.recordWarning.mock.calls.map((c: any[]) => c[0].fn);
+    // VERDICT 块缺 bull_score/bear_score → 走正则 fallback 但记录 warning
+    expect(warnings).toContain('parseScores');
+    // confidence 缺失 → 同样记录 warning
+    expect(warnings).toContain('parseConfidence');
+  });
+
+  it('clamps fallback confidence into [0,1]', async () => {
+    const mockCreate = vi.mocked(mockClient.chat.completions.create);
+    mockCreate.mockResolvedValueOnce({
+      choices: [{
+        message: {
+          // 信心水平写成 1.4（0-100 误用），正则会抽到 1.4，必须 clamp 到 1
+          content: `### 评分
+- **多头得分**：60
+- **空头得分**：55
+
+### 最终决策
+- **信心水平**：1.4
+
+<!-- VERDICT: {"direction": "Buy", "reason": "x"} -->`
+        }
+      }],
+      usage: { prompt_tokens: 500, completion_tokens: 100, total_tokens: 600 }
+    } as any);
+
+    const result = await runResearchManager([], mockDebateResult(), '', mockConfig, mockClient, mockTraceLogger);
+
+    expect(result.confidence).toBe(1);
   });
 });

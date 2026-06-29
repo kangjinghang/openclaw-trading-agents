@@ -134,4 +134,38 @@ describe("crossStageChecks", () => {
     const issues = crossStageChecks(r);
     expect(issues.some((i) => i.check === "reject_has_plan")).toBe(false);
   });
+
+  it("flags Buy direction when bear_score exceeds bull_score (self-contradiction)", () => {
+    const r = baseResult({
+      research_decision: { ...baseResult().research_decision, direction: "Buy", bull_score: 40, bear_score: 70 },
+    });
+    const issues = crossStageChecks(r, 100);
+    const hit = issues.find((i) => i.check === "direction_score_conflict");
+    expect(hit).toBeTruthy();
+    expect(hit!.message).toContain("空头分");
+  });
+
+  it("flags Sell direction when bull_score exceeds bear_score", () => {
+    const r = baseResult({
+      research_decision: { ...baseResult().research_decision, direction: "Sell", bull_score: 70, bear_score: 40 },
+    });
+    const issues = crossStageChecks(r, 100);
+    const hit = issues.find((i) => i.check === "direction_score_conflict");
+    expect(hit).toBeTruthy();
+    expect(hit!.message).toContain("多头分");
+  });
+
+  it("flags Buy direction when scores are basically tied (direction lacks support)", () => {
+    const r = baseResult({
+      research_decision: { ...baseResult().research_decision, direction: "Buy", bull_score: 50, bear_score: 50 },
+    });
+    const issues = crossStageChecks(r, 100);
+    expect(issues.some((i) => i.check === "direction_score_conflict")).toBe(true);
+  });
+
+  it("does NOT flag direction_score_conflict when direction matches its score side", () => {
+    // bull 70 vs bear 40, direction Buy → consistent, no flag
+    const issues = crossStageChecks(baseResult(), 100);
+    expect(issues.some((i) => i.check === "direction_score_conflict")).toBe(false);
+  });
 });

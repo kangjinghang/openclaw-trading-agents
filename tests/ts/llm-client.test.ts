@@ -1,7 +1,7 @@
 // tests/ts/llm-client.test.ts
 
 import { describe, it, expect } from 'vitest';
-import { parseVerdict, is429, getRetryAfterMs, retryDelayMs, RateLimitCoordinator } from '../../src/llm-client';
+import { parseVerdict, parseResearchVerdict, is429, getRetryAfterMs, retryDelayMs, RateLimitCoordinator } from '../../src/llm-client';
 import { RateLimitError, APIError } from 'openai';
 
 describe('parseVerdict', () => {
@@ -150,6 +150,45 @@ describe('parseVerdict', () => {
     const result = parseVerdict(content);
     expect(result).not.toBeNull();
     expect(result!.direction).toBe('Hold');
+  });
+});
+
+describe('parseResearchVerdict', () => {
+  it('reads bull_score/bear_score/confidence extensions from VERDICT block', () => {
+    const content = '## 评分\n多头得分：72\n\n<!-- VERDICT: {"direction": "Buy", "reason": "多", "bull_score": 72, "bear_score": 48, "confidence": 0.7} -->';
+    const r = parseResearchVerdict(content)!;
+    expect(r.direction).toBe('Buy');
+    expect(r.bull_score).toBe(72);
+    expect(r.bear_score).toBe(48);
+    expect(r.confidence).toBe(0.7);
+  });
+
+  it('clamps scores to [0,100] and confidence to [0,1]', () => {
+    const content = '<!-- VERDICT: {"direction": "Buy", "reason": "x", "bull_score": 150, "bear_score": -5, "confidence": 1.5} -->';
+    const r = parseResearchVerdict(content)!;
+    expect(r.bull_score).toBe(100);
+    expect(r.bear_score).toBe(0);
+    expect(r.confidence).toBe(1);
+  });
+
+  it('omits numeric fields when absent (caller falls back to regex)', () => {
+    const content = '<!-- VERDICT: {"direction": "Hold", "reason": "均衡"} -->';
+    const r = parseResearchVerdict(content)!;
+    expect(r.direction).toBe('Hold');
+    expect(r.bull_score).toBeUndefined();
+    expect(r.bear_score).toBeUndefined();
+    expect(r.confidence).toBeUndefined();
+  });
+
+  it('ignores non-numeric extension values', () => {
+    const content = '<!-- VERDICT: {"direction": "Buy", "reason": "x", "bull_score": "high", "confidence": true} -->';
+    const r = parseResearchVerdict(content)!;
+    expect(r.bull_score).toBeUndefined();
+    expect(r.confidence).toBeUndefined();
+  });
+
+  it('returns null when no VERDICT block and no fallback signal', () => {
+    expect(parseResearchVerdict('完全没有方向信号的文本')).toBeNull();
   });
 });
 

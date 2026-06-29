@@ -86,4 +86,24 @@ export declare function parseVerdict(content: string): {
     direction: string;
     reason: string;
 } | null;
+/**
+ * Parse the research manager's VERDICT block, extended with the three numeric
+ * fields (bull_score / bear_score / confidence). Unlike parseVerdict (shared by
+ * analysts/PM/risk and kept narrow on purpose), this reads the optional numeric
+ * extensions the research prompt asks the LLM to embed in its VERDICT block —
+ * making the scores structured (authoritative) instead of regex-scraped from
+ * free text. Fields absent from the block are returned as undefined so the
+ * caller can fall back to the regex path and record a warning.
+ *
+ * clamp: scores to [0,100], confidence to [0,1] (defends against LLM confusing
+ * the 0-1 / 0-100 ranges). direction/reason reuse parseVerdict's three-layer
+ * extraction so VERDICT-tag parsing stays single-sourced.
+ */
+export declare function parseResearchVerdict(content: string): {
+    direction: string;
+    reason: string;
+    bull_score?: number;
+    bear_score?: number;
+    confidence?: number;
+} | null;
 //# sourceMappingURL=llm-client.d.ts.map

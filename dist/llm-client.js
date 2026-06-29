@@ -9,6 +9,7 @@ exports.retryDelayMs = retryDelayMs;
 exports.callLLM = callLLM;
 exports.extractTaggedJson = extractTaggedJson;
 exports.parseVerdict = parseVerdict;
+exports.parseResearchVerdict = parseResearchVerdict;
 const openai_1 = require("openai");
 const errors_1 = require("./errors");
 const constants_1 = require("./constants");
@@ -348,6 +349,51 @@ function parseVerdict(content) {
         return { direction: keywordResult, reason: "fallback(keyword)" };
     }
     return null;
+}
+/**
+ * Parse the research manager's VERDICT block, extended with the three numeric
+ * fields (bull_score / bear_score / confidence). Unlike parseVerdict (shared by
+ * analysts/PM/risk and kept narrow on purpose), this reads the optional numeric
+ * extensions the research prompt asks the LLM to embed in its VERDICT block —
+ * making the scores structured (authoritative) instead of regex-scraped from
+ * free text. Fields absent from the block are returned as undefined so the
+ * caller can fall back to the regex path and record a warning.
+ *
+ * clamp: scores to [0,100], confidence to [0,1] (defends against LLM confusing
+ * the 0-1 / 0-100 ranges). direction/reason reuse parseVerdict's three-layer
+ * extraction so VERDICT-tag parsing stays single-sourced.
+ */
+function parseResearchVerdict(content) {
+    const base = parseVerdict(content);
+    if (!base)
+        return null;
+    // Pull the raw VERDICT JSON object once to read numeric extensions. Re-using
+    // extractTaggedJson keeps the brace-depth scan logic in one place.
+    const jsonStr = extractTaggedJson(content, "VERDICT");
+    if (!jsonStr)
+        return base; // parsed via label/keyword fallback → no numeric block
+    let parsed;
+    try {
+        parsed = JSON.parse(jsonStr);
+    }
+    catch {
+        return base;
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+        return base;
+    const obj = parsed;
+    const clampNum = (v, lo, hi) => {
+        const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+        if (!Number.isFinite(n))
+            return undefined;
+        return Math.max(lo, Math.min(hi, n));
+    };
+    return {
+        ...base,
+        ...(clampNum(obj.bull_score, 0, 100) !== undefined ? { bull_score: clampNum(obj.bull_score, 0, 100) } : {}),
+        ...(clampNum(obj.bear_score, 0, 100) !== undefined ? { bear_score: clampNum(obj.bear_score, 0, 100) } : {}),
+        ...(clampNum(obj.confidence, 0, 1) !== undefined ? { confidence: clampNum(obj.confidence, 0, 1) } : {}),
+    };
 }
 /**
  * Classify a text snippet into a canonical direction via keyword matching.

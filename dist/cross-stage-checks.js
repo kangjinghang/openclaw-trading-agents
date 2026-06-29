@@ -11,6 +11,10 @@ const WRONG_SIDE_BUFFER = 0.95;
 // A bearish majority this strong conflicting with a Buy research call is a
 // real disagreement, not noise: bears >= bulls + CONFLICT_MARGIN.
 const CONFLICT_MARGIN = 2;
+// Score gap (on the 0-100 bull/bear scale) below which direction lacks support
+// or is actively contradicted. 5 mirrors checkResearchManagerConsistency's
+// "基本均衡（差≤5）" tier — within that band a directional call is thinly supported.
+const SCORE_CONFLICT_MARGIN = 5;
 function isBullish(d) {
     return d === "看多" || d === "Buy" || d === "Overweight";
 }
@@ -101,6 +105,34 @@ function crossStageChecks(result, latestClose) {
             severity: "warn",
             check: "consensus_conflict",
             message: `分析师明显看多（${bulls} 多 vs ${bears} 空），但研究方向为 Sell`,
+        });
+    }
+    // ── research direction vs its own bull/bear score ──
+    // Catches a structural contradiction parsePath split can cause: direction
+    // comes from the VERDICT block while scores were regex-scraped (now both can
+    // be structured, but the LLM can still emit inconsistent values). A buy-side
+    // direction with bear_score > bull_score (or the mirror) is self-defeating.
+    const rd = result.research_decision;
+    const scoreGap = Math.abs(rd.bull_score - rd.bear_score);
+    if (researchBuy && rd.bear_score > rd.bull_score + SCORE_CONFLICT_MARGIN) {
+        issues.push({
+            severity: "warn",
+            check: "direction_score_conflict",
+            message: `研究方向 Buy/Overweight 但空头分(${rd.bear_score}) > 多头分(${rd.bull_score})，方向与评分矛盾`,
+        });
+    }
+    else if (researchSell && rd.bull_score > rd.bear_score + SCORE_CONFLICT_MARGIN) {
+        issues.push({
+            severity: "warn",
+            check: "direction_score_conflict",
+            message: `研究方向 Sell/Underweight 但多头分(${rd.bull_score}) > 空头分(${rd.bear_score})，方向与评分矛盾`,
+        });
+    }
+    else if (researchBuy && scoreGap <= SCORE_CONFLICT_MARGIN) {
+        issues.push({
+            severity: "warn",
+            check: "direction_score_conflict",
+            message: `研究方向 Buy/Overweight 但多空评分基本持平（bull ${rd.bull_score} vs bear ${rd.bear_score}），方向缺乏评分支撑`,
         });
     }
     // ── retries exhausted (gave up revising) ──
