@@ -12,7 +12,9 @@
   3. 不复刻官方硬编码默认 key。
 """
 
+import json
 import os
+import secrets
 import time
 
 import requests
@@ -67,7 +69,6 @@ class EastmoneyClient:
         self.available = bool(self.api_key)
 
     def _trace_id(self):
-        import secrets
         return secrets.token_hex(32)
 
     def _headers(self, base_info=False):
@@ -78,11 +79,10 @@ class EastmoneyClient:
             "X-Claw-Trace-Id": self._trace_id(),
         }
         if base_info:
-            import json as _json
-            h["em_base_info"] = _json.dumps({"productType": "mx"}, ensure_ascii=False, separators=(",", ":"))
+            h["em_base_info"] = json.dumps({"productType": "mx"}, ensure_ascii=False, separators=(",", ":"))
         return h
 
-    def _request(self, body, path, stage, timeout=None, base_info=False, method="POST"):
+    def _request(self, body, path, stage, timeout=None, base_info=False):
         """统一 HTTP 请求内核：认证 + 重试 + 401 短路 + record_call。
 
         返回原始 payload dict（失败/未配 key 返回 {}）。
@@ -147,8 +147,8 @@ class EastmoneyClient:
     # ── 族 C：报告生成 API ──────────────────────────────────────────────
     def _post_report(self, body, endpoint, stage, timeout=_DEFAULT_REPORT_TIMEOUT,
                      base_info=False):
-        """族 C：/proxy/app-robo-advisor-api/assistant/write/<endpoint>，1200s + 附件。"""
-        return self._request(body, f"/proxy/app-robo-advisor-api/assistant/write/{endpoint}",
+        """族 C：报告生成。endpoint 是 assistant/ 下的完整子路径（含 write/）。"""
+        return self._request(body, f"/proxy/app-robo-advisor-api/assistant/{endpoint}",
                              stage, timeout=timeout, base_info=base_info)
 
 

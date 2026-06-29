@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+import requests
 
 shared_dir = Path(__file__).parent.parent.parent / "skills" / "_shared"
 sys.path.insert(0, str(shared_dir))
@@ -89,3 +90,45 @@ def test_post_mcp_5xx_retried_once(with_key):
          mock.patch("eastmoney_client.time.sleep"):
         assert c._post_mcp({"query": "x"}, "searchData", "em/test") == {}
     assert mp.call_count == 2  # 重试 1 次
+
+
+def test_post_mcp_timeout_retried_then_empty(with_key):
+    """ConnectionError/Timeout 重试一次后返回空。"""
+    from eastmoney_client import get_client
+    c = get_client()
+    err = requests.exceptions.Timeout("simulated timeout")
+    with mock.patch("eastmoney_client.requests.post", side_effect=err) as mp, \
+         mock.patch("eastmoney_client.time.sleep"):
+        assert c._post_mcp({"query": "x"}, "searchData", "em/test") == {}
+    assert mp.call_count == 2  # 重试 1 次
+
+
+def test_post_mcp_json_parse_error_returns_empty(with_key):
+    """resp.json() 抛异常时走 except Exception 兜底，返回空。"""
+    from eastmoney_client import get_client
+    c = get_client()
+    r = mock.Mock()
+    r.status_code = 200
+    r.content = b"not json"
+    r.json.side_effect = ValueError("invalid json")
+    with mock.patch("eastmoney_client.requests.post", return_value=r):
+        assert c._post_mcp({"query": "x"}, "searchData", "em/test") == {}
+
+
+def test_record_call_emitted_on_success_and_failure(with_key, monkeypatch):
+    """成功和失败两条路径都调 record_call。"""
+    import eastmoney_client
+    calls = []
+    monkeypatch.setattr(eastmoney_client, "record_call",
+                        lambda stage, success, **kw: calls.append((stage, success)))
+    c = eastmoney_client.get_client()
+    # success path
+    with mock.patch("eastmoney_client.requests.post", return_value=_ok_payload({"code": 0})):
+        c._post_mcp({"query": "x"}, "searchData", "em/ok")
+    # failure path (401)
+    with mock.patch("eastmoney_client.requests.post", return_value=_status_payload(401)):
+        c._post_mcp({"query": "x"}, "searchData", "em/fail")
+    success_calls = [x for x in calls if x[1] is True]
+    failure_calls = [x for x in calls if x[1] is False]
+    assert len(success_calls) == 1 and success_calls[0][0] == "em/ok"
+    assert len(failure_calls) == 1 and failure_calls[0][0] == "em/fail"
