@@ -1,26 +1,14 @@
-"""问财官方 OpenAPI 客户端（同花顺 SkillHub 官方 API 扒取封装）。
+"""问财官方 OpenAPI 客户端 — 25 个官方 Skill 统一封装。
 
-不同于 http_helpers.py 里的 pywencai_query（逆向 www.iwencai.com 网页接口的第三方库，
-还得 monkey-patch 修 403），这里封装的是官方正式 OpenAPI（openapi.iwencai.com），
-走 API key 认证，可靠性是另一个量级。
-
-调用契约（实测验证 + 扒取自官方 news-search skill 的 news_search.py）：
-    POST https://openapi.iwencai.com/v1/comprehensive/search
-    Headers:
-        Authorization: Bearer $IWENCAI_API_KEY
-        X-Claw-Trace-Id: <64位hex>      # 网关要求，每次随机
-        X-Claw-Skill-Id / Version / Call-Type / Plugin-*（固定值）
-    Body: {"channels": ["news"], "app_id": "AIME_SKILL", "query": "关键词"}
-    Response: data[] 每篇含 title/summary/source_original(全文)/publish_date/
-              publish_source(真实来源)/score(相关度)/site_authority(权威度)
+两种 API 网关：
+  Pattern A: /v1/comprehensive/search  — news / report / announcement（channels 区分）
+  Pattern B: /v1/query2data            — 所有 hithink-* 选股/查询类 skill
 
 设计原则：
-1. **可选增强**——IWENCAI_API_KEY 未配置时 available=False，所有方法返回空，
-   调用方（news.py）优雅降级到现有东财源，零行为变化。
-2. **可观测性**——每个请求走 http_helpers.record_call，进 _source-health.json 的
-   per-source 成功率/耗时统计，和 em_get/pywencai 同一套体系。
-3. **可扩展**——类结构，以后扒别的官方 skill（选股/研报/资金流）直接加方法。
-   不塞进已臃肿的 http_helpers.py（那是个平铺函数集合，且有全局 monkey-patch 问题）。
+  1. 可选增强——IWENCAI_API_KEY 未配置时 available=False，所有方法返回空/None，
+     调用方优雅降级，零行为变化。
+  2. 可观测性——每个请求走 http_helpers.record_call，进 _source-health.json。
+  3. 一致性——所有 hithink-* skill 共享同一个 _query2data() 内核，方法名对齐 skill slug。
 """
 
 import os
@@ -29,29 +17,60 @@ import time
 
 import requests
 
-# 复用 http_helpers 的 record_call 保持可观测性统一。延迟 import 避免循环依赖，
-# 但实际上 http_helpers 无反向依赖本模块。
 try:
     from http_helpers import record_call
-except Exception:  # pragma: no cover - 防御：单文件被移到别处时不崩
+except Exception:
     def record_call(stage, success, error=None, duration_ms=None,
                     url=None, status_code=None, response_size=None,
                     response_snippet=None):
         pass
 
 
-# ── 常量（扒取自官方 skill 的 news_search.py）─────────────────────────
+# ── 常量 ───────────────────────────────────────────────────────────────────
 _DEFAULT_BASE_URL = "https://openapi.iwencai.com"
 _SEARCH_PATH = "/v1/comprehensive/search"
-_APP_ID = "AIME_SKILL"  # 官方 skill 固定用这个 app_id
+_QUERY2DATA_PATH = "/v1/query2data"
+_APP_ID = "AIME_SKILL"
 _DEFAULT_TIMEOUT = 15
-# 官方 skill 固定的 X-Claw-* 网关 headers
 _CLAW_HEADERS = {
     "X-Claw-Call-Type": "normal",
-    "X-Claw-Skill-Id": "news-search",
+    "X-Claw-Skill-Id": "iwencai-client",
     "X-Claw-Skill-Version": "1.0.0",
     "X-Claw-Plugin-Id": "none",
     "X-Claw-Plugin-Version": "none",
+}
+
+# Pattern A: channels 映射
+_CHANNELS_MAP = {
+    "search_news": "news",
+    "search_report": "report",
+    "search_announcement": "announcement",
+}
+
+# Pattern B: 所有 hithink-* skill 的 slug → 中文名
+_HITHINK_SKILLS = {
+    "hithink-zhishu-query": "指数数据查询",
+    "hithink-sector-selector": "问财选板块",
+    "hithink-management-query": "公司股东股本查询",
+    "hithink-macro-query": "宏观数据查询",
+    "hithink-usstock-selector": "问财选美股",
+    "hithink-market-query": "行情数据查询",
+    "hithink-insresearch-query": "机构研究与评级查询",
+    "hithink-industry-query": "行业数据查询",
+    "hithink-hkstock-selector": "问财选港股",
+    "hithink-futures-selector": "问财选期货期权",
+    "hithink-futures-query": "期货期权数据查询",
+    "hithink-fund-selector": "问财选基金",
+    "hithink-fundmanager-selector": "问财选基金经理",
+    "hithink-fundcompany-selector": "问财选基金公司",
+    "hithink-fund-query": "基金理财查询",
+    "hithink-finance-query": "财务数据查询",
+    "hithink-event-query": "事件数据查询",
+    "hithink-business-query": "公司经营数据查询",
+    "hithink-etf-selector": "问财选ETF",
+    "hithink-cb-selector": "问财选可转债",
+    "hithink-astock-selector": "问财选A股",
+    "hithink-basicinfo-query": "基本资料查询",
 }
 
 
@@ -59,12 +78,8 @@ class IwencaiClient:
     """问财官方 OpenAPI 客户端。
 
     构造时从环境变量读取配置：
-        IWENCAI_API_KEY  — 必填，未设置则 available=False（整个客户端降级为 no-op）
-        IWENCAI_BASE_URL — 可选，默认 https://openapi.iwencai.com（私有部署/代理用）
-
-    所有查询方法（search_news 及未来的 search_stock 等）在 available=False 时
-    返回空列表，调用方据以 fallback 到免费源。这遵循 pywencai_query 的同款
-    "可选依赖、优雅降级"设计。
+        IWENCAI_API_KEY  — 必填，未设置则 available=False
+        IWENCAI_BASE_URL — 可选，默认 https://openapi.iwencai.com
     """
 
     def __init__(self, api_key=None, base_url=None, timeout=_DEFAULT_TIMEOUT):
@@ -72,74 +87,57 @@ class IwencaiClient:
         self.base_url = (base_url or os.environ.get("IWENCAI_BASE_URL")
                          or _DEFAULT_BASE_URL).rstrip("/")
         self.timeout = timeout
-        # available=False 时所有查询短路返回 []，调用方据以 fallback。
-        # 不抛异常——让 news.py 等调用方的 try/except 保持"未配置=免费源"语义。
         self.available = bool(self.api_key)
 
     def _trace_id(self):
-        """生成网关要求的 X-Claw-Trace-Id（64 位 hex）。每次请求唯一，便于服务端追踪。"""
         return secrets.token_hex(32)
 
-    def _post(self, body, path=_SEARCH_PATH, stage="iwencai/news"):
-        """统一 POST 封装：认证 headers + trace-id + 重试 + record_call 可观测。
-
-        返回解析后的 data 列表；失败（网络/状态码/解析）返回空列表并 record_call
-        记录失败原因。调用方据空列表 fallback——不抛异常，降级路径干净。
-        """
-        if not self.available:
-            return []
-
-        url = self.base_url + path
-        headers = {
+    def _headers(self, skill_id="iwencai-client"):
+        return {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
             "X-Claw-Trace-Id": self._trace_id(),
             **_CLAW_HEADERS,
+            "X-Claw-Skill-Id": skill_id,
         }
+
+    def _post(self, body, path=_SEARCH_PATH, stage="iwencai", skill_id="iwencai-client"):
+        """统一 POST：认证 + 重试 + record_call。返回原始 payload dict。"""
+        if not self.available:
+            return {}
+
+        url = self.base_url + path
+        headers = self._headers(skill_id)
         start = time.monotonic()
-        last_error = None
-        last_status = None
-        last_size = None
-        # 重试一次（连接/超时瞬时错误），与 http_helpers._with_retry 同思路但更简单：
-        # 问财是付费 API，两次够了，且 401/403 等认证错误不重试（重试无意义）。
+        last_error = last_status = last_size = None
+
         for attempt in range(2):
             try:
                 resp = requests.post(url, json=body, headers=headers, timeout=self.timeout)
                 last_status = resp.status_code
                 last_size = len(resp.content)
-                if resp.status_code == 401 or resp.status_code == 403:
-                    # 认证错误：key 失效/过期，不重试。标记 available=False 让后续
-                    # 查询短路，避免无效请求刷爆配额。
+                if resp.status_code in (401, 403):
                     last_error = f"auth failed: HTTP {resp.status_code}"
                     self.available = False
                     break
                 if resp.status_code != 200:
-                    # 其他非 200（限流 429 / 5xx）→ 重试一次
                     last_error = f"http {resp.status_code}"
                     if attempt == 0:
                         time.sleep(0.5)
                         continue
                     break
                 payload = resp.json()
-                data = payload.get("data") if isinstance(payload, dict) else None
-                items = data if isinstance(data, list) else []
                 record_call(stage, success=True,
                             duration_ms=(time.monotonic() - start) * 1000,
                             url=url, status_code=resp.status_code,
                             response_size=len(resp.content))
-                return items
-            except (requests.exceptions.ConnectionError,
-                    requests.exceptions.Timeout) as e:
-                # 瞬时网络错误：重试一次
+                return payload if isinstance(payload, dict) else {}
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
                 last_error = f"{type(e).__name__}: {e}"
                 last_status = None
                 if attempt == 0:
                     time.sleep(0.5)
                     continue
-                break
-            except (ValueError, KeyError) as e:
-                # JSON 解析失败 / 结构异常：不重试，记录后返回空
-                last_error = f"parse error: {type(e).__name__}: {e}"
                 break
             except Exception as e:
                 last_error = f"{type(e).__name__}: {e}"
@@ -148,39 +146,33 @@ class IwencaiClient:
         record_call(stage, success=False, error=last_error,
                     duration_ms=(time.monotonic() - start) * 1000,
                     url=url, status_code=last_status, response_size=last_size)
-        return []
+        return {}
 
-    def search_news(self, query):
-        """综合搜索财经资讯（官方 news-search skill 同款能力）。
+    # ═══════════════════════════════════════════════════════════════════════
+    # Pattern A: /v1/comprehensive/search — news / report / announcement
+    # ═══════════════════════════════════════════════════════════════════════
 
-        Args:
-            query: 搜索关键词。个股用公司名（如 "贵州茅台"），宏观用主题
-                   （如 "央行降准 货币政策"、"A股 大盘 走势"）。
+    def _comprehensive_search(self, query, channels, size=10, stage="iwencai"):
+        body = {"query": query, "channels": channels, "app_id": _APP_ID, "size": size}
+        payload = self._post(body, path=_SEARCH_PATH, stage=stage)
+        data = payload.get("data") if isinstance(payload, dict) else None
+        return data if isinstance(data, list) else []
 
-        Returns:
-            list[dict]，每篇归一化为 {title, content, time, source}，与 news.py
-            的东财新闻同结构（source-agnostic，下游 prompt 注入无需区分源）。
-            失败/未配 key/空结果 → []，调用方据以 fallback 到东财/akshare。
+    def search_news(self, query, size=10):
+        """搜索财经资讯。返回 list[dict]，每篇 {title, content, time, source}。"""
+        items = self._comprehensive_search(query, ["news"], size, stage="iwencai/news")
+        return [r for r in (self._normalize_article(it) for it in items) if r]
 
-        返回结构对齐 news.py 东财新闻的 4 字段（title/content/time/source），
-        以便 news.py 无缝替换/合并。content 取 summary（比 source_original 全文短，
-        避免单篇过长挤占 prompt token），按 publish_date 降序。
-        """
-        if not self.available:
-            return []
+    def search_report(self, query, size=10):
+        """搜索研报。返回原始 data 列表。"""
+        return self._comprehensive_search(query, ["report"], size, stage="iwencai/report")
 
-        body = {"channels": ["news"], "app_id": _APP_ID, "query": query}
-        items = self._post(body, stage="iwencai/news")
-        return [self._normalize_article(it) for it in items if self._normalize_article(it)]
+    def search_announcement(self, query, size=10):
+        """搜索公告。返回原始 data 列表。"""
+        return self._comprehensive_search(query, ["announcement"], size, stage="iwencai/announcement")
 
     @staticmethod
     def _normalize_article(raw):
-        """把官方 API 的原始字段映射成 news.py 东财新闻的同款 4 字段结构。
-
-        - content 用 summary（精炼摘要），不用 source_original（全文太长挤 token）
-        - source 优先 real_publish_source（真实来源如"新京报"），降级 publish_source
-        - time 用 publish_date（已是 "YYYY-MM-DD HH:MM:SS" 格式，与东财 date 同款）
-        """
         if not isinstance(raw, dict):
             return None
         title = (raw.get("title") or "").strip()
@@ -195,16 +187,170 @@ class IwencaiClient:
                        or extra.get("publish_source") or "问财").strip(),
         }
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # Pattern B: /v1/query2data — 所有 hithink-* skill
+    # ═══════════════════════════════════════════════════════════════════════
 
-# ── 进程级单例 ────────────────────────────────────────────────────────
-# news.py 等脚本一次运行内多次查询复用同一个 client（key 探测只做一次、
-# available 标记在 401 后短路生效）。脚本是短生命周期进程，无需显式回收。
+    def _query2data(self, query, skill_slug, page="1", limit="10", timeout=None):
+        """通用 query2data 调用。返回原始 payload dict（含 datas/code_count 等）。"""
+        body = {
+            "query": query,
+            "page": str(page),
+            "limit": str(limit),
+            "is_cache": "1",
+            "expand_index": "true",
+        }
+        old_timeout = self.timeout
+        if timeout is not None:
+            self.timeout = timeout
+        try:
+            return self._post(body, path=_QUERY2DATA_PATH,
+                              stage=f"iwencai/{skill_slug}", skill_id=skill_slug)
+        finally:
+            self.timeout = old_timeout
+
+    def _query2data_list(self, query, skill_slug, page="1", limit="10"):
+        """query2data 的便捷包装：返回 (datas_list, code_count, has_more)。"""
+        payload = self._query2data(query, skill_slug, page, limit)
+        if not payload:
+            return [], 0, False
+        datas = payload.get("datas", [])
+        code_count = int(payload.get("code_count", 0))
+        has_more = int(page) * int(limit) < code_count
+        return datas, code_count, has_more
+
+    # ── 指数/行情/财务/事件等查询类（返回数据列表）──────────────────────
+
+    def query_index(self, query, page="1", limit="10"):
+        """指数数据查询（hithink-zhishu-query）。"""
+        return self._query2data_list(query, "hithink-zhishu-query", page, limit)
+
+    def query_market(self, query, page="1", limit="10"):
+        """行情数据查询（hithink-market-query）。"""
+        return self._query2data_list(query, "hithink-market-query", page, limit)
+
+    def query_finance(self, query, page="1", limit="10"):
+        """财务数据查询（hithink-finance-query）。"""
+        return self._query2data_list(query, "hithink-finance-query", page, limit)
+
+    def query_event(self, query, page="1", limit="10"):
+        """事件数据查询（hithink-event-query）。"""
+        return self._query2data_list(query, "hithink-event-query", page, limit)
+
+    def query_macro(self, query, page="1", limit="10"):
+        """宏观数据查询（hithink-macro-query）。"""
+        return self._query2data_list(query, "hithink-macro-query", page, limit)
+
+    def query_industry(self, query, page="1", limit="10"):
+        """行业数据查询（hithink-industry-query）。"""
+        return self._query2data_list(query, "hithink-industry-query", page, limit)
+
+    def query_management(self, query, page="1", limit="10"):
+        """公司股东股本查询（hithink-management-query）。"""
+        return self._query2data_list(query, "hithink-management-query", page, limit)
+
+    def query_business(self, query, page="1", limit="10"):
+        """公司经营数据查询（hithink-business-query）。"""
+        return self._query2data_list(query, "hithink-business-query", page, limit)
+
+    def query_basicinfo(self, query, page="1", limit="10"):
+        """基本资料查询（hithink-basicinfo-query）。"""
+        return self._query2data_list(query, "hithink-basicinfo-query", page, limit)
+
+    def query_insresearch(self, query, page="1", limit="10"):
+        """机构研究与评级查询（hithink-insresearch-query）。"""
+        return self._query2data_list(query, "hithink-insresearch-query", page, limit)
+
+    def query_fund(self, query, page="1", limit="10"):
+        """基金理财查询（hithink-fund-query）。"""
+        return self._query2data_list(query, "hithink-fund-query", page, limit)
+
+    def query_futures(self, query, page="1", limit="10"):
+        """期货期权数据查询（hithink-futures-query）。"""
+        return self._query2data_list(query, "hithink-futures-query", page, limit)
+
+    # ── 选股类（返回筛选结果列表）──────────────────────────────────────
+
+    def select_astock(self, query, page="1", limit="10"):
+        """问财选A股（hithink-astock-selector）。"""
+        return self._query2data_list(query, "hithink-astock-selector", page, limit)
+
+    def select_usstock(self, query, page="1", limit="10"):
+        """问财选美股（hithink-usstock-selector）。"""
+        return self._query2data_list(query, "hithink-usstock-selector", page, limit)
+
+    def select_hkstock(self, query, page="1", limit="10"):
+        """问财选港股（hithink-hkstock-selector）。"""
+        return self._query2data_list(query, "hithink-hkstock-selector", page, limit)
+
+    def select_sector(self, query, page="1", limit="10"):
+        """问财选板块（hithink-sector-selector）。"""
+        return self._query2data_list(query, "hithink-sector-selector", page, limit)
+
+    def select_etf(self, query, page="1", limit="10"):
+        """问财选ETF（hithink-etf-selector）。"""
+        return self._query2data_list(query, "hithink-etf-selector", page, limit)
+
+    def select_cb(self, query, page="1", limit="10"):
+        """问财选可转债（hithink-cb-selector）。"""
+        return self._query2data_list(query, "hithink-cb-selector", page, limit)
+
+    def select_fund(self, query, page="1", limit="10"):
+        """问财选基金（hithink-fund-selector）。"""
+        return self._query2data_list(query, "hithink-fund-selector", page, limit)
+
+    def select_fundmanager(self, query, page="1", limit="10"):
+        """问财选基金经理（hithink-fundmanager-selector）。"""
+        return self._query2data_list(query, "hithink-fundmanager-selector", page, limit)
+
+    def select_fundcompany(self, query, page="1", limit="10"):
+        """问财选基金公司（hithink-fundcompany-selector）。"""
+        return self._query2data_list(query, "hithink-fundcompany-selector", page, limit)
+
+    def select_futures(self, query, page="1", limit="10"):
+        """问财选期货期权（hithink-futures-selector）。"""
+        return self._query2data_list(query, "hithink-futures-selector", page, limit)
+
+    # ── 通用查询入口（按 slug 路由）────────────────────────────────────
+
+    def query(self, query, slug, page="1", limit="10"):
+        """通用入口：按 skill slug 路由到对应 API。
+
+        支持所有 25 个官方 skill slug，自动选择正确的网关和参数格式。
+        """
+        # Pattern A: comprehensive/search 类
+        channels_map = {
+            "news-search": "news",
+            "report-search": "report",
+            "announcement-search": "announcement",
+        }
+        if slug in channels_map:
+            return self._comprehensive_search(query, [channels_map[slug]], int(limit))
+
+        # Pattern B: query2data 类
+        if slug in _HITHINK_SKILLS:
+            return self._query2data_list(query, slug, page, limit)
+
+        raise ValueError(f"Unknown skill slug: {slug}. "
+                         f"Supported: {list(channels_map.keys()) + list(_HITHINK_SKILLS.keys())}")
+
+    @property
+    def supported_skills(self):
+        """返回所有支持的 skill slug → 中文名映射。"""
+        return {
+            "news-search": "新闻搜索",
+            "report-search": "研报搜索",
+            "announcement-search": "公告搜索",
+            **_HITHINK_SKILLS,
+        }
+
+
+# ── 进程级单例 ────────────────────────────────────────────────────────────
 _client = None
 
 
 def get_client():
-    """返回进程级 IwencaiClient 单例。未配 key 时返回的 client.available=False，
-    所有查询返回 []——调用方据以 fallback，零成本降级。"""
+    """返回进程级 IwencaiClient 单例。"""
     global _client
     if _client is None:
         _client = IwencaiClient()
