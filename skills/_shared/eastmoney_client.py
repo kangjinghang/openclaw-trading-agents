@@ -395,6 +395,55 @@ class EastmoneyClient:
         return self._request(body, f"/proxy/app-robo-advisor-api/assistant/{endpoint}",
                              stage, timeout=timeout)
 
+    @staticmethod
+    def _extract_display_data(payload):
+        """提取投顾类返回的 displayData（Markdown）。兜底 content/answer/summary。"""
+        if not isinstance(payload, dict):
+            return ""
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        for node in (data, payload):
+            for key in ("displayData", "content", "answer", "summary"):
+                v = node.get(key) if isinstance(node, dict) else None
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+                if isinstance(v, list) and v:
+                    return json.dumps(v, ensure_ascii=False, indent=2)
+        return ""
+
+    def _diagnose(self, question, endpoint, stage):
+        body = {"question": question}
+        payload = self._post_advisor(body, endpoint, stage, timeout=60)
+        return self._extract_display_data(payload) if payload else ""
+
+    def diagnose_stock(self, question):
+        """个股综合诊断（stock-diagnosis，沪深京 A 股）。返回 Markdown。"""
+        return self._diagnose(question, "stock-analysis", "em/diagnose_stock")
+
+    def diagnose_fund(self, question):
+        """基金综合诊断（fund-diagnosis）。返回 Markdown。"""
+        return self._diagnose(question, "fund-analysis", "em/diagnose_fund")
+
+    def discover_hotspot(self, question):
+        """股市热点发现（stock-market-hotspot-discovery）。返回 Markdown。"""
+        return self._diagnose(question, "hotspot-discovery", "em/discover_hotspot")
+
+    def comparable_company_analysis(self, question):
+        """可比公司分析（comparable-company-analysis）。特例：question 键、60s、返回 list。
+
+        注意 path 不在 write/ 下（直接 /assistant/comparable-company-analysis）。
+        返回 {success, data(list), query}。
+        """
+        body = {"question": question}
+        payload = self._post_advisor(body, "comparable-company-analysis",
+                                     "em/comparable_company", timeout=60)
+        if not payload:
+            return {"success": False, "data": [], "query": question}
+        code = payload.get("code")
+        status = payload.get("status")
+        ok = code in (None, 0, 200, "0", "200") and status in (None, 0, 200, "0", "200")
+        data = payload.get("data")
+        return {"success": ok and isinstance(data, list), "data": data if isinstance(data, list) else [], "query": question}
+
     # ── 族 C：报告生成 API ──────────────────────────────────────────────
     def _post_report(self, body, endpoint, stage, timeout=_DEFAULT_REPORT_TIMEOUT,
                      base_info=False):

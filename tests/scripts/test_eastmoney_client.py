@@ -220,3 +220,37 @@ def test_recognize_entities_extracts_tags(with_key):
     assert len(tags) == 1
     assert tags[0]["entityId"] == "E1"
     assert tags[0]["secuCode"] == "600519"
+
+
+def test_diagnose_stock_extracts_display_data(with_key):
+    from eastmoney_client import get_client
+    c = get_client()
+    payload = {"code": 200, "data": {"displayData": "## 贵州茅台诊断报告\n基本面稳健..."}}
+    with mock.patch("eastmoney_client.requests.post", return_value=_ok_payload(payload)) as mp:
+        out = c.diagnose_stock("贵州茅台怎么样？")
+    assert "贵州茅台诊断报告" in out
+    args, kwargs = mp.call_args
+    assert kwargs["json"] == {"question": "贵州茅台怎么样？"}
+    assert "/stock-analysis" in args[0]
+
+
+def test_diagnose_fund_and_hotspot_with_key(with_key):
+    from eastmoney_client import get_client
+    c = get_client()
+    with mock.patch("eastmoney_client.requests.post", return_value=_ok_payload({"data": {"displayData": "x"}})):
+        assert c.diagnose_fund("华夏成长怎么样") == "x"
+        assert c.discover_hotspot("今日热点") == "x"
+
+
+def test_comparable_company_returns_list_structure(with_key):
+    from eastmoney_client import get_client
+    c = get_client()
+    payload = {"code": 200, "data": [
+        {"type": "header", "company": "贵州茅台"},
+        {"type": "section_finance", "rows": [["营收", "100亿"]]},
+    ]}
+    with mock.patch("eastmoney_client.requests.post", return_value=_ok_payload(payload)) as mp:
+        out = c.comparable_company_analysis("贵州茅台 同业对比")
+    assert out["success"] is True
+    assert len(out["data"]) == 2
+    assert "/comparable-company-analysis" in mp.call_args.args[0]
